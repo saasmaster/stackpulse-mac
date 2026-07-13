@@ -18,6 +18,19 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Settings is its own window; the main window is data-only (app 0.6.3 — app-only)
+
+Full separation of configuration from data:
+- **New dedicated Settings window** (⌘, or the gear) with two tabs: **Settings**
+  (appearance, refresh, notifications, edge sidebar, live limits, power, provider
+  connections/API keys, tools, About) and **Integrations** — all the
+  configuration, in its own window like a standard macOS preferences window.
+- **The main window is now purely dashboards** — Overview, Missions, Insights,
+  Usage, Trends, Needs Attention, Projects, Stack Health, Services. **Settings and
+  Integrations were removed from its sidebar.** A "Settings" gear sits in the
+  sidebar footer (and ⌘,) to open the separate window.
+- The popover gear and the ⌘, shortcut both open the Settings window.
+
 ### Settings holds only settings (app 0.6.2 — app-only)
 
 Settings was showing live *data* that belongs in the dashboards. It now holds

@@ -8,6 +8,8 @@ struct PopoverView: View {
     var onToggleSidebar: (() -> Void)? = nil
     /// Invoked to open the Command Center monitoring window (wired to `AppDelegate`).
     var onOpenCommandCenter: (() -> Void)? = nil
+    /// Invoked to open the dedicated Settings window (wired to `AppDelegate`).
+    var onOpenSettings: (() -> Void)? = nil
 
     @EnvironmentObject var store: SnapshotStore
     @EnvironmentObject var theme: ThemeManager
@@ -48,15 +50,12 @@ struct PopoverView: View {
                 .buttonStyle(.borderless)
                 .help("Toggle edge sidebar (⌥⌘S)")
             }
-            if onOpenMainWindow != nil {
-                Button(action: {
-                    store.pendingSection = .settings
-                    onOpenMainWindow?()
-                }) {
+            if onOpenSettings != nil {
+                Button(action: { onOpenSettings?() }) {
                     Image(systemName: "gearshape")
                 }
                 .buttonStyle(.borderless)
-                .help("Open Settings")
+                .help("Open Settings (⌘,)")
             }
             if onOpenMainWindow != nil {
                 Button(action: {

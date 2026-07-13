@@ -106,14 +106,13 @@ struct MainWindowView: View {
 
     // MARK: Sidebar
 
-    /// Grouped navigation. The dashboards/monitors come first; **Settings is
-    /// pinned separately at the bottom** so it reads as "app settings," not just
-    /// another content view lumped in with the information. Every non-settings
-    /// section must appear here or it becomes unreachable.
+    /// Grouped navigation — **dashboards / data only**. Configuration (Settings)
+    /// and provider Integrations live in their own separate Settings window, so
+    /// this main window is purely for the information. Reachable via the footer
+    /// gear or ⌘,.
     private static let navGroups: [(String, [MainSection])] = [
         ("Monitor", [.overview, .missions, .insights, .usage, .trends, .alerts]),
         ("Build", [.projects, .stackHealth, .services]),
-        ("Providers", [.integrations]),
     ]
 
     private var sidebar: some View {
@@ -143,8 +142,31 @@ struct MainWindowView: View {
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 6) {
                 Divider().opacity(0.4)
-                navRow(.settings)
+                Button {
+                    NotificationCenter.default.post(name: .stackPulseOpenSettings, object: nil)
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 20)
+                        Text("Settings")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        Text("⌘,")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.tertiary)
+                    }
                     .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .help("Open the Settings window (⌘,)")
+
                 sidebarFooter
             }
         }

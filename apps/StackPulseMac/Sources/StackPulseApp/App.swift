@@ -102,11 +102,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// theme switch drives the whole app (popover, window, edge sidebar).
     private let theme = ThemeManager()
     private var mainWindowController: MainWindowController?
+    private var settingsWindow: SettingsWindowController?
     private var commandCenter: CommandCenterController?
     private var edgeSidebar: EdgeSidebarController?
     private var sidebarMenuItem: NSMenuItem?
     private var keepAwakeMenuItem: NSMenuItem?
     private var commandCenterObserver: (any NSObjectProtocol)?
+    private var settingsObserver: (any NSObjectProtocol)?
     private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -121,7 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rootView: PopoverView(
                 onOpenMainWindow: { [weak self] in self?.openMainWindow() },
                 onToggleSidebar: { [weak self] in self?.toggleSidebar() },
-                onOpenCommandCenter: { [weak self] in self?.showCommandCenter() }
+                onOpenCommandCenter: { [weak self] in self?.showCommandCenter() },
+                onOpenSettings: { [weak self] in self?.openSettings() }
             )
             .environmentObject(store)
             .environmentObject(theme)
@@ -132,6 +135,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: .stackPulseOpenCommandCenter, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.showCommandCenter() }
+        }
+
+        // Any surface (main-window footer gear, etc.) can request Settings.
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .stackPulseOpenSettings, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.openSettings() }
         }
 
         // Reflect snapshot / loading / alert changes in the menu-bar button.
@@ -167,6 +177,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--open-window") {
             openMainWindow()
         }
+        // Optional: open straight to the Settings window (testing).
+        if CommandLine.arguments.contains("--open-settings") {
+            openSettings()
+        }
     }
 
     /// Menu-bar app: never quit just because the window closed.
@@ -195,6 +209,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Back to a pure menu-bar accessory — but only if no other real window
         // (the Command Center) is still on screen.
         if !(commandCenter?.isVisible ?? false) {
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+
+    // MARK: Settings window
+
+    /// Open (or focus) the dedicated Settings window — configuration lives here,
+    /// separate from the dashboards in the main window. Menu / ⌘, target.
+    @objc func openSettings() {
+        showSettings(tab: nil)
+    }
+
+    /// Open Settings on a specific tab (e.g. Integrations).
+    func showSettings(tab: SettingsTab?) {
+        popover.performClose(nil)
+        if settingsWindow == nil {
+            settingsWindow = SettingsWindowController(store: store, theme: theme) { [weak self] in
+                self?.settingsWindowDidClose()
+            }
+        }
+        NSApp.setActivationPolicy(.regular)
+        settingsWindow?.show(tab: tab)
+    }
+
+    private func settingsWindowDidClose() {
+        // Return to accessory only if no other real window is still open.
+        let mainOpen = mainWindowController?.window?.isVisible ?? false
+        let ccOpen = commandCenter?.isVisible ?? false
+        if !mainOpen && !ccOpen {
             NSApp.setActivationPolicy(.accessory)
         }
     }
@@ -367,6 +410,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                   keyEquivalent: "0")
         openItem.target = self
         appMenu.addItem(openItem)
+        let settingsItem = NSMenuItem(title: "Settings…",
+                                      action: #selector(openSettings),
+                                      keyEquivalent: ",")
+        settingsItem.target = self
+        appMenu.addItem(settingsItem)
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide StackPulse",
                         action: #selector(NSApplication.hide(_:)),
