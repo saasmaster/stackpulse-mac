@@ -219,6 +219,26 @@ is breaking for downstream consumers, and the action they should take.
   with an unknown-value fallback. Any client linking the core gets insights for
   free.
 
+### 2026-07-13 — Antigravity activity scanner (core behavior)
+
+- **Surface:** core (no protocol change — still 1.8.0)
+- **Versions:** protocol **1.8.0** / core **0.1.0** / manifest *(not yet defined)*
+- **Breaking for downstream:** no
+- **Change:** Antigravity moves from a detection-only adapter to a **full local
+  activity scanner** (`providers::antigravity`). It reads
+  `~/.gemini/antigravity/conversations/*.db` (a Windsurf/Codeium-style store) for
+  conversation count, recency, and the Gemini model — recovered by a bounded
+  byte-scan, **no SQLite dependency added** — and feeds in-progress conversations
+  to Mission discovery. Token/cost stays absent (Antigravity accounts server-side).
+  The engine now registers three full scanners (Claude, Codex, Antigravity) and
+  eight detection-only providers; the total is still eleven. Antigravity's
+  advertised capability matrix gains `auth_detection`, `local_session_history`,
+  and `live_task_detection` = Supported.
+- **Downstream action:** none required — any client linking the core gets the
+  richer Antigravity `ProviderUsage` and Antigravity missions automatically. A
+  client that hard-coded "Antigravity is detection-only" should drop that
+  assumption.
+
 ---
 
 ## Pending / anticipated (not yet shipped)

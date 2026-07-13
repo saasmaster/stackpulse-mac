@@ -25,18 +25,22 @@ All eleven providers are registered in the engine and appear in every snapshot.
 - **Claude** and **Codex** have **full local cost scanners** — their cells
   reflect exactly what the adapter code advertises, and their usage/cost/cache
   numbers are read from real local logs.
-- The other nine — **Antigravity, GitHub Copilot, Cursor, Devin, Gemini, Grok,
-  OpenCode, OpenRouter, Z.ai** — ship as **detection-only adapters** (one
-  data-driven `DetectableProvider`). They honestly report whether the tool looks
-  installed and/or authenticated (presence-only; secrets are never opened) and
-  advertise a fully-enumerated matrix in which every usage / cost / limit /
-  control capability is `unavailable` or `unsupported`. **Local usage/cost
-  scanning for these nine is Planned**, not yet implemented. **Gemini** detects
-  via the Gemini CLI's markers (`gemini` on `$PATH`,
-  `~/.gemini/oauth_creds.json`) and advertises install + auth detection like the
-  other app/CLI providers; the tables below list the original ten by name, and
-  Gemini's row matches the app/CLI detection-only pattern (install/auth **S**,
-  everything else **X**/**U**).
+- **Antigravity** has a **local activity scanner** — it reads conversation
+  counts, recency, and the model from `~/.gemini/antigravity` (no SQLite
+  dependency) and feeds in-progress sessions to Mission discovery. Its
+  `local_session_history` and `live_task_detection` cells are therefore **S**.
+  Token/cost accounting is **server-side** (Gemini / Cloud Code), so its
+  credits/limit cells are **U** (Unavailable — implementable via a future
+  authenticated API) rather than fabricated.
+- The other eight — **GitHub Copilot, Cursor, Devin, Gemini, Grok, OpenCode,
+  OpenRouter, Z.ai** — ship as **detection-only adapters** (one data-driven
+  `DetectableProvider`). They honestly report whether the tool looks installed
+  and/or authenticated (presence-only; secrets are never opened) and advertise a
+  fully-enumerated matrix in which every usage / cost / limit / control
+  capability is `unavailable` or `unsupported`. **Local usage/cost scanning for
+  these eight is Planned**, not yet implemented. **Gemini** detects via the
+  Gemini CLI's markers (`gemini` on `$PATH`, `~/.gemini/oauth_creds.json`) and
+  advertises install + auth detection like the other app/CLI providers.
 
 The matrix is grouped by capability family for readability. Rows are providers;
 columns are `Capability` variants.
@@ -47,7 +51,7 @@ columns are `Capability` variants.
 | --- | :--: | :--: | :--: |
 | Claude | S | S | S |
 | Codex | S | S | S |
-| Antigravity | S | X | X |
+| Antigravity | S | X | S |
 | GitHub Copilot | S | X | S |
 | Cursor | S | X | X |
 | Devin | X | X | X |
@@ -56,12 +60,13 @@ columns are `Capability` variants.
 | OpenRouter | X | X | X |
 | Z.ai | X | X | X |
 
-- The five app/CLI-based providers (Antigravity, Copilot, Cursor, Grok,
-  OpenCode) implement an install probe, so `installed_app_detection` is **S**
-  whether or not the tool is present on a given machine.
+- The app/CLI-based providers (Antigravity, Copilot, Cursor, Grok, OpenCode)
+  implement an install probe, so `installed_app_detection` is **S** whether or
+  not the tool is present on a given machine.
 - `auth_detection` is **S** only where a non-secret credential *presence* marker
-  exists (Copilot's `~/.config/github-copilot/*.json`, OpenCode's
-  `auth.json`); the file is never read.
+  exists — Copilot's `~/.config/github-copilot/*.json`, OpenCode's `auth.json`,
+  and Antigravity's local `~/.gemini/antigravity/conversations`; the files are
+  never read.
 - Devin, OpenRouter, and Z.ai are cloud / API-key services with no local
   footprint, so their detection cells are **X** and they always report
   `not_detected` until an API-key integration is added.
@@ -74,7 +79,7 @@ columns are `Capability` variants.
 | --- | :--: | :--: | :--: | :--: |
 | Claude | S | S | S | S |
 | Codex | S | S | S | S |
-| Antigravity | X | X | X | X |
+| Antigravity | X | X | X | S |
 | GitHub Copilot | X | X | X | X |
 | Cursor | X | X | X | X |
 | Devin | X | X | X | X |
@@ -131,7 +136,7 @@ provider's usage source (following the OpenUsage adapters) is the roadmap.
 | --- | :--: | :--: | :--: | :--: |
 | Claude | — | — | — | X |
 | Codex | — | — | — | X |
-| Antigravity | X | X | X | X |
+| Antigravity | S | X | X | X |
 | GitHub Copilot | X | X | X | X |
 | Cursor | X | X | X | X |
 | Devin | X | X | X | X |

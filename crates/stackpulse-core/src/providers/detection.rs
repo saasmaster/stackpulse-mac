@@ -7,7 +7,7 @@
 //! related is `Unsupported` or `Unavailable`. They never scan usage, never
 //! invent numbers, and never read a secret's contents (auth is presence-only).
 //!
-//! One [`DetectableProvider`] struct plus one `impl Provider` drives all nine;
+//! One [`DetectableProvider`] struct plus one `impl Provider` drives all eight;
 //! each provider is a small constructor filling in its detection [`Markers`] and
 //! two honesty toggles (`detects_install`, `detects_auth`).
 //!
@@ -297,24 +297,6 @@ fn cli_on_path(name: &str) -> bool {
 // that are safe to keep: if wrong, they just fail to match (NotDetected) rather
 // than producing a false positive.
 
-/// Antigravity (Google's agentic IDE). Best-effort app/config/CLI probes; the
-/// exact on-disk names are **unverified**, so absence yields an honest
-/// NotDetected with the API-key note.
-fn antigravity() -> DetectableProvider {
-    DetectableProvider {
-        id: ProviderId::Antigravity,
-        markers: Markers {
-            // unverified — likely IDE dotfiles once the tool is installed.
-            config_dirs: &[".antigravity", ".config/antigravity"],
-            cli_names: &["antigravity"],   // unverified
-            app_bundles: &["Antigravity"], // unverified bundle name
-            credential_files: &[],         // no non-secret auth marker known
-        },
-        detects_install: true,
-        detects_auth: false,
-    }
-}
-
 /// GitHub Copilot. `~/.config/github-copilot/` holds `hosts.json` / `apps.json`
 /// written by the Copilot CLI and editor auth flow — medium-high confidence,
 /// and their presence is a legitimate (presence-only) authentication signal.
@@ -455,12 +437,13 @@ fn zai() -> DetectableProvider {
     }
 }
 
-/// The nine detection-only providers, returned in the [`ProviderId`] enum's
-/// declared order (Antigravity, Copilot, Cursor, Devin, Gemini, Grok, OpenCode,
-/// OpenRouter, Zai). The engine registers these after Claude and Codex.
+/// The eight detection-only providers, returned in the [`ProviderId`] enum's
+/// declared order (Copilot, Cursor, Devin, Gemini, Grok, OpenCode, OpenRouter,
+/// Zai). The engine registers these after the full scanners (Claude, Codex,
+/// Antigravity). Antigravity is no longer here — it has its own activity scanner
+/// (see `providers::antigravity`).
 pub fn detection_providers() -> Vec<DetectableProvider> {
     vec![
-        antigravity(),
         copilot(),
         cursor(),
         devin(),
@@ -510,14 +493,7 @@ mod tests {
     fn app_based_providers_advertise_install_detection() {
         // These implement a local probe, so InstalledAppDetection is Supported
         // (whether or not the tool is actually present on this machine).
-        for p in [
-            antigravity(),
-            copilot(),
-            cursor(),
-            gemini(),
-            grok(),
-            opencode(),
-        ] {
+        for p in [copilot(), cursor(), gemini(), grok(), opencode()] {
             let caps = p.capabilities();
             let install = caps
                 .iter()
@@ -539,12 +515,11 @@ mod tests {
     }
 
     #[test]
-    fn returns_all_nine_in_declared_order() {
+    fn returns_all_eight_in_declared_order() {
         let ids: Vec<ProviderId> = detection_providers().iter().map(|p| p.id()).collect();
         assert_eq!(
             ids,
             vec![
-                ProviderId::Antigravity,
                 ProviderId::Copilot,
                 ProviderId::Cursor,
                 ProviderId::Devin,

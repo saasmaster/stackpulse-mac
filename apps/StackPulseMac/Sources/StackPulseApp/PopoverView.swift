@@ -273,12 +273,20 @@ struct ProviderCard: View {
                 ProviderBalanceLabel(balance: balance)
             }
             if provider.installed {
-                spendRow
-                if let a = provider.analytics { analyticsRow(a) }
+                // Providers the core prices locally (Claude/Codex) get the spend
+                // row; activity-only providers whose cost is server-side
+                // (Antigravity) show a session/model row instead of a misleading
+                // "$0 · 0 tokens".
+                if hasLocalSpend {
+                    spendRow
+                    if let a = provider.analytics { analyticsRow(a) }
+                } else if hasActivity {
+                    activityRow
+                }
                 if !provider.limits.isEmpty { limitsSection }
                 liveLimitsNote
                 if let cache = cacheFraction { cacheRow(cache) }
-                if let top = provider.models.first { topModelRow(top) }
+                if hasLocalSpend, let top = provider.models.first { topModelRow(top) }
             } else if provider.balance == nil {
                 Text("Not detected on this Mac.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -318,11 +326,45 @@ struct ProviderCard: View {
         }
     }
 
+    /// True when the core measured real token/cost usage locally (Claude/Codex).
+    /// False for activity-only providers (Antigravity) whose accounting is
+    /// server-side — showing them a `$0 · 0 tokens` spend row would misread.
+    private var hasLocalSpend: Bool {
+        let tokens = (provider.today?.tokens.grandTotal ?? 0) + (provider.last30?.tokens.grandTotal ?? 0)
+        let cost = (provider.today?.estimated_cost_usd ?? 0) + (provider.last30?.estimated_cost_usd ?? 0)
+        return tokens > 0 || cost > 0
+    }
+
+    /// True when there's local activity to show even without token accounting
+    /// (e.g. Antigravity conversation counts).
+    private var hasActivity: Bool {
+        (provider.last30?.records ?? 0) > 0 || (provider.today?.records ?? 0) > 0
+    }
+
     private var spendRow: some View {
         HStack(spacing: 0) {
             spendCell("Today", provider.today)
             Divider().frame(height: 30)
             spendCell("30 days", provider.last30)
+        }
+    }
+
+    /// Activity summary for providers without local token/cost accounting: the
+    /// session count (today + 30-day) and the model, instead of a spend row.
+    private var activityRow: some View {
+        let total = provider.last30?.records ?? 0
+        let today = provider.today?.records ?? 0
+        return HStack(spacing: 8) {
+            Image(systemName: "bubble.left.and.text.bubble.right")
+                .imageScale(.small)
+                .foregroundStyle(.secondary)
+            Text("\(total) session\(total == 1 ? "" : "s") · \(today) today")
+                .font(.subheadline.weight(.medium))
+                .monospacedDigit()
+            Spacer()
+            if let model = provider.models.first?.model {
+                Chip(text: model, systemImage: "cpu", tint: .cyan)
+            }
         }
     }
 

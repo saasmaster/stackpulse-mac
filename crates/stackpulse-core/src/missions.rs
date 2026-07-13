@@ -115,9 +115,55 @@ pub fn discover(now_unix: i64) -> Vec<Mission> {
         }
     }
 
+    // Antigravity: recent conversation trajectories under ~/.gemini/antigravity.
+    // These come from the activity scanner (not the tail-read candidate path)
+    // because Antigravity stores sessions as SQLite, not JSONL.
+    missions.extend(antigravity_missions(now_unix, mtime_cutoff));
+
     // Most-recently-active first.
     missions.sort_by_key(|m| std::cmp::Reverse(m.last_activity_unix));
     missions
+}
+
+// ---------------------------------------------------------------------------
+// Antigravity normalization (activity-only)
+// ---------------------------------------------------------------------------
+
+/// Recent Antigravity conversations as missions. Antigravity stores each session
+/// as a SQLite trajectory we don't parse per-turn (no SQLite dependency in the
+/// core), so these carry a status derived from recency, the model, and the last-
+/// activity time — enough to show an in-progress Antigravity session alongside
+/// Claude/Codex — but no message count or project association.
+fn antigravity_missions(now_unix: i64, mtime_cutoff: i64) -> Vec<Mission> {
+    let mut out = Vec::new();
+    for c in crate::providers::antigravity::scan_conversations() {
+        if c.mtime_unix < mtime_cutoff {
+            continue;
+        }
+        let age = now_unix - c.mtime_unix;
+        let status = if age <= ACTIVE_SECS {
+            MissionStatus::Active
+        } else if age <= IDLE_SECS {
+            MissionStatus::Idle
+        } else {
+            MissionStatus::Recent
+        };
+        out.push(Mission {
+            provider: ProviderId::Antigravity,
+            session_id: c.id,
+            status,
+            project_path: None,
+            project_name: None,
+            branch: None,
+            model: c.model,
+            started_at_unix: None,
+            last_activity_unix: c.mtime_unix,
+            message_count: 0,
+            last_activity: Some("Antigravity agent session".to_string()),
+            tokens_last_hour: 0,
+        });
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------

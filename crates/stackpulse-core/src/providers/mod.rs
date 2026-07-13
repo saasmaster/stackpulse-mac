@@ -5,6 +5,7 @@
 //! changes to callers. Capabilities are advertised as a matrix, never a single
 //! boolean (spec: capability-based integrations).
 
+pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod detection;

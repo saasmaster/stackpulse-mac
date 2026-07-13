@@ -18,6 +18,24 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Antigravity real-data scanner (app 0.4.0 — core behavior, no protocol change)
+
+- **Antigravity now shows real local data** instead of a detection-only "no
+  data" state. It's a Windsurf/Codeium-style agent IDE (talks to Gemini); the new
+  `providers::antigravity` scanner reads `~/.gemini/antigravity/conversations/*.db`
+  for **conversation count, recency, and the model** (`gemini-3-flash-agent`,
+  recovered by a bounded byte-scan — **no SQLite dependency**). Token and cost are
+  managed **server-side** by Gemini and aren't available locally, so they are
+  honestly not shown (no fabricated numbers) — the card explains this.
+- **In-progress Antigravity sessions surface as Missions** — they appear in the
+  Missions view and the menu-bar ▶N active-session count, alongside Claude/Codex.
+- **Activity-aware provider card.** A provider with local activity but no local
+  token/cost accounting (Antigravity) now shows a **session + model row** instead
+  of a misleading "$0 · 0 tokens" spend row.
+- The engine registers three full scanners (Claude, Codex, Antigravity) + eight
+  detection-only providers (still eleven total). Antigravity's capability matrix
+  gains auth / local-session-history / live-task-detection. +3 tests.
+
 ### Insights & reporting (app 0.3.0 / protocol 1.8.0)
 
 - **Derived insights engine (core, protocol 1.8.0).** New `Insight` /

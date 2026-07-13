@@ -83,14 +83,16 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full picture.
 
 ## Supported providers (v0.1.0)
 
-All ten providers — **Antigravity, Claude, Codex, GitHub Copilot, Cursor,
-Devin, Grok, OpenCode, OpenRouter, Z.ai** — are registered and appear in every
-snapshot. Two have full local scanners; the rest are detection-only for now.
+All eleven providers — **Antigravity, Claude, Codex, GitHub Copilot, Cursor,
+Devin, Gemini, Grok, OpenCode, OpenRouter, Z.ai** — are registered and appear in
+every snapshot. Claude and Codex have full local-cost scanners, Antigravity has a
+local *activity* scanner, and the other eight are detection-only for now.
 
 | Provider | v0.1.0 status |
 | --- | --- |
 | **Claude** (Claude Code) | Full local-cost scan, per-model breakdown, cache metrics. Live OAuth usage limits are **Planned**. |
 | **Codex** (OpenAI Codex CLI) | Full local-cost scan, per-model breakdown, cache metrics, plus **provider-reported 5-hour / weekly limit windows** read from local logs with no network. |
+| **Antigravity** (Google's agentic IDE) | **Local activity scan** — conversation count, recency, and model, read from `~/.gemini/antigravity` (no SQLite dependency), and in-progress sessions surfaced as **Missions**. Token/cost is managed **server-side** by Gemini and isn't available locally, so it is honestly not shown. |
 | The other 8 | **Detection-only.** Honest installed / authenticated detection (presence-only) + a full capability matrix. Local usage/cost scanning is **Planned**. Devin, OpenRouter, and Z.ai are cloud/API-key services with no local footprint and read `not_detected` until an API-key integration lands. |
 
 The full, honest capability matrix is in [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md).
