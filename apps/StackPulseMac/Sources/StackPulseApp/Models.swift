@@ -280,6 +280,35 @@ struct Insight: Codable, Sendable, Identifiable {
 /// adds a state never breaks decoding. Every field beyond `provider`,
 /// `session_id`, and `status` may be null. The array arrives **most-recently-
 /// active first** and is often empty (no coding sessions in the recent window).
+/// A scope-guard flag on a mission: a risk category (`kind`) and the changed
+/// files that triggered it (protocol ≥ 1.12.0). `kind`/`severity` are strings so
+/// a newer core adding a variant never breaks decoding.
+struct ScopeFlag: Codable, Sendable, Identifiable {
+    let kind: String       // secrets | migrations | security | dependencies | lockfile | build_config | tests | other
+    let severity: String   // info | notable | high
+    let label: String
+    let files: [String]
+
+    var id: String { kind }
+
+    private enum CodingKeys: String, CodingKey { case kind, severity, label, files }
+
+    init(kind: String, severity: String, label: String, files: [String]) {
+        self.kind = kind
+        self.severity = severity
+        self.label = label
+        self.files = files
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = (try? c.decode(String.self, forKey: .kind)) ?? "other"
+        severity = (try? c.decode(String.self, forKey: .severity)) ?? "info"
+        label = (try? c.decode(String.self, forKey: .label)) ?? "Change"
+        files = ((try? c.decodeIfPresent([String].self, forKey: .files)) ?? nil) ?? []
+    }
+}
+
 struct Mission: Codable, Sendable, Identifiable {
     let provider: String
     let session_id: String
@@ -299,9 +328,14 @@ struct Mission: Codable, Sendable, Identifiable {
     let changed_files: [String]?
     /// A short local preview of the session's latest message/turn (protocol ≥ 1.10.0).
     let last_message_preview: String?
+    /// Scope-guard flags: risk categories among the changed files (protocol ≥ 1.12.0).
+    let scope_flags: [ScopeFlag]?
 
     /// The changed files as a non-nil array.
     var changedFiles: [String] { changed_files ?? [] }
+
+    /// Scope-guard flags as a non-nil array (most-severe first, per the core).
+    var scopeFlags: [ScopeFlag] { scope_flags ?? [] }
 
     /// Stable across a snapshot (provider-scoped so two providers can't collide).
     var id: String { provider + "\u{1}" + session_id }

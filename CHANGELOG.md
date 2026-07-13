@@ -18,6 +18,22 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Scope Guard on missions (app 0.10.0 / protocol 1.12.0)
+
+- **Missions now warn what *kind* of change a session is making.** A new
+  **Scope** row on each mission card flags the risk categories among its changed
+  files — **secrets/env, database migrations, security/auth code** (high),
+  **dependencies, lockfiles, build/CI config** (notable), and **tests** — so you
+  can glance at an autonomous session and notice "this touched `.env` and a
+  migration" without reading the diff. Color is always paired with a label + icon.
+- The first read-only slice of **Safe Automation (Phase 5)**: purely
+  path-pattern classification of the `changed_files` the core already gathers —
+  deterministic, offline, and honest (it says "these files were touched", never
+  "a dependency was added"). Nothing is executed or mutated.
+- Protocol 1.12.0 adds `ScopeFlag` / `ScopeFlagKind` / `ScopeSeverity` + the
+  additive `Mission.scope_flags` field, computed locally in `scope_guard.rs`.
+  **103 core tests** (fmt/clippy clean).
+
 ### Repository Radar / Discover (app 0.9.0 / protocol 1.11.0)
 
 - **New Discover section (Repository Radar).** The core scans your approved

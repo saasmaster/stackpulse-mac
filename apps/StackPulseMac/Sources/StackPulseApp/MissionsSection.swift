@@ -152,6 +152,9 @@ struct MissionCard: View {
             if let preview = previewText {
                 previewLine(preview)
             }
+            if !mission.scopeFlags.isEmpty {
+                scopeGuardBlock(mission.scopeFlags)
+            }
             if !mission.changedFiles.isEmpty {
                 changedFilesBlock(mission.changedFiles)
             }
@@ -183,6 +186,38 @@ struct MissionCard: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Latest turn: \(preview)")
+    }
+
+    // MARK: Scope guard
+
+    /// Scope-guard flags: a compact, color-coded row warning what *kind* of change
+    /// the session is making (touched secrets, migrations, dependencies, …). The
+    /// color is always paired with the label text and an icon, never used alone.
+    private func scopeGuardBlock(_ flags: [ScopeFlag]) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: "shield.lefthalf.filled")
+                    .imageScale(.small)
+                    .foregroundStyle(.secondary)
+                Text("SCOPE")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            FlowLayout(spacing: 6, lineSpacing: 6) {
+                ForEach(flags) { flag in
+                    let tint = ScopeStyle.tint(flag.severity)
+                    Chip(
+                        text: flag.files.count > 1 ? "\(flag.label) · \(flag.files.count)" : flag.label,
+                        systemImage: ScopeStyle.icon(flag.kind),
+                        tint: tint
+                    )
+                    .help(flag.files.joined(separator: ", "))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Scope: " + flags.map(\.label).joined(separator: ", "))
     }
 
     // MARK: Changed files
@@ -415,6 +450,33 @@ struct MissionsSection: View {
             ForEach(items) { mission in
                 MissionCard(mission: mission)
             }
+        }
+    }
+}
+
+// MARK: - Scope-guard styling
+
+/// Maps scope-flag kinds/severities to a glyph and tint. Severity drives color
+/// (high = red, notable = orange, info = secondary); kind drives the icon.
+enum ScopeStyle {
+    static func icon(_ kind: String) -> String {
+        switch kind {
+        case "secrets": return "key.fill"
+        case "migrations": return "cylinder.split.1x2"
+        case "security": return "lock.shield"
+        case "dependencies": return "shippingbox"
+        case "lockfile": return "lock.doc"
+        case "build_config": return "gearshape.2"
+        case "tests": return "checkmark.seal"
+        default: return "doc"
+        }
+    }
+
+    static func tint(_ severity: String) -> Color {
+        switch severity {
+        case "high": return .red
+        case "notable": return .orange
+        default: return .secondary
         }
     }
 }

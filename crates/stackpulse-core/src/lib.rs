@@ -24,6 +24,7 @@ pub mod pricing;
 pub mod projects;
 pub mod providers;
 pub mod radar;
+pub mod scope_guard;
 pub mod services;
 pub mod stack_health;
 

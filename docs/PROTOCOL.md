@@ -5,7 +5,7 @@ contract shared by every StackPulse surface: the Rust core, the macOS app (over
 the C ABI), the `stackpulse` CLI, and — in the future — a Chrome
 native-messaging host and a Windows client.
 
-- **Current version:** `PROTOCOL_VERSION = 1.11.0`. Additive history (older
+- **Current version:** `PROTOCOL_VERSION = 1.12.0`. Additive history (older
   readers keep parsing):
   - **1.3.0** — added a `Gemini` variant to the (open) `ProviderId` enum; the
     engine now lists eleven providers.
@@ -35,6 +35,11 @@ native-messaging host and a Windows client.
     `get_radar` op and `radar` response. The core discovers projects under the
     approved roots, then emits deterministic, explainable, project-grounded
     recommendations from local facts only (filesystem + `git`, no network).
+  - **1.12.0** — Scope Guard: `ScopeFlag` + `ScopeFlagKind` (open enum) /
+    `ScopeSeverity` types + an additive `Mission.scope_flags` field. The core
+    classifies a mission's already-gathered `changed_files` into risk categories
+    (secrets, migrations, dependencies, lockfiles, security code, tests, build
+    config) by path pattern — no diff content, no file reads, no network.
   - **1.1.0** — `ProviderAnalytics` / `DailyUsage` types and the optional
     `ProviderUsage.analytics` field.
   - **1.2.0** — `Alert` / `AlertSeverity` / `AlertKind` types and the

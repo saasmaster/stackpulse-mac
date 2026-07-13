@@ -165,6 +165,7 @@ fn antigravity_missions(now_unix: i64, mtime_cutoff: i64) -> Vec<Mission> {
             // message text without deeper SQLite parsing ⇒ no preview.
             changed_files: git_changed_files(None),
             last_message_preview: None,
+            scope_flags: Vec::new(),
         });
     }
     out
@@ -307,6 +308,7 @@ fn claude_mission(path: &Path, now_unix: i64) -> Option<Mission> {
 
     let project_name = project_path.as_deref().map(last_path_component);
     let changed_files = git_changed_files(project_path.as_deref());
+    let scope_flags = crate::scope_guard::flags_for(&changed_files);
     let started_at_unix = first_line(path)
         .and_then(|l| serde_json::from_str::<ClaudeLine>(&l).ok())
         .and_then(|l| l.timestamp)
@@ -331,6 +333,7 @@ fn claude_mission(path: &Path, now_unix: i64) -> Option<Mission> {
             .as_deref()
             .map(preview_snippet)
             .filter(|s| !s.is_empty()),
+        scope_flags,
     })
 }
 
@@ -530,6 +533,7 @@ fn codex_mission(path: &Path, now_unix: i64) -> Option<Mission> {
 
     let project_name = project_path.as_deref().map(last_path_component);
     let changed_files = git_changed_files(project_path.as_deref());
+    let scope_flags = crate::scope_guard::flags_for(&changed_files);
 
     Some(Mission {
         provider: ProviderId::Codex,
@@ -549,6 +553,7 @@ fn codex_mission(path: &Path, now_unix: i64) -> Option<Mission> {
             .as_deref()
             .map(preview_snippet)
             .filter(|s| !s.is_empty()),
+        scope_flags,
     })
 }
 

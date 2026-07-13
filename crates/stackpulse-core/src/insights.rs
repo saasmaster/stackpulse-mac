@@ -427,6 +427,7 @@ mod tests {
             tokens_last_hour: 0,
             changed_files: Vec::new(),
             last_message_preview: None,
+            scope_flags: Vec::new(),
         }
     }
 

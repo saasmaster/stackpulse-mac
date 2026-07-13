@@ -293,6 +293,22 @@ is breaking for downstream consumers, and the action they should take.
 
 ---
 
+### 2026-07-13 — Scope Guard on missions (protocol 1.12.0)
+
+- **Surface:** protocol + core
+- **Versions:** protocol **1.12.0** / core **0.1.0** / manifest *(not yet defined)*
+- **Breaking for downstream:** no (purely additive)
+- **Change:** `ScopeFlag` + `ScopeFlagKind` (open enum) / `ScopeSeverity` types
+  and an additive `Mission.scope_flags` field. The core classifies each mission's
+  existing `changed_files` into risk categories (secrets, migrations,
+  dependencies, lockfiles, security code, tests, build config) by path pattern —
+  no diff content, no file reads, no network. Any client linking the core gets
+  the flags on missions for free.
+- **Downstream action:** target protocol **1.12.0**; `scope_flags` may be empty.
+  `kind`/`severity` are open enums — treat unknown values as passthrough strings.
+
+---
+
 ## Pending / anticipated (not yet shipped)
 
 These are flagged so downstream repos can plan. They are **not** implemented and

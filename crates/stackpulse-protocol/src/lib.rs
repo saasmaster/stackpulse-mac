@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 11,
+    minor: 12,
     patch: 0,
 };
 
@@ -509,6 +509,61 @@ pub struct Mission {
     /// user's own local content, truncated (protocol ≥ 1.10.0).
     #[serde(default)]
     pub last_message_preview: Option<String>,
+    /// Scope-guard flags: risk categories detected among `changed_files` (touched
+    /// secrets, migrations, dependencies, tests, security-sensitive files, …).
+    /// Read-only heads-up, derived locally from the changed-file paths (protocol
+    /// ≥ 1.12.0). Empty when nothing notable changed.
+    #[serde(default)]
+    pub scope_flags: Vec<ScopeFlag>,
+}
+
+// ---------------------------------------------------------------------------
+// Scope Guard — since 1.12.0
+// ---------------------------------------------------------------------------
+
+/// The kind of change a scope-guard flag represents. Open enum for forward-compat
+/// (the Swift layer reads the wire value as a string).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeFlagKind {
+    /// Dependency manifests changed (package.json, Cargo.toml, …).
+    Dependencies,
+    /// Lockfiles changed (package-lock.json, Cargo.lock, …).
+    Lockfile,
+    /// Environment/secret files touched (.env, *.pem, credentials).
+    Secrets,
+    /// Database migrations or raw SQL touched.
+    Migrations,
+    /// Security-/auth-sensitive code touched.
+    Security,
+    /// Test files touched (added, changed, or removed).
+    Tests,
+    /// CI / build / tooling config touched.
+    BuildConfig,
+    /// Anything a newer core adds.
+    #[serde(other)]
+    Other,
+}
+
+/// How much attention a scope-guard flag warrants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeSeverity {
+    Info,
+    Notable,
+    High,
+}
+
+/// One scope-guard flag: a risk category and the changed files that triggered it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScopeFlag {
+    pub kind: ScopeFlagKind,
+    pub severity: ScopeSeverity,
+    /// Short human label (e.g. "Secrets / env files").
+    pub label: String,
+    /// The changed files that matched, capped for payload size.
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 /// The top-level object every UI surface renders. One scan → one snapshot.
