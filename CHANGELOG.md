@@ -18,6 +18,21 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Navigation reorganized (app 0.6.1 — app-only)
+
+The information (Overview, Missions, Insights, Usage, Trends…) all sat in one flat
+list you reached via the Settings gear, with Settings lumped in among it. Now:
+
+- **Main-window sidebar is grouped** — **Monitor** (Overview, Missions, Insights,
+  Usage, Trends, Needs Attention), **Build** (Projects, Stack Health, Services),
+  **Providers** (Integrations) — with **Settings pinned separately at the bottom**
+  so it reads as app settings, not another dashboard.
+- **The popover "Open" button lands on the Overview dashboard**, not wherever the
+  window was last (often Settings). The gear still goes straight to Settings.
+- **The edge sidebar ("side card") gained an "Open in app" launcher** — one tap
+  jumps to Overview / Usage / Trends / Missions / Insights / Stack Health, so the
+  useful views are one click away instead of buried.
+
 ### Stack Health + Services — Phase 4 begins (app 0.6.0 / protocol 1.9.0)
 
 The app was heavy on *watching* (usage/analytics) and light on the spec's

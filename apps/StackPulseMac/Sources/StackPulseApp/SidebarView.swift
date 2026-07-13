@@ -88,6 +88,8 @@ struct SidebarView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.top, 6)
                     }
+
+                    quickNav
                 }
                 .padding(12)
             }
@@ -150,6 +152,50 @@ struct SidebarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, label == "Live" ? 12 : 0)
+    }
+
+    /// A compact launcher so the side card jumps straight into the useful main
+    /// sections — the dashboards/analytics live one tap away, not buried behind
+    /// the Settings gear.
+    private static let quickSections: [MainSection] = [
+        .overview, .usage, .trends, .missions, .insights, .stackHealth,
+    ]
+
+    private var quickNav: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("OPEN IN APP")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 4)
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 86), spacing: 6)],
+                spacing: 6
+            ) {
+                ForEach(Self.quickSections) { section in
+                    Button {
+                        store.pendingSection = section
+                        onOpenMainWindow?()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: section.systemImage)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tint)
+                            Text(section.title)
+                                .font(.system(size: 10, weight: .medium))
+                                .lineLimit(1)
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .liquidGlass(cornerRadius: 9, prominence: .low, padding: 0)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open \(section.title)")
+                }
+            }
+        }
     }
 
     private var footer: some View {

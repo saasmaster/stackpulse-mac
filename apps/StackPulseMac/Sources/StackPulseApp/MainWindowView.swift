@@ -106,6 +106,16 @@ struct MainWindowView: View {
 
     // MARK: Sidebar
 
+    /// Grouped navigation. The dashboards/monitors come first; **Settings is
+    /// pinned separately at the bottom** so it reads as "app settings," not just
+    /// another content view lumped in with the information. Every non-settings
+    /// section must appear here or it becomes unreachable.
+    private static let navGroups: [(String, [MainSection])] = [
+        ("Monitor", [.overview, .missions, .insights, .usage, .trends, .alerts]),
+        ("Build", [.projects, .stackHealth, .services]),
+        ("Providers", [.integrations]),
+    ]
+
     private var sidebar: some View {
         VStack(spacing: 0) {
             brand
@@ -114,16 +124,30 @@ struct MainWindowView: View {
                 .padding(.bottom, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
             ScrollView {
-                VStack(spacing: 4) {
-                    ForEach(MainSection.allCases) { section in
-                        navRow(section)
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(Self.navGroups, id: \.0) { title, sections in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(title.uppercased())
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 14)
+                            ForEach(sections) { navRow($0) }
+                        }
                     }
                 }
                 .padding(.horizontal, 10)
+                .padding(.top, 2)
             }
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 300)
-        .safeAreaInset(edge: .bottom) { sidebarFooter }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 6) {
+                Divider().opacity(0.4)
+                navRow(.settings)
+                    .padding(.horizontal, 10)
+                sidebarFooter
+            }
+        }
         .background(WindowBackdrop().ignoresSafeArea())
     }
 

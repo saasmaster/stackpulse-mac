@@ -59,11 +59,16 @@ struct PopoverView: View {
                 .help("Open Settings")
             }
             if onOpenMainWindow != nil {
-                Button(action: { onOpenMainWindow?() }) {
+                Button(action: {
+                    // "Open" lands on the Overview dashboard (the useful info),
+                    // not wherever the window was last left (e.g. Settings).
+                    store.pendingSection = .overview
+                    onOpenMainWindow?()
+                }) {
                     Image(systemName: "macwindow")
                 }
                 .buttonStyle(.borderless)
-                .help("Open StackPulse window")
+                .help("Open StackPulse — dashboard")
             }
             if onOpenCommandCenter != nil {
                 Button(action: { onOpenCommandCenter?() }) {
