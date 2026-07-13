@@ -109,6 +109,7 @@ final class SnapshotStore: ObservableObject {
                 lastGoodLiveLimitsAt = nil
                 liveLimitsError = nil
                 liveLimitsUpdatedAt = nil
+                try? FileManager.default.removeItem(at: liveLimitsCacheURL)
             }
         }
     }
@@ -123,17 +124,67 @@ final class SnapshotStore: ObservableObject {
     /// Coalesces overlapping live fetches.
     private var isFetchingLive = false
 
-    /// The last successfully-fetched live limits + when, so a transient failure
-    /// (e.g. HTTP 429) re-applies the cached value instead of wiping the display.
+    /// The last successfully-fetched live limits + when. Persisted to disk (see
+    /// `persistLiveLimits`/`loadPersistedLiveLimits`) so the last-known % survives
+    /// an app restart AND a stale/expired Claude Code token — rather than the card
+    /// blanking to a "sign in" message. Re-applied on every refresh; a transient
+    /// failure (HTTP 429, offline, expired token) keeps showing it, labeled "as of".
     private var lastGoodLiveLimits: [LimitWindow] = []
     private var lastGoodLiveLimitsAt: Date?
     /// Minimum time between actual network fetches — the cached value is reused in
     /// between, so frequent refreshes never rate-limit the provider.
     private let liveLimitsRefetchInterval: TimeInterval = 8 * 60
-    /// Stop showing a cached value once it's older than this.
-    private let liveLimitsStaleAfter: TimeInterval = 45 * 60
+    /// Keep showing the last-known limits (clearly labeled "as of …") for up to
+    /// this long when a fresh fetch can't be had. Generous because Claude's
+    /// dominant window is weekly (slow-moving) and a stale-but-labeled % beats a
+    /// blank card that reads as "signed out".
+    private let liveLimitsStaleAfter: TimeInterval = 3 * 24 * 60 * 60
+
+    /// When the currently-shown live limits were actually captured (last
+    /// successful fetch), or nil when there are none. Drives the "as of …" label.
+    var liveLimitsCapturedAt: Date? { lastGoodLiveLimits.isEmpty ? nil : lastGoodLiveLimitsAt }
+
+    /// True when the shown live limits are cached and no longer fresh (older than
+    /// the refetch interval) — the card labels them rather than implying live.
+    var liveLimitsAreStale: Bool {
+        guard let at = liveLimitsCapturedAt else { return false }
+        return Date().timeIntervalSince(at) > liveLimitsRefetchInterval
+    }
 
     private static let liveLimitsKey = "liveLimitsEnabled"
+
+    /// One persisted live-limits snapshot: the windows + the unix time captured.
+    private struct LiveLimitsCache: Codable {
+        let limits: [LimitWindow]
+        let at: TimeInterval
+    }
+
+    /// `~/Library/Application Support/StackPulse/live_limits_cache.json`.
+    private var liveLimitsCacheURL: URL {
+        URL(fileURLWithPath: historyDataDir).appendingPathComponent("live_limits_cache.json")
+    }
+
+    /// Writes the last-good limits to disk so they survive a relaunch. No-op when
+    /// there's nothing good to save.
+    private func persistLiveLimits() {
+        guard !lastGoodLiveLimits.isEmpty, let at = lastGoodLiveLimitsAt else { return }
+        let cache = LiveLimitsCache(limits: lastGoodLiveLimits, at: at.timeIntervalSince1970)
+        if let data = try? JSONEncoder().encode(cache) {
+            try? data.write(to: liveLimitsCacheURL, options: .atomic)
+        }
+    }
+
+    /// Loads any persisted last-good limits on launch, so the card can show the
+    /// last-known % immediately (labeled "as of …") even before/without a fresh
+    /// fetch. Silent on absence or any decode failure.
+    private func loadPersistedLiveLimits() {
+        guard liveLimitsEnabled,
+              let data = try? Data(contentsOf: liveLimitsCacheURL),
+              let cache = try? JSONDecoder().decode(LiveLimitsCache.self, from: data),
+              !cache.limits.isEmpty else { return }
+        lastGoodLiveLimits = cache.limits
+        lastGoodLiveLimitsAt = Date(timeIntervalSince1970: cache.at)
+    }
 
     // MARK: BYOK provider connections (API-key balances)
 
@@ -304,6 +355,10 @@ final class SnapshotStore: ObservableObject {
         } else {
             notifications.refreshAuthorizationStatus()
         }
+        // Load the last-known live limits from disk so the Claude card can show
+        // the last % immediately (labeled "as of …"), even if the saved token is
+        // now expired and today's fetch will fail.
+        loadPersistedLiveLimits()
         refresh()
         rescheduleTimer()
         // Load any accumulated usage history once on launch so Trends has data
@@ -538,6 +593,8 @@ final class SnapshotStore: ObservableObject {
                 self.lastGoodLiveLimitsAt = Date()
                 self.liveLimitsError = nil
                 self.applyLiveLimits(outcome.limits)
+                // Persist so the % survives a relaunch / an expired saved token.
+                self.persistLiveLimits()
             } else {
                 // Fetch failed. If we still have a usable cached value, keep showing
                 // it and stay quiet — a transient 429/offline shouldn't alarm the

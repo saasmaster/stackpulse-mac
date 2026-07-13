@@ -18,6 +18,19 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Claude live-limits: stale-token handling (app 0.4.1 — app-only)
+
+- **Fixed the misleading "Sign in to Claude" message.** StackPulse reads Claude
+  Code's saved OAuth token (and never refreshes it — refreshing could rotate the
+  token and sign you *out* of Claude Code). When that saved token expires, the
+  card used to say "Sign in to Claude Code," which reads as *signed out* even
+  though you aren't. It now says the saved login has expired and will resume when
+  Claude Code renews it. A genuine 401 (real re-auth needed) is worded distinctly.
+- **The last-known % now survives.** Live limits are persisted to disk and shown
+  with an honest **"as of …"** label when a fresh value can't be fetched (expired
+  token, offline, rate-limited) — instead of the card blanking. The cache window
+  extends to a few days since Claude's dominant window is weekly (slow-moving).
+
 ### Antigravity real-data scanner (app 0.4.0 — core behavior, no protocol change)
 
 - **Antigravity now shows real local data** instead of a detection-only "no

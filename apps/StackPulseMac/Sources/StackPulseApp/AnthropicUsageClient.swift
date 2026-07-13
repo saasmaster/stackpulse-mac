@@ -61,8 +61,14 @@ enum AnthropicUsageClient {
             return Outcome(limits: [], error: "Couldn't read the Claude login for live limits.")
         case .ok(let creds):
             if creds.isExpired {
-                // Deliberately do NOT refresh (would mutate the user's creds).
-                return Outcome(limits: [], error: "Sign in to Claude Code to refresh live limits.")
+                // The saved access token has aged out. We deliberately do NOT
+                // refresh it — using the refresh token could rotate it and sign
+                // the user out of Claude Code itself. Claude Code rewrites this
+                // token when it next refreshes, and StackPulse picks it up then.
+                return Outcome(
+                    limits: [],
+                    error: "Claude's saved login has expired. Live limits resume once Claude Code renews it — StackPulse never changes your login."
+                )
             }
             return await fetchUsage(token: creds.accessToken, claudeVersion: claudeVersion)
         }
@@ -90,9 +96,11 @@ enum AnthropicUsageClient {
                 // Note the status code only — never the body (may echo the token
                 // context or account details).
                 if http.statusCode == 401 || http.statusCode == 403 {
+                    // A non-expired token that's still rejected means the login
+                    // itself is no longer valid — a real re-auth is needed.
                     return Outcome(
                         limits: [],
-                        error: "Sign in to Claude Code to refresh live limits."
+                        error: "Claude Code's login was rejected — sign in to Claude Code again."
                     )
                 }
                 if http.statusCode == 429 {

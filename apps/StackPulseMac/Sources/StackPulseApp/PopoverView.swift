@@ -430,6 +430,19 @@ struct ProviderCard: View {
                              glowsWhenHigh: true)
                 }
             }
+            // When Claude's limits are the last-known cached value (the saved
+            // token expired or a fetch failed), label their age honestly rather
+            // than implying they're live.
+            if provider.provider == "claude", store.liveLimitsAreStale,
+               let at = store.liveLimitsCapturedAt {
+                HStack(spacing: 4) {
+                    Image(systemName: "clock.arrow.circlepath").imageScale(.small)
+                    Text("as of \(Format.relative(at)) · updates when Claude Code refreshes its login")
+                }
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
