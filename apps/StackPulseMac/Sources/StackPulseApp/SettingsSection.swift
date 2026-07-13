@@ -8,25 +8,44 @@ struct SettingsSection: View {
     @EnvironmentObject var theme: ThemeManager
 
     /// The macOS app's own version (distinct from the Rust core version).
-    private let appVersion = "0.6.1"
+    private let appVersion = "0.6.2"
 
     var body: some View {
         SectionScaffold(section: .settings) { snapshot in
             VStack(alignment: .leading, spacing: 16) {
+                // Preferences & options — Settings holds only controls, not the
+                // live data that belongs in the dashboards.
                 appearanceCard
-                versionsCard(snapshot)
                 refreshCard(snapshot)
-                exportCard(snapshot)
-                commandCenterCard
-                sidebarCard
                 notificationsCard
+                sidebarCard
                 liveLimitsCard
-                ProviderConnectionsCard()
                 powerCard
+                ProviderConnectionsCard()
+
+                // Tools
+                commandCenterCard
+                exportCard(snapshot)
+
+                // About & reference (not settings, but spec-required here).
+                aboutHeader
+                versionsCard(snapshot)
                 costCard(snapshot)
                 accessibilityCard
             }
         }
+    }
+
+    /// A quiet divider separating the settings/options above from the static
+    /// reference/about cards below (versions, cost methodology, accessibility).
+    private var aboutHeader: some View {
+        HStack(spacing: 8) {
+            Text("ABOUT")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            Rectangle().fill(.quaternary).frame(height: 1)
+        }
+        .padding(.top, 6)
     }
 
     // MARK: Appearance (hero control)
@@ -69,9 +88,6 @@ struct SettingsSection: View {
 
             GlassSegmentedControl(segments: RefreshMode.allSegments, selection: $store.refreshMode)
 
-            InfoRow(label: "Cadence", value: store.refreshMode.summary)
-            InfoRow(label: "Last updated", value: Format.relative(store.lastUpdated))
-            InfoRow(label: "UTC bucket", value: snapshot.bucket_date_utc)
             Label(
                 "Spend windows are bucketed by UTC calendar day, so \"today\" follows UTC — not your local midnight.",
                 systemImage: "globe"
@@ -312,16 +328,6 @@ struct SettingsSection: View {
             .toggleStyle(.switch)
 
             if store.liveLimitsEnabled {
-                InfoRow(label: "Last checked", value: Format.relative(store.liveLimitsUpdatedAt))
-
-                if let error = store.liveLimitsError {
-                    Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .labelStyle(.titleAndIcon)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
                 Label(
                     "Uses only your own Claude Code credentials and contacts only Anthropic's API (api.anthropic.com) over HTTPS. Your token is never stored or logged.",
                     systemImage: "lock.shield"

@@ -18,6 +18,19 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Settings holds only settings (app 0.6.2 — app-only)
+
+Settings was showing live *data* that belongs in the dashboards. It now holds
+only controls:
+
+- Removed from Settings: **Last updated**, **UTC bucket**, the refresh **cadence
+  read-out** (the control already shows it), and the live-limits **"Last checked"
+  + status** (all shown on the Claude card / popover / sidebar).
+- Reordered into **preferences & options** first (appearance, refresh, notifications,
+  edge sidebar, live limits, power, provider connections), then **tools** (Command
+  Center, export), then a clearly-separated **About** footer for the static
+  reference the spec requires there (versions, cost methodology, accessibility).
+
 ### Navigation reorganized (app 0.6.1 — app-only)
 
 The information (Overview, Missions, Insights, Usage, Trends…) all sat in one flat
