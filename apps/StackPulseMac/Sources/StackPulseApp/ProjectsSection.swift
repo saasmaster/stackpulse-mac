@@ -12,9 +12,21 @@ struct ProjectsSection: View {
     @EnvironmentObject var store: SnapshotStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// The command awaiting confirmation, if any. Set only for non-read-only
-    /// commands; read-only commands run immediately.
-    @State private var pending: DiscoveredCommand?
+    /// A command awaiting confirmation, with how it should run once confirmed.
+    /// Set only for non-read-only commands; read-only commands run immediately.
+    @State private var pending: PendingRun?
+    /// The live captured run whose console is on screen, if any.
+    @State private var activeSession: CaptureSession?
+    /// A past run whose captured output is being viewed, if any.
+    @State private var viewingRun: CommandRun?
+
+    /// A command plus how it should run once confirmed.
+    private struct PendingRun: Identifiable {
+        let command: DiscoveredCommand
+        /// True = run in-app with captured output; false = open in Terminal.
+        let capture: Bool
+        var id: String { command.id + (capture ? "\u{1}cap" : "\u{1}term") }
+    }
 
     var body: some View {
         ScrollView {
@@ -25,6 +37,7 @@ struct ProjectsSection: View {
                 } else {
                     rootsBar
                     runningServersBlock
+                    recentRunsBlock
                     discoveredList
                 }
             }
@@ -34,16 +47,22 @@ struct ProjectsSection: View {
         .background(WindowBackdrop().ignoresSafeArea())
         .onAppear { store.rescanServices() }
         .overlay {
-            if let cmd = pending {
+            if let p = pending {
                 CommandConfirmDialog(
-                    command: cmd,
+                    command: p.command,
                     onCancel: { pending = nil },
                     onConfirm: {
-                        CommandRunner.runInTerminal(command: cmd.command, cwd: cmd.cwd)
+                        perform(p.command, capture: p.capture)
                         pending = nil
                     }
                 )
             }
+        }
+        .sheet(item: $activeSession) { session in
+            RunConsoleView(session: session, onClose: { activeSession = nil })
+        }
+        .sheet(item: $viewingRun) { run in
+            RunOutputSheet(run: run, onClose: { viewingRun = nil })
         }
         .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85),
                    value: pending?.id)
@@ -51,11 +70,32 @@ struct ProjectsSection: View {
 
     // MARK: Command run gate
 
-    /// Copy just copies. Run gates every non-read-only command behind the dialog;
-    /// read-only commands may run without one (they only read).
+    /// Run in Terminal (visible external shell). Non-read-only commands are gated
+    /// behind the confirmation dialog; read-only ones run immediately.
     private func requestRun(_ command: DiscoveredCommand) {
         if CommandSafety.requiresConfirmation(command.safety) {
-            pending = command
+            pending = PendingRun(command: command, capture: false)
+        } else {
+            perform(command, capture: false)
+        }
+    }
+
+    /// Run in-app with captured output (the evidence flow). Same safety gate.
+    private func requestCapture(_ command: DiscoveredCommand) {
+        if CommandSafety.requiresConfirmation(command.safety) {
+            pending = PendingRun(command: command, capture: true)
+        } else {
+            perform(command, capture: true)
+        }
+    }
+
+    /// Execute a confirmed/allowed command either in Terminal or captured in-app.
+    private func perform(_ command: DiscoveredCommand, capture: Bool) {
+        if capture {
+            let session = CaptureSession(command: command)
+            session.onUpdate = { store.upsertRun($0) }
+            activeSession = session
+            session.start()
         } else {
             CommandRunner.runInTerminal(command: command.command, cwd: command.cwd)
         }
@@ -137,6 +177,44 @@ struct ProjectsSection: View {
         .glassCard(padding: 24)
     }
 
+    // MARK: Recent runs (captured command outcomes / history)
+
+    /// The last few captured runs with their outcome — click to reopen the output,
+    /// or re-run. Persisted across launches so "did the tests pass?" is one glance.
+    @ViewBuilder private var recentRunsBlock: some View {
+        if !store.commandRuns.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath").foregroundStyle(.secondary)
+                    Text("Recent runs")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button { store.clearCommandRuns() } label: {
+                        Text("Clear").font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .help("Clear run history")
+                }
+                ForEach(store.commandRuns.prefix(6)) { run in
+                    RecentRunRow(
+                        run: run,
+                        onView: { viewingRun = run },
+                        onRerun: {
+                            let cmd = DiscoveredCommand(
+                                label: run.label, command: run.command, cwd: run.cwd,
+                                source: "history", safety: run.safety, confidence: 1, raw_key: nil)
+                            requestCapture(cmd)
+                        }
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassCard(padding: 16)
+        }
+    }
+
     // MARK: Running dev servers (merged from the former Services section)
 
     /// Locally-running dev servers, shown right where you launch them. Each has a
@@ -212,7 +290,7 @@ struct ProjectsSection: View {
             }
         } else {
             ForEach(store.projects) { project in
-                ProjectCard(project: project, onRun: requestRun)
+                ProjectCard(project: project, onRun: requestRun, onCapture: requestCapture)
             }
         }
     }
@@ -273,6 +351,7 @@ private struct RootChip: View {
 struct ProjectCard: View {
     let project: Project
     let onRun: (DiscoveredCommand) -> Void
+    let onCapture: (DiscoveredCommand) -> Void
 
     @EnvironmentObject private var store: SnapshotStore
 
@@ -308,7 +387,7 @@ struct ProjectCard: View {
                 Divider().opacity(0.4)
                 VStack(spacing: 6) {
                     ForEach(project.commands) { command in
-                        CommandRow(command: command, onRun: onRun)
+                        CommandRow(command: command, onRun: onRun, onCapture: onCapture)
                     }
                 }
             } else {
@@ -330,12 +409,12 @@ struct ProjectCard: View {
             Spacer()
             previewButton
             if let test = project.testCommand {
-                Button(action: { onRun(test) }) {
+                Button(action: { onCapture(test) }) {
                     Label("Test Project", systemImage: "checkmark.seal")
                         .font(.caption.weight(.semibold))
                 }
                 .buttonStyle(.glass(tint: .green, prominent: true))
-                .help("Run \"\(test.label)\": \(test.command)")
+                .help("Run \"\(test.label)\" in StackPulse and capture the result: \(test.command)")
             }
         }
     }
@@ -395,6 +474,7 @@ struct ProjectCard: View {
 struct CommandRow: View {
     let command: DiscoveredCommand
     let onRun: (DiscoveredCommand) -> Void
+    let onCapture: (DiscoveredCommand) -> Void
 
     @State private var copied = false
 
@@ -422,11 +502,20 @@ struct CommandRow: View {
             .buttonStyle(.glass)
             .help("Copy the command to the clipboard")
 
-            Button(action: { onRun(command) }) {
-                Label("Run in Terminal", systemImage: "play.fill")
+            Button(action: { onCapture(command) }) {
+                Label("Run", systemImage: "play.fill")
                     .font(.caption.weight(.medium))
             }
             .buttonStyle(.glass(tint: CommandSafety.isDestructive(command.safety) ? .red : .accentColor))
+            .help(CommandSafety.requiresConfirmation(command.safety)
+                ? "Confirm, then run in StackPulse and capture the output"
+                : "Run in StackPulse and capture the output")
+
+            Button(action: { onRun(command) }) {
+                Image(systemName: "terminal")
+                    .font(.caption.weight(.medium))
+            }
+            .buttonStyle(.glass)
             .help(CommandSafety.requiresConfirmation(command.safety)
                 ? "Confirm, then run in Terminal"
                 : "Run in Terminal")
@@ -441,6 +530,54 @@ struct CommandRow: View {
             try? await Task.sleep(nanoseconds: 1_400_000_000)
             copied = false
         }
+    }
+}
+
+// MARK: - Recent run row
+
+/// One captured run in the Recent-runs list: outcome chip, label + project, when
+/// it ran and how long it took, and View-output / Re-run actions.
+struct RecentRunRow: View {
+    let run: CommandRun
+    let onView: () -> Void
+    let onRerun: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            RunStatusChip(status: run.status)
+                .frame(width: 74, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(run.label)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if let name = run.projectName, !name.isEmpty {
+                        Text(name)
+                    }
+                    Text("· \(Format.relative(run.startedAt))")
+                    if let d = run.duration {
+                        Text("· \(d < 60 ? String(format: "%.1fs", d) : "\(Int(d)/60)m \(Int(d)%60)s")")
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            Button(action: onView) {
+                Label("Output", systemImage: "text.alignleft").font(.caption2)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help("View the captured output")
+
+            Button(action: onRerun) {
+                Label("Re-run", systemImage: "arrow.clockwise").font(.caption2.weight(.medium))
+            }
+            .buttonStyle(.glass)
+            .help("Run this command again and capture the output")
+        }
+        .padding(.vertical, 3)
     }
 }
 

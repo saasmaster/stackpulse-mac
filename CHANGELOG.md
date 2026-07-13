@@ -18,6 +18,24 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Command runs — captured outcomes & history (app 0.12.0)
+
+Closes the Phase 1 "command history/outcomes" and Phase 3 "test/build evidence"
+gaps — the day-to-day loop of *run a command, did it pass?* now lives in the app.
+
+- **Run in StackPulse (captured).** Every command — and the **Test Project**
+  button — can now run **inside** StackPulse with its output streamed live in a
+  console sheet, then a clear **Passed / Failed** result with exit code and
+  duration. "Run in Terminal" is still there (the terminal icon) for anything you
+  want in a real shell. Same safety gate: non-read-only commands still confirm
+  first; destructive ones stay extra-warned; a Stop button and a 15-minute
+  timeout bound every run.
+- **Recent runs.** Outcomes persist across launches (`command_runs.json`), shown
+  as a "Recent runs" list in Projects — glance at the last few results, reopen the
+  captured output, or re-run (re-running preserves the original safety class).
+- Runs execute via `zsh -lc` in the command's directory (login-shell PATH/nvm),
+  fully visible — never a hidden in-process execution. Swift-only; build clean.
+
 ### Navigation reorganization — 11 sections → 5 (app 0.11.0)
 
 Applied *A Philosophy of Software Design* to the IA: the sidebar was 11 shallow

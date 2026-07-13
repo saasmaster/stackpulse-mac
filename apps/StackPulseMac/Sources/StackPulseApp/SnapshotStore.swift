@@ -377,6 +377,8 @@ final class SnapshotStore: ObservableObject {
         // Load any accumulated usage history once on launch so Trends has data
         // before the first refresh finishes (off the main thread).
         loadHistory()
+        // Load captured command-run history so outcomes are there on launch.
+        loadCommandRuns()
         // Auto-scan remembered project roots on launch (off the main thread).
         if !approvedRoots.isEmpty {
             rescanProjects()
@@ -625,6 +627,60 @@ final class SnapshotStore: ObservableObject {
         let dir = base.appendingPathComponent("StackPulse", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.path
+    }
+
+    // MARK: Command runs (captured outcomes / history)
+
+    /// Captured command runs, most-recent first. Persisted to Application Support
+    /// so outcomes survive relaunch. Capped to keep the file small.
+    @Published private(set) var commandRuns: [CommandRun] = []
+
+    private static let commandRunsCap = 100
+
+    private var commandRunsURL: URL {
+        URL(fileURLWithPath: historyDataDir).appendingPathComponent("command_runs.json")
+    }
+
+    /// Load persisted runs on launch. Any still marked `running` (the app quit
+    /// mid-run) is downgraded to `stopped` so nothing shows a phantom spinner.
+    func loadCommandRuns() {
+        guard let data = try? Data(contentsOf: commandRunsURL),
+              var runs = try? JSONDecoder().decode([CommandRun].self, from: data)
+        else { return }
+        for i in runs.indices where runs[i].status == .running {
+            runs[i].status = .stopped
+            runs[i].finishedAtUnix = runs[i].finishedAtUnix ?? runs[i].startedAtUnix
+        }
+        commandRuns = runs
+    }
+
+    /// Insert or update a run (matched by id), newest first, then persist.
+    func upsertRun(_ run: CommandRun) {
+        if let idx = commandRuns.firstIndex(where: { $0.id == run.id }) {
+            commandRuns[idx] = run
+        } else {
+            commandRuns.insert(run, at: 0)
+            if commandRuns.count > Self.commandRunsCap {
+                commandRuns.removeLast(commandRuns.count - Self.commandRunsCap)
+            }
+        }
+        persistCommandRuns()
+    }
+
+    /// Remove every run from the history and the on-disk store.
+    func clearCommandRuns() {
+        commandRuns = []
+        try? FileManager.default.removeItem(at: commandRunsURL)
+    }
+
+    private func persistCommandRuns() {
+        let url = commandRunsURL
+        let runs = commandRuns
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(runs) {
+                try? data.write(to: url, options: .atomic)
+            }
+        }
     }
 
     /// Loads the accumulated history from the durable store (no recording) on a
