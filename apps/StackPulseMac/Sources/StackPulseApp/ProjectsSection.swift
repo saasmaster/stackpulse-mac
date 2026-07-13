@@ -238,6 +238,14 @@ struct ProjectCard: View {
     let project: Project
     let onRun: (DiscoveredCommand) -> Void
 
+    @EnvironmentObject private var store: SnapshotStore
+
+    /// A one-tap web-preview plan for this project, when it's a servable web app.
+    private var previewPlan: WebPreview.Plan? { WebPreview.plan(for: project) }
+
+    /// If a matching dev server is already running, its URL (open it directly).
+    private var liveURL: String? { WebPreview.runningURL(for: project, among: store.services) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             headerRow
@@ -284,6 +292,7 @@ struct ProjectCard: View {
             Text(project.name)
                 .font(.headline)
             Spacer()
+            previewButton
             if let test = project.testCommand {
                 Button(action: { onRun(test) }) {
                     Label("Test Project", systemImage: "checkmark.seal")
@@ -292,6 +301,27 @@ struct ProjectCard: View {
                 .buttonStyle(.glass(tint: .green, prominent: true))
                 .help("Run \"\(test.label)\": \(test.command)")
             }
+        }
+    }
+
+    /// Launch (or jump to) the project's web preview. If a matching dev server is
+    /// already running, opens its URL directly; otherwise runs the dev command in
+    /// Terminal and opens the browser the moment the port starts listening.
+    @ViewBuilder private var previewButton: some View {
+        if let live = liveURL {
+            Button { WebPreview.open(live) } label: {
+                Label("Open Preview", systemImage: "globe")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.glass(tint: .accentColor, prominent: true))
+            .help("Open \(live) — already running")
+        } else if let plan = previewPlan {
+            Button { WebPreview.launch(plan) } label: {
+                Label("Preview on Web", systemImage: "play.rectangle.on.rectangle")
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.glass(tint: .blue, prominent: true))
+            .help("Run “\(plan.label)” in Terminal, then open \(plan.url) when it's up")
         }
     }
 

@@ -18,6 +18,25 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Web Preview + Sidebar tabs + dev-server control (app 0.8.0)
+
+- **One-tap web preview from Projects.** Each web project gains a **Preview on
+  Web** button: StackPulse infers the dev command (a discovered `dev`/`start`/
+  `serve` command, else `<pm> dev`) and the localhost port (parsed from the
+  command — `--port`/`-p`/`PORT=` — else the framework's default), runs it
+  **visibly in Terminal**, then opens the browser the moment the port is actually
+  listening (a Network-framework readiness poll, no blind delay). If a matching
+  dev server is already running it becomes **Open Preview** and opens directly.
+- **Sidebar tabs.** The edge sidebar now has a frosted **Cards / Live / Web**
+  segmented control (persisted across launches): *Cards* is the rich per-provider
+  list, *Live* is active coding sessions + anything needing attention, and *Web*
+  lists locally-running dev servers with one-tap Open.
+- **Stop a dev server (safe, confirmed).** The Services section can now stop a
+  detected dev server — a confirmation dialog, then a graceful `SIGTERM` (never
+  `SIGKILL`) so it frees its port cleanly. Read-only everywhere else; this is the
+  only mutating action and it's always one explicit, targeted tap.
+- Swift-only wave — no protocol or core change. Integrated build clean.
+
 ### Richer Missions + Reports (app 0.7.0 / protocol 1.10.0)
 
 - **Missions now show what an agent actually did.** Each mission gains **changed

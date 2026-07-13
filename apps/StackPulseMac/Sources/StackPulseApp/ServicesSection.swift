@@ -14,6 +14,9 @@ import AppKit
 struct ServicesSection: View {
     @EnvironmentObject var store: SnapshotStore
 
+    /// A running service awaiting a Stop confirmation, if any.
+    @State private var pendingStop: RunningService?
+
     var body: some View {
         SectionScaffold(section: .services) { _ in
             if store.services.isEmpty {
@@ -28,6 +31,26 @@ struct ServicesSection: View {
             }
         }
         .onAppear { store.rescanServices() }
+        .overlay {
+            if let svc = pendingStop {
+                GlassConfirmDialog(
+                    title: "Stop this dev server?",
+                    message: "StackPulse will send a graceful stop (SIGTERM) to “\(svc.command)” (pid \(svc.pid), port \(svc.port)). The server can finish and free its port.",
+                    confirmTitle: "Stop server",
+                    confirmTint: .orange,
+                    onCancel: { pendingStop = nil },
+                    onConfirm: {
+                        ServiceControl.stop(pid: svc.pid)
+                        pendingStop = nil
+                        // Give the process a moment to exit, then refresh the list.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                            store.rescanServices()
+                        }
+                    }
+                )
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: pendingStop?.id)
     }
 
     // MARK: Toolbar
@@ -129,7 +152,7 @@ struct ServicesSection: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(items) { svc in
-                ServiceCard(service: svc)
+                ServiceCard(service: svc, onStop: { pendingStop = svc })
             }
         }
     }
@@ -142,6 +165,8 @@ struct ServicesSection: View {
 /// resolved a URL — Open (in the default browser) and Copy affordances.
 struct ServiceCard: View {
     let service: RunningService
+    /// Invoked when the user asks to stop this server (the section confirms first).
+    var onStop: (() -> Void)? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var copied = false
@@ -179,8 +204,8 @@ struct ServiceCard: View {
 
             Spacer(minLength: 4)
 
-            if let url = service.url, !url.isEmpty {
-                VStack(alignment: .trailing, spacing: 6) {
+            VStack(alignment: .trailing, spacing: 6) {
+                if let url = service.url, !url.isEmpty {
                     Button {
                         openURL(url)
                     } label: {
@@ -199,6 +224,17 @@ struct ServiceCard: View {
                     .buttonStyle(.borderless)
                     .controlSize(.small)
                     .help("Copy \(url)")
+                }
+
+                if let onStop {
+                    Button(action: onStop) {
+                        Label("Stop", systemImage: "stop.circle")
+                            .font(.caption2.weight(.medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .foregroundStyle(.orange)
+                    .help("Stop this dev server (graceful SIGTERM, with confirmation)")
                 }
             }
         }

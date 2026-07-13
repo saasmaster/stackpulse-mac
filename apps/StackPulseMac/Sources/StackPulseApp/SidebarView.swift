@@ -4,6 +4,28 @@ import SwiftUI
 /// activity + needs-attention, then a rich condensed per-provider list. Shares
 /// the app's single ``SnapshotStore``. Hosted by ``EdgeSidebarController`` in a
 /// non-activating floating panel pinned to either screen edge.
+/// Which slice of the sidebar is showing. Persisted across launches so the
+/// sidebar reopens on the tab you left it on.
+enum SidebarTab: String, CaseIterable {
+    case cards, activity, preview
+
+    var label: String {
+        switch self {
+        case .cards: return "Cards"
+        case .activity: return "Live"
+        case .preview: return "Web"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .cards: return "rectangle.stack"
+        case .activity: return "bolt.horizontal"
+        case .preview: return "globe"
+        }
+    }
+}
+
 struct SidebarView: View {
     @EnvironmentObject var store: SnapshotStore
     @EnvironmentObject var theme: ThemeManager
@@ -11,6 +33,12 @@ struct SidebarView: View {
     var onClose: (() -> Void)? = nil
     /// Open the full main window / inbox.
     var onOpenMainWindow: (() -> Void)? = nil
+
+    @AppStorage("sidebar.tab") private var tabRaw: String = SidebarTab.cards.rawValue
+    private var tab: SidebarTab {
+        get { SidebarTab(rawValue: tabRaw) ?? .cards }
+        nonmutating set { tabRaw = newValue.rawValue }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,22 +99,12 @@ struct SidebarView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     summaryStrip(snapshot)
+                    tabBar
 
-                    ActiveNowBlock(missions: store.activeMissions, maxItems: 3,
-                                   onTap: onOpenMainWindow)
-                    NeedsAttentionBlock(alerts: store.activeAlerts, maxItems: 3,
-                                        onTap: onOpenMainWindow)
-
-                    ForEach(snapshot.installedProviders) { provider in
-                        SidebarProviderRow(provider: provider)
-                    }
-
-                    if snapshot.installedProviders.isEmpty {
-                        Text("No providers detected on this Mac.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, 6)
+                    switch tab {
+                    case .cards: cardsTab(snapshot)
+                    case .activity: activityTab
+                    case .preview: previewTab
                     }
 
                     quickNav
@@ -152,6 +170,93 @@ struct SidebarView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, label == "Live" ? 12 : 0)
+    }
+
+    // MARK: Tab bar
+
+    /// A frosted segmented control switching the sidebar between its provider
+    /// cards, live activity, and web-preview views.
+    private var tabBar: some View {
+        GlassSegmentedControl(
+            segments: SidebarTab.allCases.map {
+                GlassSegment(value: $0, systemImage: $0.systemImage, label: $0.label)
+            },
+            selection: Binding(get: { tab }, set: { tab = $0 })
+        )
+        .font(.caption)
+    }
+
+    // MARK: Tabs
+
+    /// Cards: the rich condensed per-provider list (the default).
+    @ViewBuilder private func cardsTab(_ snapshot: UsageSnapshot) -> some View {
+        if snapshot.installedProviders.isEmpty {
+            Text("No providers detected on this Mac.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 6)
+        } else {
+            ForEach(snapshot.installedProviders) { provider in
+                SidebarProviderRow(provider: provider)
+            }
+        }
+    }
+
+    /// Activity: current AI coding sessions and anything needing attention, with
+    /// more room than the always-on cards tab affords.
+    @ViewBuilder private var activityTab: some View {
+        ActiveNowBlock(missions: store.activeMissions, maxItems: 6,
+                       onTap: onOpenMainWindow)
+        NeedsAttentionBlock(alerts: store.activeAlerts, maxItems: 6,
+                            onTap: onOpenMainWindow)
+        if store.activeMissions.isEmpty && store.activeAlerts.isEmpty {
+            sidebarEmpty("checkmark.circle", "Nothing needs you right now",
+                         "Active coding sessions and alerts show up here.")
+        }
+    }
+
+    /// Preview: locally-running dev servers, one tap to open in the browser.
+    private var previewTab: some View {
+        let running = store.services.filter { ($0.url?.isEmpty == false) }
+        return VStack(alignment: .leading, spacing: 10) {
+            if running.isEmpty {
+                sidebarEmpty("globe", "No dev servers running",
+                             "Launch a preview from Projects — it opens here when it's up.")
+                Button {
+                    store.pendingSection = .services
+                    onOpenMainWindow?()
+                } label: {
+                    Label("Open Projects", systemImage: "folder")
+                        .font(.caption.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.glass(tint: .accentColor))
+            } else {
+                ForEach(running) { service in
+                    SidebarServiceRow(service: service)
+                }
+            }
+        }
+        .onAppear { if store.services.isEmpty { store.rescanServices() } }
+    }
+
+    private func sidebarEmpty(_ icon: String, _ title: String, _ subtitle: String) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.caption.weight(.semibold))
+            Text(subtitle)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 18)
+        .glassCard(padding: 12)
     }
 
     /// A compact launcher so the side card jumps straight into the useful main
@@ -318,5 +423,43 @@ private struct SidebarProviderRow: View {
         case "weekly": return "Weekly"
         default: return raw.capitalized
         }
+    }
+}
+
+/// A compact running-service row for the sidebar Preview tab: a live green dot,
+/// the project/command, its port, and a one-tap Open in the browser.
+private struct SidebarServiceRow: View {
+    let service: RunningService
+
+    var body: some View {
+        HStack(spacing: 8) {
+            StatusDot(color: .green)
+                .accessibilityLabel("running")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(service.project_name ?? service.command)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                HStack(spacing: 5) {
+                    if let kind = service.kind, !kind.isEmpty {
+                        Text(kind)
+                    }
+                    Text("port \(service.port)")
+                }
+                .font(.system(size: 9).monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            if let url = service.url, !url.isEmpty {
+                Button { WebPreview.open(url) } label: {
+                    Image(systemName: "arrow.up.right.square")
+                }
+                .buttonStyle(.borderless)
+                .help("Open \(url)")
+                .accessibilityLabel("Open \(url)")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(padding: 10)
     }
 }
