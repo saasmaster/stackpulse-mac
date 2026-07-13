@@ -354,9 +354,18 @@ struct ProjectCard: View {
     let onCapture: (DiscoveredCommand) -> Void
 
     @EnvironmentObject private var store: SnapshotStore
+    @State private var copiedCommand = false
+    @State private var lanIP: String?
 
-    /// A one-tap web-preview plan for this project, when it's a servable web app.
-    private var previewPlan: WebPreview.Plan? { WebPreview.plan(for: project) }
+    /// Whether dependencies are already installed (so the recipe can skip install).
+    private var nodeModulesExists: Bool {
+        FileManager.default.fileExists(atPath: (project.path as NSString).appendingPathComponent("node_modules"))
+    }
+
+    /// The one-paste launch recipe for this project, when it's a servable web app.
+    private var launchRecipe: WebPreview.Recipe? {
+        WebPreview.recipe(for: project, installNeeded: !nodeModulesExists)
+    }
 
     /// If a matching dev server is already running, its URL (open it directly).
     private var liveURL: String? { WebPreview.runningURL(for: project, among: store.services) }
@@ -365,6 +374,7 @@ struct ProjectCard: View {
         VStack(alignment: .leading, spacing: 12) {
             headerRow
             pathRow
+            launchPanel
             if !metaChips.isEmpty {
                 FlowLayout(spacing: 6, lineSpacing: 6) {
                     ForEach(metaChips, id: \.0) { chip in
@@ -398,6 +408,7 @@ struct ProjectCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard(padding: 16)
+        .onAppear { if lanIP == nil { lanIP = LocalNetwork.primaryIPv4() } }
     }
 
     private var headerRow: some View {
@@ -407,7 +418,6 @@ struct ProjectCard: View {
             Text(project.name)
                 .font(.headline)
             Spacer()
-            previewButton
             if let test = project.testCommand {
                 Button(action: { onCapture(test) }) {
                     Label("Test Project", systemImage: "checkmark.seal")
@@ -419,25 +429,90 @@ struct ProjectCard: View {
         }
     }
 
-    /// Launch (or jump to) the project's web preview. If a matching dev server is
-    /// already running, opens its URL directly; otherwise runs the dev command in
-    /// Terminal and opens the browser the moment the port starts listening.
-    @ViewBuilder private var previewButton: some View {
+    /// The one-tap launch panel: for a running app, an Open button; otherwise a
+    /// prominent **Launch** (one paste behind the scenes: cd + install + start with
+    /// the host exposed, then opens the browser), a **Copy command** that puts the
+    /// whole recipe on the clipboard, and the Local + shareable Network URLs.
+    @ViewBuilder private var launchPanel: some View {
         if let live = liveURL {
-            Button { WebPreview.open(live) } label: {
-                Label("Open Preview", systemImage: "globe")
-                    .font(.caption.weight(.semibold))
+            HStack(spacing: 8) {
+                Button { WebPreview.open(live) } label: {
+                    Label("Open Preview", systemImage: "globe").font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.glass(tint: .accentColor, prominent: true))
+                Text(live)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+                Chip(text: "running", systemImage: "bolt.fill", tint: .green)
             }
-            .buttonStyle(.glass(tint: .accentColor, prominent: true))
-            .help("Open \(live) — already running")
-        } else if let plan = previewPlan {
-            Button { WebPreview.launch(plan) } label: {
-                Label("Preview on Web", systemImage: "play.rectangle.on.rectangle")
-                    .font(.caption.weight(.semibold))
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if let recipe = launchRecipe {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Button { WebPreview.launch(recipe) } label: {
+                        Label("Launch", systemImage: "play.fill").font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.glass(tint: .blue, prominent: true))
+                    .help("Run it (\(recipe.command)) and open the browser when it's ready")
+
+                    Button { copyCommand(recipe.oneLiner) } label: {
+                        Label(copiedCommand ? "Copied" : "Copy command",
+                              systemImage: copiedCommand ? "checkmark" : "doc.on.doc")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.glass)
+                    .help("Copy the whole one-paste command:\n\(recipe.oneLiner)")
+
+                    Spacer(minLength: 0)
+                }
+                urlRow(recipe)
             }
-            .buttonStyle(.glass(tint: .blue, prominent: true))
-            .help("Run “\(plan.label)” in Terminal, then open \(plan.url) when it's up")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .liquidGlass(cornerRadius: 12, prominence: .low, padding: 0)
         }
+    }
+
+    /// Local + Network URL chips (tap to copy). The Network one is the "temporary
+    /// IP domain" you can open from your phone or another machine on the same Wi-Fi.
+    @ViewBuilder private func urlRow(_ recipe: WebPreview.Recipe) -> some View {
+        HStack(spacing: 8) {
+            urlChip("Local", recipe.localURL)
+            if let ip = lanIP {
+                urlChip("Network", recipe.networkURL(ip))
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func urlChip(_ label: String, _ url: String) -> some View {
+        Button { copyURL(url) } label: {
+            HStack(spacing: 4) {
+                Text(label.uppercased())
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(url.replacingOccurrences(of: "http://", with: ""))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.primary)
+                Image(systemName: "doc.on.doc").font(.system(size: 8)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .liquidGlass(cornerRadius: 8, prominence: .low, padding: 0)
+        }
+        .buttonStyle(.plain)
+        .help("Copy \(url)")
+    }
+
+    private func copyCommand(_ text: String) {
+        CommandRunner.copy(text)
+        copiedCommand = true
+        Task { try? await Task.sleep(nanoseconds: 1_400_000_000); copiedCommand = false }
+    }
+
+    private func copyURL(_ text: String) {
+        CommandRunner.copy(text)
     }
 
     private var pathRow: some View {

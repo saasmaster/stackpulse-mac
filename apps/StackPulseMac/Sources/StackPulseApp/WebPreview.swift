@@ -27,8 +27,85 @@ enum WebPreview {
     /// serve (no dev command and no recognizable web framework).
     static func plan(for project: Project) -> Plan? {
         guard let command = devCommand(for: project) else { return nil }
-        let port = parsePort(from: command) ?? defaultPort(for: project.frameworks)
-        return Plan(command: command, cwd: project.path, port: port, label: shortLabel(command))
+        return Plan(command: command, cwd: project.path,
+                    port: resolvedPort(for: project, devCommand: command),
+                    label: shortLabel(command))
+    }
+
+    // MARK: Launch recipe (one paste → running app)
+
+    /// A full "just launch it" recipe: the single line you can paste anywhere to
+    /// bring the app up — `cd` into it, install deps if needed, and start the dev
+    /// server with the host exposed so it also serves on your LAN IP. Plus the
+    /// URLs it will serve on (localhost + the shareable network address).
+    struct Recipe: Equatable {
+        let projectName: String
+        let cwd: String
+        /// Steps after the `cd`, in order (e.g. `["npm install", "npm run dev -- --host"]`).
+        let steps: [String]
+        let port: Int
+
+        /// The command run *inside* the project dir (what ``CommandRunner`` cd's to).
+        var command: String { steps.joined(separator: " && ") }
+        /// The full self-contained one-liner — copy this and paste it anywhere.
+        var oneLiner: String { (["cd \(shellQuoted(cwd))"] + steps).joined(separator: " && ") }
+        var localURL: String { "http://localhost:\(port)" }
+        func networkURL(_ ip: String) -> String { "http://\(ip):\(port)" }
+    }
+
+    /// Build a one-paste launch recipe for a web project. `installNeeded` should be
+    /// true when the project's dependencies aren't installed yet (no `node_modules`),
+    /// so the recipe includes the install step; otherwise it's skipped for speed.
+    static func recipe(for project: Project, installNeeded: Bool) -> Recipe? {
+        guard let dev = devCommand(for: project) else { return nil }
+        let port = resolvedPort(for: project, devCommand: dev)
+        var steps: [String] = []
+        if installNeeded, let install = installCommand(for: project) {
+            steps.append(install)
+        }
+        steps.append(withHost(dev, frameworks: project.frameworks))
+        return Recipe(projectName: project.name, cwd: project.path, steps: steps, port: port)
+    }
+
+    /// Run the full recipe in Terminal (so you see the dev server's own Network URL)
+    /// and open the browser once the port is listening.
+    @MainActor
+    static func launch(_ recipe: Recipe) {
+        CommandRunner.runInTerminal(command: recipe.command, cwd: recipe.cwd)
+        PortWatcher.shared.watch(port: recipe.port, url: recipe.localURL)
+    }
+
+    /// The install step for a project's package manager (node only), or `nil`.
+    private static func installCommand(for project: Project) -> String? {
+        switch (project.package_manager ?? "").lowercased() {
+        case "pnpm": return "pnpm install"
+        case "yarn": return "yarn"
+        case "bun": return "bun install"
+        case "npm": return "npm install"
+        default: return looksWeb(project) ? "npm install" : nil
+        }
+    }
+
+    /// Append the right "expose on the network" flag for the framework, unless the
+    /// command already sets a host. npm needs `--` to forward args to the script.
+    private static func withHost(_ dev: String, frameworks: [String]) -> String {
+        let lower = dev.lowercased()
+        if lower.contains("--host") || lower.contains("-h 0.0.0.0") || lower.contains("--hostname") {
+            return dev
+        }
+        let flag = hostFlag(for: frameworks)
+        return lower.contains("npm run") ? "\(dev) -- \(flag)" : "\(dev) \(flag)"
+    }
+
+    private static func hostFlag(for frameworks: [String]) -> String {
+        let fw = frameworks.map { $0.lowercased() }
+        if fw.contains(where: { $0.contains("next") }) { return "-H 0.0.0.0" }
+        if fw.contains(where: { $0.contains("angular") }) { return "--host 0.0.0.0" }
+        return "--host"
+    }
+
+    private static func shellQuoted(_ s: String) -> String {
+        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// If a dev server for this project is already running (matched by the core),
@@ -93,6 +170,45 @@ enum WebPreview {
     }
 
     // MARK: Port inference
+
+    /// The port the app will actually serve on: parsed from the command if it's
+    /// explicit, else from the resolved `package.json` script (e.g. a `dev` script
+    /// of `next dev --port 3100`), else the framework default. This is what makes
+    /// the shown URLs correct for projects whose port lives in package.json.
+    private static func resolvedPort(for project: Project, devCommand: String) -> Int {
+        if let p = parsePort(from: devCommand) { return p }
+        if let script = scriptName(from: devCommand),
+           let body = packageScriptBody(cwd: project.path, script: script),
+           let p = parsePort(from: body) {
+            return p
+        }
+        return defaultPort(for: project.frameworks)
+    }
+
+    /// The npm script name a dev command invokes (`npm run dev` → `dev`,
+    /// `pnpm dev` → `dev`), or `nil` for a direct binary invocation.
+    private static func scriptName(from command: String) -> String? {
+        let tokens = command.split(separator: " ").map(String.init)
+        guard let first = tokens.first else { return nil }
+        if let runIdx = tokens.firstIndex(of: "run"), runIdx + 1 < tokens.count {
+            return tokens[runIdx + 1]           // npm run <script>
+        }
+        if ["pnpm", "yarn", "bun"].contains(first), tokens.count > 1 {
+            return tokens[1]                     // pnpm/yarn/bun <script>
+        }
+        return nil
+    }
+
+    /// Read `<cwd>/package.json` and return the body of `scripts[script]`, if any.
+    private static func packageScriptBody(cwd: String, script: String) -> String? {
+        let url = URL(fileURLWithPath: cwd).appendingPathComponent("package.json")
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let scripts = json["scripts"] as? [String: Any],
+              let body = scripts[script] as? String
+        else { return nil }
+        return body
+    }
 
     /// Pull an explicit port out of a command string: `--port 3100`, `--port=3100`,
     /// `-p 3100`, or a `PORT=3100` env prefix. First match wins.

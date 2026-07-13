@@ -18,6 +18,26 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### One-paste demo launch (app 0.13.0)
+
+Made launching a demo app as easy as the "paste one block and it's up" flow: each
+web project in Projects now has a single **Launch** button and a **Copy command**
+that copies the *whole* recipe — no more copying commands line by line.
+
+- **Copy command** puts one self-contained line on the clipboard:
+  `cd '<path>' && <npm install — only if node_modules is missing> && <start with
+  the host exposed>`. Paste it anywhere and the app comes up.
+- **Launch** runs that same recipe in Terminal (so you see the dev server's own
+  output) and opens the browser the moment the port is listening.
+- **Shareable URL.** The panel shows the **Local** and **Network** addresses
+  (e.g. `192.168.68.71:3100`) — the "temporary IP domain" you can open from your
+  phone or another machine on the same Wi-Fi, because the recipe starts the server
+  with `--host` / `-H 0.0.0.0` (framework-aware). Tap either to copy.
+- **Correct ports.** The port is read from the actual `package.json` script (e.g.
+  Praxis's `next dev --port 3100`), not guessed — so the URLs and browser-open are
+  right even when the port isn't on the command line. Already-running apps show
+  **Open Preview** instead. Swift-only; build clean.
+
 ### Command runs — captured outcomes & history (app 0.12.0)
 
 Closes the Phase 1 "command history/outcomes" and Phase 3 "test/build evidence"
