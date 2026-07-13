@@ -65,9 +65,12 @@ enum AnthropicUsageClient {
                 // refresh it — using the refresh token could rotate it and sign
                 // the user out of Claude Code itself. Claude Code rewrites this
                 // token when it next refreshes, and StackPulse picks it up then.
+                // Desktop (app) sessions authenticate via Claude's own encrypted
+                // storage and never renew this CLI token — only a terminal
+                // session does. Say exactly how to revive it.
                 return Outcome(
                     limits: [],
-                    error: "Claude's saved login has expired. Live limits resume once Claude Code renews it — StackPulse never changes your login."
+                    error: "Claude's saved login has expired — run `claude` in Terminal once to renew it. (Desktop sessions don't refresh it; StackPulse never changes your login.)"
                 )
             }
             return await fetchUsage(token: creds.accessToken, claudeVersion: claudeVersion)
