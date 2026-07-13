@@ -549,6 +549,29 @@ final class SnapshotStore: ObservableObject {
         }
     }
 
+    // MARK: Repository Radar (protocol ≥ 1.11.0)
+
+    /// The last Repository Radar report over the approved roots.
+    @Published private(set) var radar: RadarReport?
+    @Published private(set) var isScanningRadar = false
+    @Published private(set) var radarUpdatedAt: Date?
+
+    /// Run the Repository Radar off the main actor. Coalesced. No-op with no
+    /// approved roots (there's nothing to scan yet).
+    func rescanRadar() {
+        guard !isScanningRadar, !approvedRoots.isEmpty else { return }
+        isScanningRadar = true
+        let roots = approvedRoots
+        Task.detached(priority: .utility) {
+            let result = CoreBridge.radar(roots: roots)
+            await MainActor.run {
+                self.isScanningRadar = false
+                self.radarUpdatedAt = Date()
+                if let result { self.radar = result }
+            }
+        }
+    }
+
     func refresh() {
         guard !isLoading else { return }
         isLoading = true

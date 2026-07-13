@@ -590,3 +590,63 @@ struct RunningService: Codable, Sendable, Identifiable {
 
     var id: String { "\(pid)\u{1}\(port)" }
 }
+
+// MARK: - Repository Radar (protocol ≥ 1.11.0)
+
+// String-valued enums (`category`, `effort`, `risk`) are interpreted in the view
+// layer so a newer core adding a variant never breaks decoding.
+
+/// One explainable, project-grounded recommendation from the Repository Radar.
+struct Recommendation: Codable, Sendable, Identifiable {
+    let id: String
+    let category: String   // ai_context | hygiene | testing | git | setup | efficiency | tooling | security | other
+    let title: String
+    let detail: String
+    let affected_projects: [String]
+    let evidence: [String]
+    let effort: String     // trivial | small | moderate
+    let risk: String       // none | low | medium
+    let recommend_change: Bool
+    let priority: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case id, category, title, detail, affected_projects, evidence
+        case effort, risk, recommend_change, priority
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        category = try c.decode(String.self, forKey: .category)
+        title = try c.decode(String.self, forKey: .title)
+        detail = try c.decode(String.self, forKey: .detail)
+        affected_projects = ((try? c.decodeIfPresent([String].self, forKey: .affected_projects)) ?? nil) ?? []
+        evidence = ((try? c.decodeIfPresent([String].self, forKey: .evidence)) ?? nil) ?? []
+        effort = (try? c.decode(String.self, forKey: .effort)) ?? "small"
+        risk = (try? c.decode(String.self, forKey: .risk)) ?? "low"
+        recommend_change = (try? c.decode(Bool.self, forKey: .recommend_change)) ?? true
+        priority = (try? c.decode(Int.self, forKey: .priority)) ?? 0
+    }
+}
+
+/// The Repository Radar's report over the approved roots.
+struct RadarReport: Codable, Sendable {
+    let generated_at_unix: Int64?
+    let projects_scanned: Int
+    let recommendations: [Recommendation]
+
+    private enum CodingKeys: String, CodingKey {
+        case generated_at_unix, projects_scanned, recommendations
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        generated_at_unix = try c.decodeIfPresent(Int64.self, forKey: .generated_at_unix)
+        projects_scanned = (try? c.decode(Int.self, forKey: .projects_scanned)) ?? 0
+        recommendations = ((try? c.decodeIfPresent([Recommendation].self, forKey: .recommendations)) ?? nil) ?? []
+    }
+
+    var generatedAt: Date? {
+        generated_at_unix.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+    }
+}

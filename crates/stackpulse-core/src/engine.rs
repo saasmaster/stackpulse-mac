@@ -87,6 +87,9 @@ impl Engine {
             CoreRequest::GetServices { roots } => CoreResponse::Services {
                 services: crate::services::detect(&roots),
             },
+            CoreRequest::GetRadar { roots, max_depth } => {
+                CoreResponse::Radar(crate::radar::analyze(&roots, max_depth.unwrap_or(4)))
+            }
         }
     }
 

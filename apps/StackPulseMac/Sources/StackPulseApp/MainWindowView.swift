@@ -12,6 +12,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     case trends
     case reports
     case projects
+    case discover
     case stackHealth
     case services
     case integrations
@@ -29,6 +30,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .trends: return "Trends"
         case .reports: return "Reports"
         case .projects: return "Projects"
+        case .discover: return "Discover"
         case .stackHealth: return "Stack Health"
         case .services: return "Services"
         case .integrations: return "Integrations"
@@ -46,6 +48,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .trends: return "chart.xyaxis.line"
         case .reports: return "doc.text"
         case .projects: return "folder"
+        case .discover: return "sparkle.magnifyingglass"
         case .stackHealth: return "shield.lefthalf.filled"
         case .services: return "server.rack"
         case .integrations: return "puzzlepiece.extension"
@@ -64,6 +67,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .trends: return "Long-run spend and token trends across providers, built from durable usage history that outlives the 30-day logs."
         case .reports: return "A shareable snapshot of your usage, efficiency, projects, and stack — export it as text, Markdown, CSV, or JSON."
         case .projects: return "Remembered commands for your project folders — copy or run them safely."
+        case .discover: return "Project-aware, explainable recommendations drawn from your own local projects — what to add, fix, or safely leave alone."
         case .stackHealth: return "Is each project's stack current, compatible, and secure — outdated dependencies, breaking updates, and advisories."
         case .services: return "Dev servers and services running right now — their ports, which project they belong to, and quick actions."
         case .integrations: return "Detection, health, and the capability matrix for each provider."
@@ -116,7 +120,7 @@ struct MainWindowView: View {
     /// gear or ⌘,.
     private static let navGroups: [(String, [MainSection])] = [
         ("Monitor", [.overview, .missions, .insights, .usage, .trends, .reports, .alerts]),
-        ("Build", [.projects, .stackHealth, .services]),
+        ("Build", [.projects, .discover, .stackHealth, .services]),
     ]
 
     private var sidebar: some View {
@@ -290,6 +294,7 @@ struct MainWindowView: View {
         case .trends: TrendsSection()
         case .reports: ReportsSection()
         case .projects: ProjectsSection()
+        case .discover: DiscoverSection()
         case .stackHealth: StackHealthSection()
         case .services: ServicesSection()
         case .integrations: IntegrationsSection()

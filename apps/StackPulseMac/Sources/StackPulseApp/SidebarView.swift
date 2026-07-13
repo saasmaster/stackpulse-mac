@@ -263,7 +263,7 @@ struct SidebarView: View {
     /// sections — the dashboards/analytics live one tap away, not buried behind
     /// the Settings gear.
     private static let quickSections: [MainSection] = [
-        .overview, .usage, .trends, .missions, .insights, .stackHealth,
+        .overview, .usage, .trends, .missions, .insights, .discover,
     ]
 
     private var quickNav: some View {

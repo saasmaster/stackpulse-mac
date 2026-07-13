@@ -140,4 +140,24 @@ enum CoreBridge {
         guard let data = json.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode(Response.self, from: data))?.services ?? []
     }
+
+    // MARK: Repository Radar (protocol ≥ 1.11.0)
+
+    /// Run the Repository Radar over the approved roots. Discovers projects and
+    /// runs deterministic, local-only rules (filesystem + git), so call off the
+    /// main actor. Returns `nil` on error / empty roots / undecodable payload.
+    static func radar(roots: [String], maxDepth: Int = 4) -> RadarReport? {
+        guard !roots.isEmpty else { return nil }
+        struct Request: Encodable {
+            let op = "get_radar"
+            let roots: [String]
+            let max_depth: Int
+        }
+        guard let reqData = try? JSONEncoder().encode(Request(roots: roots, max_depth: maxDepth)),
+              let reqJSON = String(data: reqData, encoding: .utf8)
+        else { return nil }
+        let json = handle(reqJSON)
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(RadarReport.self, from: data)
+    }
 }

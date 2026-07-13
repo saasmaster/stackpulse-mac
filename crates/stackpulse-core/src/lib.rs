@@ -23,6 +23,7 @@ pub mod paths;
 pub mod pricing;
 pub mod projects;
 pub mod providers;
+pub mod radar;
 pub mod services;
 pub mod stack_health;
 

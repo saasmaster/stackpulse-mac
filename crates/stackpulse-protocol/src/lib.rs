@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 10,
+    minor: 11,
     patch: 0,
 };
 
@@ -845,6 +845,98 @@ pub enum CoreRequest {
         #[serde(default)]
         roots: Vec<String>,
     },
+    /// Run the Repository Radar over the approved roots (since 1.11.0): discover
+    /// projects, then emit deterministic, explainable, project-grounded
+    /// recommendations. Fully local (filesystem + git only), no network.
+    GetRadar {
+        roots: Vec<String>,
+        #[serde(default)]
+        max_depth: Option<u32>,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Repository Radar — project-aware recommendations (since 1.11.0)
+// ---------------------------------------------------------------------------
+
+/// The coarse kind of a radar recommendation. Open enum for forward-compat: the
+/// Swift layer treats the wire value as a string, so a newer core adding a
+/// category never breaks decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RadarCategory {
+    /// Missing/weak agent instructions (CLAUDE.md, AGENTS.md, …).
+    AiContext,
+    /// Repo hygiene (generated folders in VCS/context, missing ignores).
+    Hygiene,
+    /// Test coverage / verifiability gaps.
+    Testing,
+    /// Git state (uncommitted work, no remote/backup).
+    Git,
+    /// Local setup gaps (env files, etc.).
+    Setup,
+    /// Context/tool efficiency opportunities.
+    Efficiency,
+    /// A tooling capability gap grounded in the stack.
+    Tooling,
+    /// Security posture.
+    Security,
+    /// Anything a newer core adds.
+    #[serde(other)]
+    Other,
+}
+
+/// Rough effort to act on a recommendation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RadarEffort {
+    Trivial,
+    Small,
+    Moderate,
+}
+
+/// Rough risk of acting on a recommendation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RadarRisk {
+    None,
+    Low,
+    Medium,
+}
+
+/// One explainable, project-grounded recommendation. Deterministic — derived from
+/// concrete facts about the user's local projects, never a generic popularity
+/// feed. Each field answers the spec's "must explain" questions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Recommendation {
+    /// Stable id for ordering/dismissal (`<category>:<subject-slug>`).
+    pub id: String,
+    pub category: RadarCategory,
+    /// One-line, actionable title.
+    pub title: String,
+    /// Why it's relevant and what to do about it.
+    pub detail: String,
+    /// The projects this applies to (the "which projects benefit").
+    #[serde(default)]
+    pub affected_projects: Vec<String>,
+    /// Concrete evidence observed locally (files present/absent, counts).
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    pub effort: RadarEffort,
+    pub risk: RadarRisk,
+    /// Whether change is actually advised (spec: "whether no change is safer").
+    pub recommend_change: bool,
+    /// 0–100 ordering weight, higher first.
+    pub priority: u8,
+}
+
+/// The Repository Radar's report over the approved roots.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RadarReport {
+    pub generated_at_unix: i64,
+    pub projects_scanned: usize,
+    #[serde(default)]
+    pub recommendations: Vec<Recommendation>,
 }
 
 /// The core's reply. `request_echo` lets async clients correlate.
@@ -871,6 +963,7 @@ pub enum CoreResponse {
     Services {
         services: Vec<RunningService>,
     },
+    Radar(RadarReport),
     Error(CoreError),
 }
 

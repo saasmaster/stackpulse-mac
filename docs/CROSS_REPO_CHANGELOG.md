@@ -275,6 +275,24 @@ is breaking for downstream consumers, and the action they should take.
 
 ---
 
+### 2026-07-13 — Repository Radar (protocol 1.11.0)
+
+- **Surface:** protocol + core
+- **Versions:** protocol **1.11.0** / core **0.1.0** / manifest *(not yet defined)*
+- **Breaking for downstream:** no (purely additive)
+- **Change:** `Recommendation` + `RadarCategory` / `RadarEffort` / `RadarRisk`
+  (open enums) / `RadarReport` types, plus the `get_radar` op and `radar`
+  response. The core discovers projects under the approved roots and runs
+  deterministic rules over local facts (filesystem + `git`) to emit explainable,
+  project-grounded recommendations — no network, no code execution. Rules
+  aggregate across projects (one card each, with the affected list) to keep
+  signal high. Any client linking the core gets the radar for free.
+- **Downstream action:** target protocol **1.11.0**; `get_radar` is optional and
+  the report's `recommendations` may be empty. Category/effort/risk are open
+  enums — treat unknown values as a passthrough string.
+
+---
+
 ## Pending / anticipated (not yet shipped)
 
 These are flagged so downstream repos can plan. They are **not** implemented and

@@ -18,6 +18,28 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Repository Radar / Discover (app 0.9.0 / protocol 1.11.0)
+
+- **New Discover section (Repository Radar).** The core scans your approved
+  project roots and emits **deterministic, explainable, project-grounded**
+  recommendations — never a generic feed. Each card answers the spec's "must
+  explain" questions: why it's relevant, **which projects** it affects, the
+  **evidence**, **effort**, **risk**, and **whether no change is safer**. Rules
+  (all from local facts — filesystem + `git`, no network): missing agent
+  instructions (CLAUDE.md/AGENTS.md → agents re-discover the layout each
+  session), generated folders not `.gitignore`d, no test command where the stack
+  is testable, `.env.example` with no `.env`, stale projects with uncommitted
+  work, git repos with no remote/backup, and TypeScript projects with no
+  typecheck script. Cards aggregate across projects (with the affected list) to
+  stay high-signal; a clean scan shows an honest "nothing to flag" state. Copy a
+  single card or **Copy all** as text to paste into a task or an agent prompt.
+- Protocol 1.11.0 adds `Recommendation` / `RadarCategory` / `RadarEffort` /
+  `RadarRisk` / `RadarReport` + the `get_radar` op and `radar` response. The
+  radar engine (`radar.rs`) is portable and offline; **89 → 97 core tests**.
+- Verified against the real machine: 29 projects scanned → 6 grounded
+  recommendations (e.g. 21 projects with no agent-instructions file, 5 idle
+  projects holding uncommitted work), all with real project names + evidence.
+
 ### Web Preview + Sidebar tabs + dev-server control (app 0.8.0)
 
 - **One-tap web preview from Projects.** Each web project gains a **Preview on
