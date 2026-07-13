@@ -3,25 +3,42 @@ import SwiftUI
 // MARK: - Sections
 
 /// The top-level destinations in the main window sidebar.
+/// A routable pane. The five **primary** sections (`home`, `usage`, `missions`,
+/// `advisor`, `projects`) are what the sidebar shows — each a deep surface that
+/// answers one user question. The rest are **internal sub-panes** reused by those
+/// composites (e.g. `insights`/`discover`/`stackHealth` live under Advisor;
+/// `usage`'s breakdown/`trends`/`reports` under Usage) or reached from chrome
+/// (`alerts` from the toolbar bell; `integrations`/`settings` in the Settings
+/// window). Keeping them as cases lets each existing view stay the single owner
+/// of its own rendering (information hiding) while the nav stays small.
 enum MainSection: String, CaseIterable, Identifiable {
-    case alerts
+    // Primary (sidebar)
+    case home
+    case usage
     case missions
+    case advisor
+    case projects
+    // Internal sub-panes / chrome
+    case alerts
     case insights
     case overview
-    case usage
     case trends
     case reports
-    case projects
     case discover
     case stackHealth
     case services
     case integrations
     case settings
 
+    /// The five deep sections shown in the sidebar, in order.
+    static let primary: [MainSection] = [.home, .usage, .missions, .advisor, .projects]
+
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .home: return "Home"
+        case .advisor: return "Advisor"
         case .alerts: return "Needs Attention"
         case .missions: return "Missions"
         case .insights: return "Insights"
@@ -40,6 +57,8 @@ enum MainSection: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .home: return "house"
+        case .advisor: return "sparkles"
         case .alerts: return "bell.badge"
         case .missions: return "bolt.horizontal.circle"
         case .insights: return "lightbulb.max"
@@ -59,14 +78,16 @@ enum MainSection: String, CaseIterable, Identifiable {
     /// One-line description shown under the section title.
     var summary: String {
         switch self {
+        case .home: return "What's happening right now — today's spend and live limits, active AI sessions, and anything that needs you."
+        case .advisor: return "Everything you could improve, in one place — efficiency, your projects, and dependency health & security."
         case .alerts: return "Everything the core flagged as needing attention — usage thresholds, resets, and integration issues."
         case .missions: return "Live AI coding sessions observed on this Mac — what each is working on, right now."
         case .insights: return "Ways to save money and work more efficiently — spotted from your own local usage."
         case .overview: return "At-a-glance spend, volume, and live limits across every detected provider."
-        case .usage: return "Per-model and per-window breakdowns of tokens, cost, and cache efficiency."
+        case .usage: return "Where your tokens and money go — per-model and per-window breakdowns, long-run trends, and a shareable report."
         case .trends: return "Long-run spend and token trends across providers, built from durable usage history that outlives the 30-day logs."
         case .reports: return "A shareable snapshot of your usage, efficiency, projects, and stack — export it as text, Markdown, CSV, or JSON."
-        case .projects: return "Remembered commands for your project folders — copy or run them safely."
+        case .projects: return "Your code and what's running — remembered commands, live dev servers, and one-tap web preview."
         case .discover: return "Project-aware, explainable recommendations drawn from your own local projects — what to add, fix, or safely leave alone."
         case .stackHealth: return "Is each project's stack current, compatible, and secure — outdated dependencies, breaking updates, and advisories."
         case .services: return "Dev servers and services running right now — their ports, which project they belong to, and quick actions."
@@ -81,7 +102,8 @@ enum MainSection: String, CaseIterable, Identifiable {
 struct MainWindowView: View {
     @EnvironmentObject var store: SnapshotStore
     @EnvironmentObject var theme: ThemeManager
-    @State private var selection: MainSection = .overview
+    @State private var selection: MainSection = .home
+    @State private var showingAlerts = false
     @Namespace private var navGlow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -114,33 +136,22 @@ struct MainWindowView: View {
 
     // MARK: Sidebar
 
-    /// Grouped navigation — **dashboards / data only**. Configuration (Settings)
-    /// and provider Integrations live in their own separate Settings window, so
-    /// this main window is purely for the information. Reachable via the footer
-    /// gear or ⌘,.
-    private static let navGroups: [(String, [MainSection])] = [
-        ("Monitor", [.overview, .missions, .insights, .usage, .trends, .reports, .alerts]),
-        ("Build", [.projects, .discover, .stackHealth, .services]),
-    ]
-
     private var sidebar: some View {
         VStack(spacing: 0) {
-            brand
-                .padding(.horizontal, 14)
-                .padding(.top, 14)
-                .padding(.bottom, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                brand
+                Spacer()
+                alertsBell
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(Self.navGroups, id: \.0) { title, sections in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(title.uppercased())
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 14)
-                            ForEach(sections) { navRow($0) }
-                        }
-                    }
+                // Five deep sections, each answering one user question. No technical
+                // "Monitor vs Build" grouping — the labels carry the meaning, and a
+                // flat list of five keeps the nav small (low cognitive load).
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(MainSection.primary) { navRow($0) }
                 }
                 .padding(.horizontal, 10)
                 .padding(.top, 2)
@@ -232,15 +243,44 @@ struct MainWindowView: View {
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
-    /// Count badge for a sidebar row: Needs Attention shows unacknowledged alerts
-    /// (red), Missions shows active AI coding sessions (green). Every other row
-    /// carries none.
+    /// Count badge for a sidebar row: Missions shows active AI coding sessions
+    /// (green); Advisor shows how many improvements are waiting (blue) — efficiency
+    /// insights plus repository-radar recommendations. Needs-attention lives in the
+    /// toolbar bell, not a nav row.
     private func badge(for section: MainSection) -> (count: Int, color: Color) {
         switch section {
-        case .alerts: return (store.activeAlerts.count, .red)
         case .missions: return (store.activeMissionCount, .green)
-        case .insights: return (store.insights.count, .blue)
+        case .advisor:
+            return (store.insights.count + (store.radar?.recommendations.count ?? 0), .blue)
         default: return (0, .clear)
+        }
+    }
+
+    /// A bell in the sidebar header that opens the needs-attention inbox as a
+    /// popover (it's cross-cutting chrome, not a peer section). Red badge = count.
+    private var alertsBell: some View {
+        let count = store.activeAlerts.count
+        return Button { showingAlerts.toggle() } label: {
+            Image(systemName: count > 0 ? "bell.badge" : "bell")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(count > 0 ? Color.red : Color.secondary)
+                .overlay(alignment: .topTrailing) {
+                    if count > 0 {
+                        Text("\(count)")
+                            .font(.system(size: 8, weight: .bold).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 0.5)
+                            .background(Capsule().fill(Color.red))
+                            .offset(x: 9, y: -7)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .help(count > 0 ? "Needs attention — \(count) to check" : "Needs attention")
+        .accessibilityLabel(count > 0 ? "Needs attention, \(count) items" : "Needs attention")
+        .popover(isPresented: $showingAlerts, arrowEdge: .bottom) {
+            AlertsInboxPopover().environmentObject(store)
         }
     }
 
@@ -286,20 +326,63 @@ struct MainWindowView: View {
 
     @ViewBuilder private var detail: some View {
         switch selection {
-        case .alerts: AlertsSection()
+        // Five primary, deep sections.
+        case .home: HomeSection(onOpen: { store.pendingSection = $0 })
+        case .usage: UsageHubSection()
         case .missions: MissionsSection()
+        case .advisor: AdvisorSection()
+        case .projects: ProjectsSection()
+        // Internal sub-panes (reached via a composite's sub-tabs) and chrome.
+        case .alerts: AlertsSection()
         case .insights: InsightsSection()
         case .overview: OverviewSection()
-        case .usage: UsageSection()
         case .trends: TrendsSection()
         case .reports: ReportsSection()
-        case .projects: ProjectsSection()
         case .discover: DiscoverSection()
         case .stackHealth: StackHealthSection()
         case .services: ServicesSection()
         case .integrations: IntegrationsSection()
         case .settings: SettingsSection()
         }
+    }
+}
+
+// MARK: - Needs-attention inbox (toolbar bell popover)
+
+/// A compact needs-attention inbox shown from the sidebar bell. Reuses the same
+/// alert rendering as the sidebar; a fixed frame keeps it popover-sized.
+struct AlertsInboxPopover: View {
+    @EnvironmentObject var store: SnapshotStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "bell.badge").foregroundStyle(.red)
+                Text("Needs Attention").font(.headline)
+                Spacer()
+                Text("\(store.activeAlerts.count)")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            if store.activeAlerts.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.largeTitle).foregroundStyle(.green)
+                    Text("All clear").font(.subheadline.weight(.semibold))
+                    Text("Nothing needs your attention right now.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+            } else {
+                ScrollView {
+                    NeedsAttentionBlock(alerts: store.activeAlerts, maxItems: 20, onTap: nil)
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 380, height: 460)
     }
 }
 

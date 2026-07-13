@@ -61,7 +61,7 @@ struct PopoverView: View {
                 Button(action: {
                     // "Open" lands on the Overview dashboard (the useful info),
                     // not wherever the window was last left (e.g. Settings).
-                    store.pendingSection = .overview
+                    store.pendingSection = .home
                     onOpenMainWindow?()
                 }) {
                     Image(systemName: "macwindow")

@@ -18,6 +18,30 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Navigation reorganization — 11 sections → 5 (app 0.11.0)
+
+Applied *A Philosophy of Software Design* to the IA: the sidebar was 11 shallow
+sections in a technical "Monitor vs Build" split, with the same facts (spend,
+limits, recommendations) leaking across many of them. Reorganized around the
+**five questions a user actually opens the app with**, each a deep section:
+
+- **Home** — what's happening right now: today's spend + live limits, active AI
+  sessions, and anything needing attention (absorbs Overview + live summaries).
+- **Usage** — where tokens & money go: a sub-switcher over **Breakdown /
+  Trends / Report** (merges the old Usage, Trends, and Reports rows).
+- **Missions** — what your agents are doing (with Scope Guard).
+- **Advisor** — everything you could improve, one place: **Efficiency /
+  Projects / Dependencies** (merges Insights + Discover/Radar + Stack Health).
+- **Projects** — your code and what's running: commands, live dev servers, and
+  one-tap web preview (merges Services in).
+
+Cross-cutting things stopped being peer rows: **Needs Attention** is now a
+toolbar **bell + badge** with an inbox popover; **Reports** is a tab inside
+Usage; **Integrations/Settings** stay in the Settings window. Each of the former
+section views is unchanged and reused as a sub-pane (single owner of its own
+rendering), and the Overview dashboard body was extracted (`OverviewDashboard`)
+so Home and Overview share one definition. Swift-only; build clean.
+
 ### Scope Guard on missions (app 0.10.0 / protocol 1.12.0)
 
 - **Missions now warn what *kind* of change a session is making.** A new

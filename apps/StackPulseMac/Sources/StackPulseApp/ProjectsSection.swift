@@ -24,6 +24,7 @@ struct ProjectsSection: View {
                     emptyState
                 } else {
                     rootsBar
+                    runningServersBlock
                     discoveredList
                 }
             }
@@ -31,6 +32,7 @@ struct ProjectsSection: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(WindowBackdrop().ignoresSafeArea())
+        .onAppear { store.rescanServices() }
         .overlay {
             if let cmd = pending {
                 CommandConfirmDialog(
@@ -133,6 +135,40 @@ struct ProjectsSection: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 44)
         .glassCard(padding: 24)
+    }
+
+    // MARK: Running dev servers (merged from the former Services section)
+
+    /// Locally-running dev servers, shown right where you launch them. Each has a
+    /// one-tap Open (and Copy) via the shared ``ServiceCard``. Read-only here; the
+    /// stop control still lives in the full detection flow.
+    @ViewBuilder private var runningServersBlock: some View {
+        if !store.services.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "bolt.horizontal.circle")
+                        .foregroundStyle(.secondary)
+                    Text("Running now")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text("\(store.services.count)")
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button { store.rescanServices() } label: {
+                        Label("Rescan", systemImage: "arrow.clockwise").font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.glass)
+                    .disabled(store.isScanningServices)
+                    .help("Scan local ports again")
+                }
+                ForEach(store.services) { service in
+                    ServiceCard(service: service)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassCard(padding: 16)
+        }
     }
 
     // MARK: Approved roots

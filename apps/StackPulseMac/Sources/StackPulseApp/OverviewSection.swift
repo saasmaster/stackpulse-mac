@@ -1,24 +1,36 @@
 import SwiftUI
 
 /// Overview: an aggregate header plus a responsive grid of per-provider summary
-/// cards (today + 30d cost, token volume, hottest live limit).
+/// cards (today + 30d cost, token volume, hottest live limit). Kept as an
+/// internal pane; the ``OverviewDashboard`` body is the reusable part the Home
+/// section also renders.
 struct OverviewSection: View {
+    var body: some View {
+        SectionScaffold(section: .overview) { snapshot in
+            OverviewDashboard(snapshot: snapshot)
+        }
+    }
+}
+
+/// The reusable overview body — aggregate stat tiles + a per-provider card grid +
+/// the estimate footnote. Shared by ``OverviewSection`` and ``HomeSection`` so the
+/// spend/limits dashboard is defined once (single owner of that rendering).
+struct OverviewDashboard: View {
+    let snapshot: UsageSnapshot
     @EnvironmentObject var store: SnapshotStore
 
     var body: some View {
-        SectionScaffold(section: .overview) { snapshot in
-            VStack(alignment: .leading, spacing: 18) {
-                aggregateHeader(snapshot)
+        VStack(alignment: .leading, spacing: 18) {
+            aggregateHeader(snapshot)
 
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                    ForEach(snapshot.providers) { provider in
-                        OverviewProviderCard(provider: provider)
-                            .environmentObject(store)
-                    }
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                ForEach(snapshot.providers) { provider in
+                    OverviewProviderCard(provider: provider)
+                        .environmentObject(store)
                 }
-
-                EstimateFootnote()
             }
+
+            EstimateFootnote()
         }
     }
 

@@ -224,7 +224,7 @@ struct SidebarView: View {
                 sidebarEmpty("globe", "No dev servers running",
                              "Launch a preview from Projects — it opens here when it's up.")
                 Button {
-                    store.pendingSection = .services
+                    store.pendingSection = .projects
                     onOpenMainWindow?()
                 } label: {
                     Label("Open Projects", systemImage: "folder")
@@ -262,9 +262,7 @@ struct SidebarView: View {
     /// A compact launcher so the side card jumps straight into the useful main
     /// sections — the dashboards/analytics live one tap away, not buried behind
     /// the Settings gear.
-    private static let quickSections: [MainSection] = [
-        .overview, .usage, .trends, .missions, .insights, .discover,
-    ]
+    private static let quickSections: [MainSection] = MainSection.primary
 
     private var quickNav: some View {
         VStack(alignment: .leading, spacing: 6) {
