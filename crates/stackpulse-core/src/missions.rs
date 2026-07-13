@@ -161,6 +161,10 @@ fn antigravity_missions(now_unix: i64, mtime_cutoff: i64) -> Vec<Mission> {
             message_count: c.steps.unwrap_or(0),
             last_activity: Some("Antigravity agent session".to_string()),
             tokens_last_hour: 0,
+            // No project association for Antigravity ⇒ no git diff; and no cheap
+            // message text without deeper SQLite parsing ⇒ no preview.
+            changed_files: git_changed_files(None),
+            last_message_preview: None,
         });
     }
     out
@@ -193,7 +197,17 @@ struct ClaudeMessage {
     #[serde(default)]
     usage: Option<ClaudeUsage>,
     #[serde(default)]
-    content: Option<Vec<ClaudeContentBlock>>,
+    content: Option<ClaudeContent>,
+}
+
+/// Claude message content is either a bare string (typical for a user turn) or
+/// an array of typed blocks (assistant turns, tool results). Accept both so a
+/// user line's text is preservable for the preview.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ClaudeContent {
+    Text(String),
+    Blocks(Vec<ClaudeContentBlock>),
 }
 
 #[derive(Deserialize)]
@@ -202,6 +216,8 @@ struct ClaudeContentBlock {
     block_type: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -229,6 +245,7 @@ fn claude_mission(path: &Path, now_unix: i64) -> Option<Mission> {
     let mut branch: Option<String> = None;
     let mut model: Option<String> = None;
     let mut last_activity: Option<String> = None;
+    let mut last_message_text: Option<String> = None;
     let mut message_count: u64 = 0;
     let mut tokens_last_hour: u64 = 0;
 
@@ -263,9 +280,16 @@ fn claude_mission(path: &Path, now_unix: i64) -> Option<Mission> {
                         + usage.cache_creation_input_tokens;
                 }
             }
+            // Raw text of the latest message/turn, for the preview (distinct
+            // from the `last_activity` *summary*). Covers user and assistant.
+            if let Some(text) = claude_message_text(msg.content.as_ref()) {
+                last_message_text = Some(text);
+            }
             if msg.role.as_deref() == Some("assistant") {
-                if let Some(summary) = summarize_claude_content(msg.content.as_deref()) {
-                    last_activity = Some(summary);
+                if let Some(ClaudeContent::Blocks(blocks)) = msg.content.as_ref() {
+                    if let Some(summary) = summarize_claude_content(Some(blocks)) {
+                        last_activity = Some(summary);
+                    }
                 }
             }
         }
@@ -282,6 +306,7 @@ fn claude_mission(path: &Path, now_unix: i64) -> Option<Mission> {
     }
 
     let project_name = project_path.as_deref().map(last_path_component);
+    let changed_files = git_changed_files(project_path.as_deref());
     let started_at_unix = first_line(path)
         .and_then(|l| serde_json::from_str::<ClaudeLine>(&l).ok())
         .and_then(|l| l.timestamp)
@@ -301,7 +326,31 @@ fn claude_mission(path: &Path, now_unix: i64) -> Option<Mission> {
         message_count,
         last_activity,
         tokens_last_hour,
+        changed_files,
+        last_message_preview: last_message_text
+            .as_deref()
+            .map(preview_snippet)
+            .filter(|s| !s.is_empty()),
     })
+}
+
+/// The raw text of a Claude message, for the preview: a bare string user turn,
+/// or the first `text` block of a block array (assistant reply / text user
+/// turn). Tool calls, tool results, and thinking blocks yield nothing.
+fn claude_message_text(content: Option<&ClaudeContent>) -> Option<String> {
+    match content? {
+        ClaudeContent::Text(s) => {
+            let t = s.trim();
+            (!t.is_empty()).then(|| t.to_string())
+        }
+        ClaudeContent::Blocks(blocks) => blocks.iter().find_map(|b| {
+            if b.block_type.as_deref() != Some("text") {
+                return None;
+            }
+            let t = b.text.as_deref()?.trim();
+            (!t.is_empty()).then(|| t.to_string())
+        }),
+    }
 }
 
 /// A one-line summary of the latest assistant turn from its content blocks.
@@ -350,6 +399,7 @@ fn codex_mission(path: &Path, now_unix: i64) -> Option<Mission> {
     let mut project_path: Option<String> = None;
     let mut session_id: Option<String> = None;
     let mut last_event: Option<String> = None;
+    let mut last_message_text: Option<String> = None;
     let mut message_count: u64 = 0;
     let mut tokens_last_hour: u64 = 0;
 
@@ -400,6 +450,14 @@ fn codex_mission(path: &Path, now_unix: i64) -> Option<Mission> {
                 let et = payload.get("type").and_then(Value::as_str).unwrap_or("");
                 if !et.is_empty() {
                     last_event = Some(et.to_string());
+                }
+                // Raw text of the latest human/model turn, for the preview.
+                if et == "agent_message" || et == "user_message" {
+                    if let Some(m) = payload.get("message").and_then(Value::as_str) {
+                        if !m.trim().is_empty() {
+                            last_message_text = Some(m.to_string());
+                        }
+                    }
                 }
                 if et == "token_count" {
                     message_count += 1;
@@ -471,6 +529,7 @@ fn codex_mission(path: &Path, now_unix: i64) -> Option<Mission> {
     }
 
     let project_name = project_path.as_deref().map(last_path_component);
+    let changed_files = git_changed_files(project_path.as_deref());
 
     Some(Mission {
         provider: ProviderId::Codex,
@@ -485,6 +544,11 @@ fn codex_mission(path: &Path, now_unix: i64) -> Option<Mission> {
         message_count,
         last_activity: last_event.as_deref().map(summarize_codex_event),
         tokens_last_hour,
+        changed_files,
+        last_message_preview: last_message_text
+            .as_deref()
+            .map(preview_snippet)
+            .filter(|s| !s.is_empty()),
     })
 }
 
@@ -543,6 +607,88 @@ fn status_for(now_unix: i64, last_activity_unix: i64) -> MissionStatus {
 fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.is_empty())
 }
+
+/// Files changed in a mission's project working tree, from `git status
+/// --porcelain`, relative paths, capped at [`GIT_CHANGED_FILES_CAP`]. Returns
+/// empty for a `None`/empty path, a non-git dir, a missing `git`, or any error —
+/// never panics, never touches the network.
+fn git_changed_files(project_path: Option<&str>) -> Vec<String> {
+    let path = match project_path {
+        Some(p) if !p.is_empty() => p,
+        _ => return Vec::new(),
+    };
+    let output = match std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .arg("status")
+        .arg("--porcelain")
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    parse_porcelain(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Upper bound on files reported per mission (keeps the payload small).
+const GIT_CHANGED_FILES_CAP: usize = 20;
+
+/// Parse `git status --porcelain` (v1) stdout into relative paths, capped at
+/// [`GIT_CHANGED_FILES_CAP`]. Each line is `XY <path>`: the two-char status code,
+/// a space, then the path from byte index 3 (both status chars and the space are
+/// ASCII, so index 3 is always a char boundary). Rename/copy entries read
+/// `old -> new`; we keep the destination. Paths git quotes (special chars) have
+/// their surrounding quotes stripped.
+fn parse_porcelain(stdout: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        if line.len() < 4 {
+            continue; // too short to hold "XY <path>"
+        }
+        let mut path = &line[3..];
+        if let Some(idx) = path.find(" -> ") {
+            path = &path[idx + 4..]; // rename/copy: keep the new path
+        }
+        let cleaned = unquote(path);
+        if !cleaned.is_empty() {
+            out.push(cleaned);
+            if out.len() >= GIT_CHANGED_FILES_CAP {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Strip the surrounding double quotes git wraps around paths with special
+/// characters. A non-quoted path is returned as-is (trimmed).
+fn unquote(s: &str) -> String {
+    let s = s.trim();
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// A short, single-line, sanitized preview of a message: whitespace/newlines
+/// collapse to single spaces, trimmed, truncated to [`PREVIEW_MAX_CHARS`] chars
+/// with a trailing `…` when cut. Empty input ⇒ empty string.
+fn preview_snippet(raw: &str) -> String {
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() > PREVIEW_MAX_CHARS {
+        let head: String = collapsed.chars().take(PREVIEW_MAX_CHARS).collect();
+        format!("{head}…")
+    } else {
+        collapsed
+    }
+}
+
+/// Max characters in a [`preview_snippet`] before it is truncated with `…`.
+const PREVIEW_MAX_CHARS: usize = 140;
 
 /// Last path component of an absolute path string, e.g. "/a/b" → "b".
 fn last_path_component(path: &str) -> String {
@@ -693,10 +839,12 @@ mod tests {
             ClaudeContentBlock {
                 block_type: Some("text".into()),
                 name: None,
+                text: None,
             },
             ClaudeContentBlock {
                 block_type: Some("tool_use".into()),
                 name: Some("Edit".into()),
+                text: None,
             },
         ];
         assert_eq!(
@@ -706,6 +854,7 @@ mod tests {
         let text = vec![ClaudeContentBlock {
             block_type: Some("text".into()),
             name: None,
+            text: None,
         }];
         assert_eq!(
             summarize_claude_content(Some(&text)).as_deref(),
@@ -725,5 +874,139 @@ mod tests {
     fn last_path_component_handles_trailing_slash() {
         assert_eq!(last_path_component("/a/b/c"), "c");
         assert_eq!(last_path_component("/a/b/"), "b");
+    }
+
+    #[test]
+    fn preview_snippet_collapses_and_trims() {
+        assert_eq!(
+            preview_snippet("  hello\n\tworld   again  "),
+            "hello world again"
+        );
+        assert_eq!(preview_snippet("line1\r\nline2"), "line1 line2");
+        assert_eq!(preview_snippet(""), "");
+        assert_eq!(preview_snippet("   \n\t  "), "");
+    }
+
+    #[test]
+    fn preview_snippet_truncates_at_140_with_ellipsis() {
+        let long = "a ".repeat(200); // 200 single-char words → collapses to 199 chars + trailing space
+        let snip = preview_snippet(&long);
+        // 140 kept chars plus the single-char ellipsis.
+        assert_eq!(snip.chars().count(), 141);
+        assert!(snip.ends_with('…'));
+        assert!(snip.starts_with("a a"));
+
+        // Exactly 140 chars is not truncated.
+        let exact = "x".repeat(140);
+        let snip = preview_snippet(&exact);
+        assert_eq!(snip, exact);
+        assert!(!snip.ends_with('…'));
+
+        // 141 chars is truncated to 140 + ellipsis.
+        let over = "y".repeat(141);
+        let snip = preview_snippet(&over);
+        assert_eq!(snip.chars().count(), 141);
+        assert_eq!(snip, format!("{}…", "y".repeat(140)));
+    }
+
+    #[test]
+    fn parse_porcelain_extracts_paths() {
+        let stdout = concat!(
+            " M src/a.ts\n",
+            "?? new.ts\n",
+            "R  old.ts -> new.ts\n",
+            "A  added.rs\n",
+            " D removed.rs\n",
+        );
+        assert_eq!(
+            parse_porcelain(stdout),
+            vec![
+                "src/a.ts".to_string(),
+                "new.ts".to_string(),
+                "new.ts".to_string(), // rename keeps the destination path
+                "added.rs".to_string(),
+                "removed.rs".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_porcelain_strips_quotes_and_handles_renames() {
+        // git quotes paths with spaces/special chars; renames read "old -> new".
+        let stdout = concat!(
+            " M \"path with space.ts\"\n",
+            "R  \"old name.ts\" -> \"new name.ts\"\n",
+        );
+        assert_eq!(
+            parse_porcelain(stdout),
+            vec!["path with space.ts".to_string(), "new name.ts".to_string(),]
+        );
+    }
+
+    #[test]
+    fn parse_porcelain_caps_at_20() {
+        let mut stdout = String::new();
+        for i in 0..50 {
+            stdout.push_str(&format!(" M file{i}.ts\n"));
+        }
+        let parsed = parse_porcelain(&stdout);
+        assert_eq!(parsed.len(), 20);
+        assert_eq!(parsed[0], "file0.ts");
+        assert_eq!(parsed[19], "file19.ts");
+    }
+
+    #[test]
+    fn parse_porcelain_skips_blank_and_short_lines() {
+        // Empty stdout and stray short lines yield nothing / are skipped.
+        assert!(parse_porcelain("").is_empty());
+        assert_eq!(
+            parse_porcelain("\n M ok.ts\nxy\n"),
+            vec!["ok.ts".to_string()]
+        );
+    }
+
+    #[test]
+    fn git_changed_files_none_is_empty() {
+        assert!(git_changed_files(None).is_empty());
+        assert!(git_changed_files(Some("")).is_empty());
+        // A non-existent directory must degrade to empty, never panic.
+        assert!(git_changed_files(Some("/nonexistent/path/definitely/not/here")).is_empty());
+    }
+
+    #[test]
+    fn claude_message_text_prefers_first_text_block() {
+        // Bare string content (typical user turn).
+        let text = ClaudeContent::Text("  hi there  ".into());
+        assert_eq!(
+            claude_message_text(Some(&text)).as_deref(),
+            Some("hi there")
+        );
+
+        // Block array: first non-empty text block wins; tool_use is ignored.
+        let blocks = ClaudeContent::Blocks(vec![
+            ClaudeContentBlock {
+                block_type: Some("tool_use".into()),
+                name: Some("Edit".into()),
+                text: None,
+            },
+            ClaudeContentBlock {
+                block_type: Some("text".into()),
+                name: None,
+                text: Some("actual reply".into()),
+            },
+        ]);
+        assert_eq!(
+            claude_message_text(Some(&blocks)).as_deref(),
+            Some("actual reply")
+        );
+
+        // No text block ⇒ None.
+        let only_tool = ClaudeContent::Blocks(vec![ClaudeContentBlock {
+            block_type: Some("tool_use".into()),
+            name: Some("Bash".into()),
+            text: None,
+        }]);
+        assert_eq!(claude_message_text(Some(&only_tool)), None);
+        assert_eq!(claude_message_text(None), None);
     }
 }

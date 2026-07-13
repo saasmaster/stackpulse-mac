@@ -5,7 +5,7 @@ contract shared by every StackPulse surface: the Rust core, the macOS app (over
 the C ABI), the `stackpulse` CLI, and — in the future — a Chrome
 native-messaging host and a Windows client.
 
-- **Current version:** `PROTOCOL_VERSION = 1.4.0`. Additive history (older
+- **Current version:** `PROTOCOL_VERSION = 1.10.0`. Additive history (older
   readers keep parsing):
   - **1.3.0** — added a `Gemini` variant to the (open) `ProviderId` enum; the
     engine now lists eleven providers.
@@ -27,6 +27,9 @@ native-messaging host and a Windows client.
     the `get_services` op and `services` response. The core produces an offline
     dependency inventory and detects running dev servers by listening port;
     latest-version / advisory enrichment happens in the client layer (network).
+  - **1.10.0** — richer Missions: two additive `Mission` fields —
+    `changed_files` (from `git status` of the mission's project) and
+    `last_message_preview` (a short, local, sanitized snippet of the latest turn).
   - **1.1.0** — `ProviderAnalytics` / `DailyUsage` types and the optional
     `ProviderUsage.analytics` field.
   - **1.2.0** — `Alert` / `AlertSeverity` / `AlertKind` types and the
@@ -147,7 +150,7 @@ ignoring the extra `"kind":"usage_snapshot"` key.
 
 ### `Version`
 
-A `const`-friendly semantic version. `PROTOCOL_VERSION` is `1.9.0`.
+A `const`-friendly semantic version. `PROTOCOL_VERSION` is `1.10.0`.
 
 ```json
 { "major": 1, "minor": 0, "patch": 0 }

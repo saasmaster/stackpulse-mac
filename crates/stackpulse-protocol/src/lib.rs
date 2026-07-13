@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 9,
+    minor: 10,
     patch: 0,
 };
 
@@ -500,6 +500,15 @@ pub struct Mission {
     /// Tokens consumed in roughly the last hour — a velocity indicator.
     #[serde(default)]
     pub tokens_last_hour: u64,
+    /// Files changed in the mission's project working tree (relative paths, from
+    /// `git status`), most-recently-changed first, capped. Empty when not a git
+    /// repo or nothing changed (protocol ≥ 1.10.0). Local only.
+    #[serde(default)]
+    pub changed_files: Vec<String>,
+    /// A short, sanitized preview of the session's most recent message/turn — the
+    /// user's own local content, truncated (protocol ≥ 1.10.0).
+    #[serde(default)]
+    pub last_message_preview: Option<String>,
 }
 
 /// The top-level object every UI surface renders. One scan → one snapshot.

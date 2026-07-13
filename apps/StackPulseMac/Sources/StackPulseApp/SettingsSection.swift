@@ -8,7 +8,7 @@ struct SettingsSection: View {
     @EnvironmentObject var theme: ThemeManager
 
     /// The macOS app's own version (distinct from the Rust core version).
-    private let appVersion = "0.6.3"
+    private let appVersion = "0.7.0"
 
     var body: some View {
         SectionScaffold(section: .settings) { snapshot in

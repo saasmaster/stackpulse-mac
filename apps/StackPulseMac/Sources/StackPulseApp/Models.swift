@@ -293,6 +293,15 @@ struct Mission: Codable, Sendable, Identifiable {
     let message_count: Int?
     let last_activity: String?
     let tokens_last_hour: UInt64?
+    /// Files changed in the mission's project (relative paths, from `git status`),
+    /// most-recently-changed first (protocol ≥ 1.10.0). Optional for decode
+    /// robustness; use `changedFiles` for a non-nil array.
+    let changed_files: [String]?
+    /// A short local preview of the session's latest message/turn (protocol ≥ 1.10.0).
+    let last_message_preview: String?
+
+    /// The changed files as a non-nil array.
+    var changedFiles: [String] { changed_files ?? [] }
 
     /// Stable across a snapshot (provider-scoped so two providers can't collide).
     var id: String { provider + "\u{1}" + session_id }

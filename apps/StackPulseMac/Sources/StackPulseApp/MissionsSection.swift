@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Shared mission views (reused by the section, Command Center, popover)
 
@@ -113,10 +114,26 @@ struct MissionRow: View {
 struct MissionCard: View {
     let mission: Mission
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var filesExpanded = false
+    @State private var copied = false
+
     private var messageLabel: String? {
         guard let count = mission.message_count else { return nil }
         return "\(count) message\(count == 1 ? "" : "s")"
     }
+
+    private var previewText: String? {
+        guard let p = mission.last_message_preview, !p.isEmpty else { return nil }
+        return p
+    }
+
+    private var revealPath: String? {
+        guard let path = mission.project_path, !path.isEmpty else { return nil }
+        return path
+    }
+
+    private var hasActions: Bool { revealPath != nil || previewText != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -132,11 +149,131 @@ struct MissionCard: View {
                     Spacer(minLength: 0)
                 }
             }
+            if let preview = previewText {
+                previewLine(preview)
+            }
+            if !mission.changedFiles.isEmpty {
+                changedFilesBlock(mission.changedFiles)
+            }
             metricsRow
+            if hasActions {
+                actionsRow
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .liquidGlass(cornerRadius: 16, tint: cardTint, padding: 14)
         .accessibilityElement(children: .contain)
+    }
+
+    // MARK: Latest turn preview
+
+    /// A quoted snippet of the session's most recent turn — the "latest turn."
+    private func previewLine(_ preview: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "quote.opening")
+                .imageScale(.small)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 1)
+            Text(preview)
+                .font(.callout.italic())
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Latest turn: \(preview)")
+    }
+
+    // MARK: Changed files
+
+    /// The mission's changed files: an orange "N changed" chip and up to five file
+    /// names (middle-truncated monospace), with a tap-to-expand "+K more". The
+    /// orange is paired with the count text and the clipboard glyph, never alone.
+    private func changedFilesBlock(_ files: [String]) -> some View {
+        let limit = 5
+        let shown = filesExpanded ? files : Array(files.prefix(limit))
+        let overflow = files.count - shown.count
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "pencil.and.list.clipboard")
+                    .imageScale(.small)
+                    .foregroundStyle(.orange)
+                Chip(text: "\(files.count) changed", tint: .orange)
+                Spacer(minLength: 0)
+            }
+            ForEach(shown, id: \.self) { file in
+                Text(file)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if overflow > 0 || (filesExpanded && files.count > limit) {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                        filesExpanded.toggle()
+                    }
+                } label: {
+                    Text(filesExpanded ? "Show less" : "+\(overflow) more")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(files.count) changed file\(files.count == 1 ? "" : "s"): \(shown.joined(separator: ", "))")
+    }
+
+    // MARK: Quick actions (safe, local-only)
+
+    private var actionsRow: some View {
+        HStack(spacing: 8) {
+            if let path = revealPath {
+                Button {
+                    revealInFinder(path)
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                        .font(.caption2)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .help("Show \(path) in Finder")
+                .accessibilityLabel("Reveal project in Finder")
+            }
+            if let preview = previewText {
+                Button {
+                    copy(preview)
+                } label: {
+                    Label(copied ? "Copied" : "Copy latest turn",
+                          systemImage: copied ? "checkmark" : "doc.on.doc")
+                        .font(.caption2)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .help("Copy the latest turn")
+                .accessibilityLabel(copied ? "Copied latest turn" : "Copy latest turn")
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: Actions
+
+    private func revealInFinder(_ path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { copied = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            withAnimation(reduceMotion ? nil : .easeIn(duration: 0.2)) { copied = false }
+        }
     }
 
     /// Tint the glass for states that benefit from a glance signal; keep calmer

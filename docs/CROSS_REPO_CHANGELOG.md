@@ -261,6 +261,18 @@ is breaking for downstream consumers, and the action they should take.
   and (on macOS) service detection; it would supply its own registry/OSV
   enrichment and its own port-enumeration for non-macOS.
 
+### 2026-07-13 — Richer Missions (protocol 1.10.0)
+
+- **Surface:** protocol + core
+- **Versions:** protocol **1.10.0** / core **0.1.0** / manifest *(not yet defined)*
+- **Breaking for downstream:** no (purely additive)
+- **Change:** two additive `Mission` fields — `changed_files` (relative paths from
+  `git status` of the mission's project, capped) and `last_message_preview` (a
+  short, single-line, sanitized snippet of the session's latest turn). Both
+  computed locally by the core (git + the existing session-tail read); no network.
+- **Downstream action:** target protocol **1.10.0**; treat both as additive and
+  possibly-empty. Any client linking the core gets them for free.
+
 ---
 
 ## Pending / anticipated (not yet shipped)

@@ -18,6 +18,18 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Richer Missions + Reports (app 0.7.0 / protocol 1.10.0)
+
+- **Missions now show what an agent actually did.** Each mission gains **changed
+  files** (from `git status` of the session's project) and a **preview of the
+  latest turn**, plus safe **quick actions** (Reveal in Finder, Copy). Protocol
+  1.10.0 adds `Mission.changed_files` + `Mission.last_message_preview`, both
+  computed locally (git + the existing session-tail read; no network).
+- **New Reports section** — a shareable, composed report of your usage, cache
+  efficiency, insights, active work, and per-project stack health, with export to
+  **Markdown / CSV / JSON** and a copy-summary. Built from data already local; the
+  main-window "Monitor" group gains a Reports entry.
+
 ### Settings is its own window; the main window is data-only (app 0.6.3 — app-only)
 
 Full separation of configuration from data:

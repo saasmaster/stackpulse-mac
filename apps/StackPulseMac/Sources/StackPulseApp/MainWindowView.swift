@@ -10,6 +10,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     case overview
     case usage
     case trends
+    case reports
     case projects
     case stackHealth
     case services
@@ -26,6 +27,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .overview: return "Overview"
         case .usage: return "Usage"
         case .trends: return "Trends"
+        case .reports: return "Reports"
         case .projects: return "Projects"
         case .stackHealth: return "Stack Health"
         case .services: return "Services"
@@ -42,6 +44,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .overview: return "square.grid.2x2"
         case .usage: return "chart.line.uptrend.xyaxis"
         case .trends: return "chart.xyaxis.line"
+        case .reports: return "doc.text"
         case .projects: return "folder"
         case .stackHealth: return "shield.lefthalf.filled"
         case .services: return "server.rack"
@@ -59,6 +62,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .overview: return "At-a-glance spend, volume, and live limits across every detected provider."
         case .usage: return "Per-model and per-window breakdowns of tokens, cost, and cache efficiency."
         case .trends: return "Long-run spend and token trends across providers, built from durable usage history that outlives the 30-day logs."
+        case .reports: return "A shareable snapshot of your usage, efficiency, projects, and stack — export it as text, Markdown, CSV, or JSON."
         case .projects: return "Remembered commands for your project folders — copy or run them safely."
         case .stackHealth: return "Is each project's stack current, compatible, and secure — outdated dependencies, breaking updates, and advisories."
         case .services: return "Dev servers and services running right now — their ports, which project they belong to, and quick actions."
@@ -111,7 +115,7 @@ struct MainWindowView: View {
     /// this main window is purely for the information. Reachable via the footer
     /// gear or ⌘,.
     private static let navGroups: [(String, [MainSection])] = [
-        ("Monitor", [.overview, .missions, .insights, .usage, .trends, .alerts]),
+        ("Monitor", [.overview, .missions, .insights, .usage, .trends, .reports, .alerts]),
         ("Build", [.projects, .stackHealth, .services]),
     ]
 
@@ -284,6 +288,7 @@ struct MainWindowView: View {
         case .overview: OverviewSection()
         case .usage: UsageSection()
         case .trends: TrendsSection()
+        case .reports: ReportsSection()
         case .projects: ProjectsSection()
         case .stackHealth: StackHealthSection()
         case .services: ServicesSection()
