@@ -18,6 +18,26 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Richer edge sidebar, sidebar positioning, quick Settings, deeper Antigravity (app 0.5.0)
+
+- **The edge sidebar is actually useful now.** It was a name + one percentage per
+  provider; it now leads with a **totals strip** (today's spend + tokens, live
+  session count, items-to-check), an **Active-now** block, needs-attention, and
+  **rich per-provider rows** — tokens · turns · cache% for measured providers, or
+  sessions · model for activity-only ones (Antigravity), plus the hottest limit
+  meter.
+- **Sidebar can pin left or right.** A **⇄ quick toggle** in the sidebar header
+  flips the edge live, plus a Left/Right control in **Settings → Edge sidebar**.
+  Persisted; the panel re-pins instantly.
+- **Quick Settings from the menu bar.** The popover now has a clear **gear →
+  Settings** button (Command Center moved after it, still one click / ⌘⇧C).
+- **Deeper Antigravity.** Real **agent-step counts** per conversation, read from
+  the SQLite trajectories via `rusqlite` scoped to the **macOS target only** (the
+  portable-core Linux/Windows CI gates never pull a C toolchain; the DB is opened
+  read-only and coexists safely with Antigravity writing it). Antigravity missions
+  now show real activity (e.g. "464 steps") instead of "0 turns", and the card
+  notes total agent steps.
+
 ### Claude live-limits: stale-token handling (app 0.4.1 — app-only)
 
 - **Fixed the misleading "Sign in to Claude" message.** StackPulse reads Claude

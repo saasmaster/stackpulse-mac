@@ -158,7 +158,7 @@ fn antigravity_missions(now_unix: i64, mtime_cutoff: i64) -> Vec<Mission> {
             model: c.model,
             started_at_unix: None,
             last_activity_unix: c.mtime_unix,
-            message_count: 0,
+            message_count: c.steps.unwrap_or(0),
             last_activity: Some("Antigravity agent session".to_string()),
             tokens_last_hour: 0,
         });

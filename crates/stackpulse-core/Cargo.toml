@@ -11,6 +11,14 @@ stackpulse-protocol = { path = "../stackpulse-protocol" }
 serde.workspace = true
 serde_json.workspace = true
 
+# macOS-only: read Antigravity's SQLite conversation trajectories (Antigravity is
+# a Mac app, so this only matters here). Scoped to the macOS target so the
+# portable-core CI gates (Linux portability, Windows cross-compile) never pull a
+# C toolchain; `bundled` keeps the macOS link self-contained (no external
+# libsqlite3 for the Swift app to find).
+[target.'cfg(target_os = "macos")'.dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+
 [dev-dependencies]
 # Integration tests (tests/*.rs) name protocol types directly.
 stackpulse-protocol = { path = "../stackpulse-protocol" }

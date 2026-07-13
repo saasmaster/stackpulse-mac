@@ -8,7 +8,7 @@ struct SettingsSection: View {
     @EnvironmentObject var theme: ThemeManager
 
     /// The macOS app's own version (distinct from the Rust core version).
-    private let appVersion = "0.4.1"
+    private let appVersion = "0.5.0"
 
     var body: some View {
         SectionScaffold(section: .settings) { snapshot in
@@ -18,6 +18,7 @@ struct SettingsSection: View {
                 refreshCard(snapshot)
                 exportCard(snapshot)
                 commandCenterCard
+                sidebarCard
                 notificationsCard
                 liveLimitsCard
                 ProviderConnectionsCard()
@@ -174,6 +175,36 @@ struct SettingsSection: View {
             .padding(.top, 2)
         }
     }
+
+    // MARK: Edge sidebar
+
+    /// The always-available edge sidebar: what it is, the shortcut, and which
+    /// screen edge it pins to (also flippable live from the sidebar's own toggle).
+    private var sidebarCard: some View {
+        SettingsCard(title: "Edge sidebar", systemImage: "sidebar.right") {
+            Text("An always-available strip pinned to a screen edge (⌥⌘S) — today's totals, live sessions, needs-attention, and rich per-provider detail. Rides across Spaces and full-screen apps.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Screen edge")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                GlassSegmentedControl(segments: Self.sidebarEdgeSegments, selection: $store.sidebarOnLeft)
+                Text("You can also flip it from the ⇄ button in the sidebar's header.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    /// Left/right pill for the edge sidebar (`sidebarOnLeft` is `false` = right).
+    private static let sidebarEdgeSegments: [GlassSegment<Bool>] = [
+        GlassSegment(value: false, systemImage: "arrow.right.to.line", label: "Right"),
+        GlassSegment(value: true, systemImage: "arrow.left.to.line", label: "Left"),
+    ]
 
     // MARK: Notifications
 

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Owns the always-available edge sidebar: a non-activating floating `NSPanel`
@@ -16,6 +17,7 @@ final class EdgeSidebarController {
 
     private var panel: NSPanel?
     private var screenObserver: (any NSObjectProtocol)?
+    private var cancellables: Set<AnyCancellable> = []
 
     private let panelWidth: CGFloat = 320
 
@@ -26,6 +28,16 @@ final class EdgeSidebarController {
         self.store = store
         self.theme = theme
         self.onOpenMainWindow = onOpenMainWindow
+        // Re-pin the panel live when the user flips the sidebar edge (from the
+        // quick toggle or Settings). Fires on the current value too, which is a
+        // no-op when the panel isn't visible yet.
+        store.$sidebarOnLeft
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, let panel = self.panel, panel.isVisible else { return }
+                self.position(panel)
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: Visibility
@@ -87,8 +99,9 @@ final class EdgeSidebarController {
     private func position(_ panel: NSPanel) {
         let screen = NSScreen.main ?? NSScreen.screens.first
         guard let visible = screen?.visibleFrame else { return }
+        let x = store.sidebarOnLeft ? visible.minX : visible.maxX - panelWidth
         let frame = NSRect(
-            x: visible.maxX - panelWidth,
+            x: x,
             y: visible.minY,
             width: panelWidth,
             height: visible.height

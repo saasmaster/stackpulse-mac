@@ -48,12 +48,15 @@ struct PopoverView: View {
                 .buttonStyle(.borderless)
                 .help("Toggle edge sidebar (⌥⌘S)")
             }
-            if onOpenCommandCenter != nil {
-                Button(action: { onOpenCommandCenter?() }) {
-                    Image(systemName: "rectangle.on.rectangle.angled")
+            if onOpenMainWindow != nil {
+                Button(action: {
+                    store.pendingSection = .settings
+                    onOpenMainWindow?()
+                }) {
+                    Image(systemName: "gearshape")
                 }
                 .buttonStyle(.borderless)
-                .help("Open Command Center (⌘⇧C)")
+                .help("Open Settings")
             }
             if onOpenMainWindow != nil {
                 Button(action: { onOpenMainWindow?() }) {
@@ -61,6 +64,13 @@ struct PopoverView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Open StackPulse window")
+            }
+            if onOpenCommandCenter != nil {
+                Button(action: { onOpenCommandCenter?() }) {
+                    Image(systemName: "rectangle.on.rectangle.angled")
+                }
+                .buttonStyle(.borderless)
+                .help("Open Command Center (⌘⇧C)")
             }
             Button(action: { store.refresh() }) {
                 Image(systemName: "arrow.clockwise")

@@ -44,6 +44,10 @@ pub struct Conversation {
     pub id: String,
     pub mtime_unix: i64,
     pub model: Option<String>,
+    /// Number of trajectory steps (agent actions/turns), read from the SQLite
+    /// `steps` table on macOS. `None` when unavailable (non-macOS, or the DB was
+    /// momentarily locked / unreadable).
+    pub steps: Option<u64>,
 }
 
 /// Enumerate `conversations/*.db`, each with its last-modified time and (from a
@@ -74,6 +78,7 @@ pub fn scan_conversations() -> Vec<Conversation> {
             id,
             mtime_unix: mtime,
             model: extract_model(&path),
+            steps: step_count(&path),
         });
     }
     out.sort_by_key(|c| std::cmp::Reverse(c.mtime_unix));
@@ -84,6 +89,27 @@ fn file_mtime_unix(path: &Path) -> Option<i64> {
     let mtime = std::fs::metadata(path).ok()?.modified().ok()?;
     let secs = mtime.duration_since(UNIX_EPOCH).ok()?.as_secs();
     i64::try_from(secs).ok()
+}
+
+/// Count trajectory steps (agent actions/turns) by reading the conversation's
+/// SQLite `steps` table. Opened **read-only** with a short busy timeout so it
+/// coexists safely with Antigravity writing the same file — never locks, never
+/// writes, and any error (locked, schema drift) degrades to `None`.
+#[cfg(target_os = "macos")]
+fn step_count(path: &Path) -> Option<u64> {
+    use rusqlite::{Connection, OpenFlags};
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(250));
+    conn.query_row("SELECT count(*) FROM steps", [], |row| row.get::<_, i64>(0))
+        .ok()
+        .and_then(|n| u64::try_from(n).ok())
+}
+
+/// Non-macOS builds (the portability CI gates) have no Antigravity to read and no
+/// SQLite dependency, so step counts are simply unavailable there.
+#[cfg(not(target_os = "macos"))]
+fn step_count(_path: &Path) -> Option<u64> {
+    None
 }
 
 /// Recover the `gemini-…` model id from a bounded prefix of the DB bytes. The id
@@ -250,14 +276,21 @@ impl Provider for AntigravityProvider {
             Vec::new()
         };
 
+        let total_steps: u64 = convos.iter().filter_map(|c| c.steps).sum();
         let mut notes: Vec<String> = Vec::new();
         if authenticated {
+            let steps_phrase = if total_steps > 0 {
+                format!(", {total_steps} agent steps")
+            } else {
+                String::new()
+            };
             notes.push(format!(
-                "{} Antigravity conversation{} on this Mac ({} touched today, {} in the last 30 days), model {}.",
+                "{} Antigravity conversation{} on this Mac ({} touched today, {} in the last 30 days){}, model {}.",
                 convos.len(),
                 if convos.len() == 1 { "" } else { "s" },
                 today_count,
                 d30_count,
+                steps_phrase,
                 model,
             ));
         } else if installed {

@@ -90,6 +90,19 @@ final class SnapshotStore: ObservableObject {
         }
     }
 
+    /// Which screen edge the floating edge-sidebar pins to. `false` = right
+    /// (default, original behavior), `true` = left. Persisted; the
+    /// `EdgeSidebarController` observes this and re-pins the panel live.
+    @Published var sidebarOnLeft: Bool = SnapshotStore.loadBool(
+        SnapshotStore.sidebarOnLeftKey, default: false
+    ) {
+        didSet {
+            guard sidebarOnLeft != oldValue else { return }
+            UserDefaults.standard.set(sidebarOnLeft, forKey: Self.sidebarOnLeftKey)
+        }
+    }
+    private static let sidebarOnLeftKey = "stackpulse.sidebarOnLeft"
+
     // MARK: Live limits (opt-in Anthropic usage fetch)
 
     /// User-controlled: when on, StackPulse fetches Claude's session/weekly
