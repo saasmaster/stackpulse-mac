@@ -109,12 +109,18 @@ struct ProjectsSection: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Projects")
                         .font(.system(.largeTitle, design: .rounded).weight(.bold))
-                    Text("Approve project folders and StackPulse remembers their commands — copy them, or run them in Terminal with a safety check.")
+                    Text("Add a folder — a single project or a parent folder with several inside — and StackPulse finds the projects, remembers their commands, and lets you launch or test them.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
+                Button(action: { store.addRoot() }) {
+                    Label("Add Folder…", systemImage: "folder.badge.plus")
+                        .font(.callout.weight(.semibold))
+                }
+                .buttonStyle(.glass(tint: .accentColor, prominent: true))
+                .help("Choose a folder (or a parent folder of several projects)")
                 if !store.approvedRoots.isEmpty {
                     Button(action: { store.rescanProjects() }) {
                         Image(systemName: "arrow.clockwise")
@@ -353,28 +359,11 @@ struct ProjectCard: View {
     let onRun: (DiscoveredCommand) -> Void
     let onCapture: (DiscoveredCommand) -> Void
 
-    @EnvironmentObject private var store: SnapshotStore
-    @State private var copiedCommand = false
-    @State private var lanIP: String?
-
-    /// Whether dependencies are already installed (so the recipe can skip install).
-    private var nodeModulesExists: Bool {
-        FileManager.default.fileExists(atPath: (project.path as NSString).appendingPathComponent("node_modules"))
-    }
-
-    /// The one-paste launch recipe for this project, when it's a servable web app.
-    private var launchRecipe: WebPreview.Recipe? {
-        WebPreview.recipe(for: project, installNeeded: !nodeModulesExists)
-    }
-
-    /// If a matching dev server is already running, its URL (open it directly).
-    private var liveURL: String? { WebPreview.runningURL(for: project, among: store.services) }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             headerRow
             pathRow
-            launchPanel
+            ProjectLaunchPanel(project: project)
             if !metaChips.isEmpty {
                 FlowLayout(spacing: 6, lineSpacing: 6) {
                     ForEach(metaChips, id: \.0) { chip in
@@ -408,7 +397,6 @@ struct ProjectCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard(padding: 16)
-        .onAppear { if lanIP == nil { lanIP = LocalNetwork.primaryIPv4() } }
     }
 
     private var headerRow: some View {
@@ -427,92 +415,6 @@ struct ProjectCard: View {
                 .help("Run \"\(test.label)\" in StackPulse and capture the result: \(test.command)")
             }
         }
-    }
-
-    /// The one-tap launch panel: for a running app, an Open button; otherwise a
-    /// prominent **Launch** (one paste behind the scenes: cd + install + start with
-    /// the host exposed, then opens the browser), a **Copy command** that puts the
-    /// whole recipe on the clipboard, and the Local + shareable Network URLs.
-    @ViewBuilder private var launchPanel: some View {
-        if let live = liveURL {
-            HStack(spacing: 8) {
-                Button { WebPreview.open(live) } label: {
-                    Label("Open Preview", systemImage: "globe").font(.caption.weight(.semibold))
-                }
-                .buttonStyle(.glass(tint: .accentColor, prominent: true))
-                Text(live)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 0)
-                Chip(text: "running", systemImage: "bolt.fill", tint: .green)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } else if let recipe = launchRecipe {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Button { WebPreview.launch(recipe) } label: {
-                        Label("Launch", systemImage: "play.fill").font(.caption.weight(.semibold))
-                    }
-                    .buttonStyle(.glass(tint: .blue, prominent: true))
-                    .help("Run it (\(recipe.command)) and open the browser when it's ready")
-
-                    Button { copyCommand(recipe.oneLiner) } label: {
-                        Label(copiedCommand ? "Copied" : "Copy command",
-                              systemImage: copiedCommand ? "checkmark" : "doc.on.doc")
-                            .font(.caption.weight(.medium))
-                    }
-                    .buttonStyle(.glass)
-                    .help("Copy the whole one-paste command:\n\(recipe.oneLiner)")
-
-                    Spacer(minLength: 0)
-                }
-                urlRow(recipe)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(10)
-            .liquidGlass(cornerRadius: 12, prominence: .low, padding: 0)
-        }
-    }
-
-    /// Local + Network URL chips (tap to copy). The Network one is the "temporary
-    /// IP domain" you can open from your phone or another machine on the same Wi-Fi.
-    @ViewBuilder private func urlRow(_ recipe: WebPreview.Recipe) -> some View {
-        HStack(spacing: 8) {
-            urlChip("Local", recipe.localURL)
-            if let ip = lanIP {
-                urlChip("Network", recipe.networkURL(ip))
-            }
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func urlChip(_ label: String, _ url: String) -> some View {
-        Button { copyURL(url) } label: {
-            HStack(spacing: 4) {
-                Text(label.uppercased())
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Text(url.replacingOccurrences(of: "http://", with: ""))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.primary)
-                Image(systemName: "doc.on.doc").font(.system(size: 8)).foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .liquidGlass(cornerRadius: 8, prominence: .low, padding: 0)
-        }
-        .buttonStyle(.plain)
-        .help("Copy \(url)")
-    }
-
-    private func copyCommand(_ text: String) {
-        CommandRunner.copy(text)
-        copiedCommand = true
-        Task { try? await Task.sleep(nanoseconds: 1_400_000_000); copiedCommand = false }
-    }
-
-    private func copyURL(_ text: String) {
-        CommandRunner.copy(text)
     }
 
     private var pathRow: some View {

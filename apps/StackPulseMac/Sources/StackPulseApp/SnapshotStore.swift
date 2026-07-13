@@ -437,7 +437,8 @@ final class SnapshotStore: ObservableObject {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
         panel.prompt = "Add"
-        panel.message = "Choose project folders for StackPulse to remember commands from."
+        panel.message = "Choose a folder — a single project, or a parent folder that "
+            + "contains several projects (StackPulse finds the projects inside it)."
         guard panel.runModal() == .OK else { return }
 
         var changed = false

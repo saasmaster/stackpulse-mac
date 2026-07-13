@@ -18,6 +18,21 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Launcher menu + easier folder adding (app 0.14.0)
+
+- **New Launcher section.** A dedicated sidebar menu (🚀) that lists every web app
+  StackPulse found in your folders as a big card with one-tap **Launch**, **Copy
+  command**, and its Local + shareable Network URLs — a home base for getting a
+  demo up. Projects stays for folder management, commands, runs, and stack health.
+- **Obvious "Add Folder" button.** Projects and Launcher both now have a prominent
+  **Add Folder…** button in the header (it was previously easy to miss).
+- **Add a parent folder, get all its projects.** Clarified throughout that you can
+  point StackPulse at a *single project or a parent folder containing several* —
+  it scans inside and finds them all (this already worked; now it's said plainly,
+  in the picker and the empty states).
+- The launch panel was extracted into a shared component so Projects and Launcher
+  render the exact same Launch / Copy / URLs UI. Swift-only; build clean.
+
 ### One-paste demo launch (app 0.13.0)
 
 Made launching a demo app as easy as the "paste one block and it's up" flow: each

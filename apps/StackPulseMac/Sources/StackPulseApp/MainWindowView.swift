@@ -14,6 +14,7 @@ import SwiftUI
 enum MainSection: String, CaseIterable, Identifiable {
     // Primary (sidebar)
     case home
+    case launcher
     case usage
     case missions
     case advisor
@@ -31,13 +32,14 @@ enum MainSection: String, CaseIterable, Identifiable {
     case settings
 
     /// The five deep sections shown in the sidebar, in order.
-    static let primary: [MainSection] = [.home, .usage, .missions, .advisor, .projects]
+    static let primary: [MainSection] = [.home, .launcher, .usage, .missions, .advisor, .projects]
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .home: return "Home"
+        case .launcher: return "Launcher"
         case .advisor: return "Advisor"
         case .alerts: return "Needs Attention"
         case .missions: return "Missions"
@@ -58,6 +60,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .home: return "house"
+        case .launcher: return "rocket"
         case .advisor: return "sparkles"
         case .alerts: return "bell.badge"
         case .missions: return "bolt.horizontal.circle"
@@ -79,6 +82,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     var summary: String {
         switch self {
         case .home: return "What's happening right now — today's spend and live limits, active AI sessions, and anything that needs you."
+        case .launcher: return "Launch a demo app in one tap — every web app in your folders, with a copy-and-paste command and a shareable URL."
         case .advisor: return "Everything you could improve, in one place — efficiency, your projects, and dependency health & security."
         case .alerts: return "Everything the core flagged as needing attention — usage thresholds, resets, and integration issues."
         case .missions: return "Live AI coding sessions observed on this Mac — what each is working on, right now."
@@ -326,8 +330,9 @@ struct MainWindowView: View {
 
     @ViewBuilder private var detail: some View {
         switch selection {
-        // Five primary, deep sections.
+        // Primary, deep sections.
         case .home: HomeSection(onOpen: { store.pendingSection = $0 })
+        case .launcher: LauncherSection()
         case .usage: UsageHubSection()
         case .missions: MissionsSection()
         case .advisor: AdvisorSection()
