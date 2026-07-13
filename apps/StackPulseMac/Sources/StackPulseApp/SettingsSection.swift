@@ -8,7 +8,7 @@ struct SettingsSection: View {
     @EnvironmentObject var theme: ThemeManager
 
     /// The macOS app's own version (distinct from the Rust core version).
-    private let appVersion = "0.2.0"
+    private let appVersion = "0.3.0"
 
     var body: some View {
         SectionScaffold(section: .settings) { snapshot in
@@ -16,6 +16,7 @@ struct SettingsSection: View {
                 appearanceCard
                 versionsCard(snapshot)
                 refreshCard(snapshot)
+                exportCard(snapshot)
                 commandCenterCard
                 notificationsCard
                 liveLimitsCard
@@ -94,6 +95,55 @@ struct SettingsSection: View {
                 Spacer()
             }
             .padding(.top, 4)
+        }
+    }
+
+    // MARK: Data & export
+
+    /// Local-first data export: the current snapshot as CSV or JSON, or a quick
+    /// human-readable summary copied to the clipboard. Everything is written to a
+    /// file the user picks (or the pasteboard) — nothing leaves the Mac.
+    private func exportCard(_ snapshot: UsageSnapshot) -> some View {
+        SettingsCard(title: "Data & export", systemImage: "square.and.arrow.up") {
+            Text("Export your usage as CSV or JSON, or copy a quick summary. Everything stays on your Mac — nothing is uploaded.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                Button {
+                    Exporter.save(text: Exporter.snapshotCSV(snapshot),
+                                  suggestedName: "stackpulse-usage.csv")
+                } label: {
+                    Label("Export snapshot (CSV)", systemImage: "tablecells")
+                }
+                .buttonStyle(.glass(tint: .accentColor, prominent: true))
+
+                Button {
+                    Exporter.save(text: Exporter.snapshotJSON(snapshot),
+                                  suggestedName: "stackpulse-usage.json")
+                } label: {
+                    Label("Export snapshot (JSON)", systemImage: "curlybraces")
+                }
+                .buttonStyle(.glass(tint: .accentColor))
+
+                Button {
+                    Exporter.copyToClipboard(Exporter.textSummary(snapshot))
+                } label: {
+                    Label("Copy summary", systemImage: "doc.on.clipboard")
+                }
+                .buttonStyle(.glass(tint: .secondary))
+                Spacer()
+            }
+            .padding(.top, 2)
+
+            Label("CSV exports the current per-provider snapshot; Trends can export your full day-by-day history.",
+                  systemImage: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .labelStyle(.titleAndIcon)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
         }
     }
 

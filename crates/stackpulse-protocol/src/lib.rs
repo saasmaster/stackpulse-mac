@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 7,
+    minor: 8,
     patch: 0,
 };
 
@@ -389,6 +389,66 @@ pub struct Alert {
 }
 
 // ---------------------------------------------------------------------------
+// Insights (derived intelligence) — since 1.8.0
+// ---------------------------------------------------------------------------
+
+/// How much an insight matters — drives ordering and accent. Distinct from
+/// [`AlertSeverity`]: insights are observations/recommendations, not
+/// needs-attention conditions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InsightImpact {
+    Low,
+    Medium,
+    High,
+}
+
+/// The category of a derived insight. Open enum: unknown values decode as
+/// [`InsightKind::Other`] so newer cores don't break older readers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InsightKind {
+    /// A low cache-read fraction is leaving measurable savings unclaimed.
+    LowCacheEfficiency,
+    /// Today's spend is notably above the 30-day average.
+    SpendAnomaly,
+    /// A live/limit window is trending toward its cap.
+    ApproachingLimit,
+    /// A detected provider has had no usage in the trailing window.
+    IdleProvider,
+    /// Spend is concentrated in one expensive model.
+    CostConcentration,
+    /// An AI coding session appears stalled (idle mid-task).
+    StalledSession,
+    #[serde(other)]
+    Other,
+}
+
+/// A derived, actionable insight computed locally from a scan. Unlike an
+/// [`Alert`], an insight is an observation or recommendation (efficiency, cost,
+/// idle resources) rather than a needs-attention condition. Ranked most-useful
+/// first by the core. All monetary figures are local list-price estimates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Insight {
+    /// Stable key (kind + provider + discriminator) for dedup / ordering.
+    pub id: String,
+    pub impact: InsightImpact,
+    pub kind: InsightKind,
+    /// The provider this insight is about, when applicable.
+    #[serde(default)]
+    pub provider: Option<ProviderId>,
+    /// Short headline, e.g. "Low cache efficiency on Claude".
+    pub title: String,
+    /// One-line explanation with concrete numbers and a suggested action.
+    pub detail: String,
+    /// An optional highlighted figure, e.g. "$3.20 / 30d" or "42% cache".
+    #[serde(default)]
+    pub metric: Option<String>,
+    /// Unix seconds the insight was generated (snapshot time).
+    pub created_at_unix: i64,
+}
+
+// ---------------------------------------------------------------------------
 // Agent Mission Control — since 1.5.0
 // ---------------------------------------------------------------------------
 
@@ -461,6 +521,10 @@ pub struct UsageSnapshot {
     /// Additive since protocol 1.5.0.
     #[serde(default)]
     pub missions: Vec<Mission>,
+    /// Derived insights (efficiency/cost/idle observations), most useful first.
+    /// Additive since protocol 1.8.0 — older readers ignore it.
+    #[serde(default)]
+    pub insights: Vec<Insight>,
     /// Pricing table provenance note, e.g. "embedded estimate, as of 2026-07".
     pub pricing_note: String,
 }

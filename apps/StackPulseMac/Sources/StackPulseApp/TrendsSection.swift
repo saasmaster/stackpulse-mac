@@ -15,8 +15,12 @@ struct TrendsSection: View {
         SectionScaffold(section: .trends) { _ in
             let model = TrendsModel(points: store.history, range: range)
             VStack(alignment: .leading, spacing: 18) {
-                GlassSegmentedControl(segments: TrendsRange.allSegments, selection: $range)
-                    .frame(maxWidth: 320, alignment: .leading)
+                HStack(alignment: .center) {
+                    GlassSegmentedControl(segments: TrendsRange.allSegments, selection: $range)
+                        .frame(maxWidth: 320, alignment: .leading)
+                    Spacer(minLength: 12)
+                    exportMenu
+                }
 
                 if model.isEmpty {
                     EmptyStateView(
@@ -32,6 +36,35 @@ struct TrendsSection: View {
                 }
             }
         }
+    }
+
+    // MARK: Export
+
+    /// A glass "Export" menu that writes the durable history out as CSV or JSON
+    /// via a user-chosen Save panel. Disabled until there's history to export.
+    /// Sits in the header beside the range selector so it never touches the charts.
+    private var exportMenu: some View {
+        Menu {
+            Button {
+                Exporter.save(text: Exporter.historyCSV(store.history),
+                              suggestedName: "stackpulse-history.csv")
+            } label: {
+                Label("Export history (CSV)", systemImage: "tablecells")
+            }
+            Button {
+                Exporter.save(text: Exporter.historyJSON(store.history),
+                              suggestedName: "stackpulse-history.json")
+            } label: {
+                Label("Export history (JSON)", systemImage: "curlybraces")
+            }
+        } label: {
+            Label("Export", systemImage: "square.and.arrow.up")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.glass(tint: .accentColor))
+        .fixedSize()
+        .disabled(store.history.isEmpty)
+        .help("Export your usage history as CSV or JSON")
     }
 
     // MARK: Summary tiles

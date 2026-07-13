@@ -251,6 +251,28 @@ struct Alert: Codable, Sendable, Identifiable {
     var createdAt: Date { Date(timeIntervalSince1970: TimeInterval(created_at_unix)) }
 }
 
+/// A derived, actionable insight the core surfaces in the snapshot (protocol ≥ 1.8.0).
+///
+/// Unlike an ``Alert`` (a needs-attention condition), an insight is an observation
+/// or recommendation — efficiency, cost, idle resources, a stalled session. The
+/// array arrives **most-useful first** and may be empty. `impact` (`low|medium|
+/// high`) and `kind` are decoded as `String` and interpreted in the view layer, so
+/// a newer core that adds a variant never breaks decoding. `provider` and `metric`
+/// are optional (decode-if-present), matching the core's `#[serde(default)]`.
+struct Insight: Codable, Sendable, Identifiable {
+    let id: String
+    let impact: String
+    let kind: String
+    let provider: String?
+    let title: String
+    let detail: String
+    let metric: String?
+    let created_at_unix: Int64
+
+    /// When the core generated this insight.
+    var createdAt: Date { Date(timeIntervalSince1970: TimeInterval(created_at_unix)) }
+}
+
 /// An observed AI coding session the core surfaces in each snapshot (protocol ≥ 1.5.0).
 ///
 /// `status` (`active|idle|recent|stalled|unknown`) is decoded as `String` and
@@ -326,10 +348,13 @@ struct UsageSnapshot: Codable, Sendable {
     /// Observed AI coding sessions, most-recently-active first (protocol ≥ 1.5.0).
     /// Defaults to `[]` when an older core omits the key, and is commonly empty.
     let missions: [Mission]
+    /// Derived insights (efficiency/cost/idle observations), most-useful first
+    /// (protocol ≥ 1.8.0). Defaults to `[]` when an older core omits the key.
+    let insights: [Insight]
 
     private enum CodingKeys: String, CodingKey {
         case protocol_version, core_version, generated_at_unix
-        case bucket_date_utc, providers, pricing_note, alerts, missions
+        case bucket_date_utc, providers, pricing_note, alerts, missions, insights
     }
 
     init(from decoder: Decoder) throws {
@@ -343,6 +368,7 @@ struct UsageSnapshot: Codable, Sendable {
         // Absent (older core) or explicit null → empty, never a decode failure.
         alerts = ((try? c.decodeIfPresent([Alert].self, forKey: .alerts)) ?? nil) ?? []
         missions = ((try? c.decodeIfPresent([Mission].self, forKey: .missions)) ?? nil) ?? []
+        insights = ((try? c.decodeIfPresent([Insight].self, forKey: .insights)) ?? nil) ?? []
     }
 
     /// Explicit memberwise initializer. The custom `init(from:)` above suppresses
@@ -356,7 +382,8 @@ struct UsageSnapshot: Codable, Sendable {
         providers: [ProviderUsage],
         pricing_note: String,
         alerts: [Alert],
-        missions: [Mission]
+        missions: [Mission],
+        insights: [Insight]
     ) {
         self.protocol_version = protocol_version
         self.core_version = core_version
@@ -366,6 +393,7 @@ struct UsageSnapshot: Codable, Sendable {
         self.pricing_note = pricing_note
         self.alerts = alerts
         self.missions = missions
+        self.insights = insights
     }
 
     /// Returns a copy with `providers` replaced (everything else preserved).
@@ -380,7 +408,8 @@ struct UsageSnapshot: Codable, Sendable {
             providers: newProviders,
             pricing_note: pricing_note,
             alerts: alerts,
-            missions: missions
+            missions: missions,
+            insights: insights
         )
     }
 }

@@ -18,6 +18,9 @@ native-messaging host and a Windows client.
     `get_history` ops and the `history` response.
   - **1.7.0** — BYOK balances: `ProviderBalance` type + the optional
     `ProviderUsage.balance` field (filled by the client layer, not the core).
+  - **1.8.0** — Insights: `Insight` + `InsightImpact` / `InsightKind` (open enum)
+    types and the `UsageSnapshot.insights` list (derived intelligence, computed
+    locally by the core).
   - **1.1.0** — `ProviderAnalytics` / `DailyUsage` types and the optional
     `ProviderUsage.analytics` field.
   - **1.2.0** — `Alert` / `AlertSeverity` / `AlertKind` types and the
@@ -138,7 +141,7 @@ ignoring the extra `"kind":"usage_snapshot"` key.
 
 ### `Version`
 
-A `const`-friendly semantic version. `PROTOCOL_VERSION` is `1.7.0`.
+A `const`-friendly semantic version. `PROTOCOL_VERSION` is `1.8.0`.
 
 ```json
 { "major": 1, "minor": 0, "patch": 0 }
@@ -371,6 +374,31 @@ Default thresholds: usage ≥ 90% ⇒ critical, ≥ 75% ⇒ warning; degraded
 integration health ⇒ warning/critical; today's spend ≥ 2.5× the 30-day daily
 average ⇒ warning. An empty `alerts` array means nothing needs attention.
 
+### `Insight` *(since 1.8.0)*
+
+A derived, actionable observation or recommendation — efficiency, cost, idle
+resources, a possibly-stalled session — computed **locally** by the core. Distinct
+from an `Alert` (a needs-attention condition): insights are for the user to
+consider, never auto-acted upon. `UsageSnapshot.insights` is sorted most-useful
+first.
+
+- `impact`: `low` | `medium` | `high` (drives ordering / accent).
+- `kind` (open enum; unknown ⇒ `other`): `low_cache_efficiency` | `spend_anomaly`
+  | `approaching_limit` | `idle_provider` | `cost_concentration` |
+  `stalled_session` | `other`.
+- `provider` is optional (the provider the insight is about, when applicable).
+- `metric` is an optional highlighted figure (e.g. `"42% cache"`, `"3.1× avg"`).
+- `id` is a stable key (`insight:kind:discriminator`) for dedup / ordering.
+
+```json
+{ "id": "insight:low_cache:claude", "impact": "medium", "kind": "low_cache_efficiency",
+  "provider": "claude", "title": "Low cache efficiency on Claude",
+  "detail": "Only 42% of your Claude input is served from cache — keeping prompts and context stable raises this and lowers cost.",
+  "metric": "42% cache", "created_at_unix": 1784000000 }
+```
+
+An empty `insights` array is normal (nothing worth surfacing this scan).
+
 ### `UsageSnapshot`
 
 The top-level object every UI surface renders — one scan produces one snapshot.
@@ -386,6 +414,7 @@ As a `usage_snapshot` response, these fields are flattened next to `"kind"`.
   "providers": [ /* ProviderUsage objects */ ],
   "alerts": [ /* Alert objects, most severe first (since 1.2.0) */ ],
   "missions": [ /* Mission objects, most-recently-active first (since 1.5.0) */ ],
+  "insights": [ /* Insight objects, most-useful first (since 1.8.0) */ ],
   "pricing_note": "Costs are local estimates from an embedded price table (list prices as of 2026-07); verify against your provider billing."
 }
 ```

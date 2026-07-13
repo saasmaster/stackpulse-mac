@@ -6,6 +6,7 @@ import SwiftUI
 enum MainSection: String, CaseIterable, Identifiable {
     case alerts
     case missions
+    case insights
     case overview
     case usage
     case trends
@@ -19,6 +20,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         switch self {
         case .alerts: return "Needs Attention"
         case .missions: return "Missions"
+        case .insights: return "Insights"
         case .overview: return "Overview"
         case .usage: return "Usage"
         case .trends: return "Trends"
@@ -32,6 +34,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         switch self {
         case .alerts: return "bell.badge"
         case .missions: return "bolt.horizontal.circle"
+        case .insights: return "lightbulb.max"
         case .overview: return "square.grid.2x2"
         case .usage: return "chart.line.uptrend.xyaxis"
         case .trends: return "chart.xyaxis.line"
@@ -46,6 +49,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         switch self {
         case .alerts: return "Everything the core flagged as needing attention — usage thresholds, resets, and integration issues."
         case .missions: return "Live AI coding sessions observed on this Mac — what each is working on, right now."
+        case .insights: return "Ways to save money and work more efficiently — spotted from your own local usage."
         case .overview: return "At-a-glance spend, volume, and live limits across every detected provider."
         case .usage: return "Per-model and per-window breakdowns of tokens, cost, and cache efficiency."
         case .trends: return "Long-run spend and token trends across providers, built from durable usage history that outlives the 30-day logs."
@@ -173,6 +177,7 @@ struct MainWindowView: View {
         switch section {
         case .alerts: return (store.activeAlerts.count, .red)
         case .missions: return (store.activeMissionCount, .green)
+        case .insights: return (store.insights.count, .blue)
         default: return (0, .clear)
         }
     }
@@ -221,6 +226,7 @@ struct MainWindowView: View {
         switch selection {
         case .alerts: AlertsSection()
         case .missions: MissionsSection()
+        case .insights: InsightsSection()
         case .overview: OverviewSection()
         case .usage: UsageSection()
         case .trends: TrendsSection()

@@ -41,7 +41,7 @@ fn error_json(message: &str) -> *mut c_char {
 /// Return the core crate version (e.g. "0.1.0"). Caller must free.
 #[no_mangle]
 pub extern "C" fn sp_core_version() -> *mut c_char {
-    match catch_unwind(|| stackpulse_core::version_string()) {
+    match catch_unwind(stackpulse_core::version_string) {
         Ok(v) => to_c_string(v),
         Err(_) => error_json("panic in sp_core_version"),
     }

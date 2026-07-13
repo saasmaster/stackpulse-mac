@@ -873,6 +873,14 @@ final class SnapshotStore: ObservableObject {
         activeMissions.count
     }
 
+    // MARK: Insights (derived intelligence)
+
+    /// Every derived insight this snapshot reports, most-useful first as the core
+    /// ordered them. Empty until a core new enough (protocol ≥ 1.8.0) emits them.
+    var insights: [Insight] {
+        snapshot?.insights ?? []
+    }
+
     /// Reads `STACKPULSE_DEMO_MISSIONS` once; returns a small representative set of
     /// missions (one per status) for previewing, or `[]` when the var is unset.
     private static func loadDemoMissions() -> [Mission] {

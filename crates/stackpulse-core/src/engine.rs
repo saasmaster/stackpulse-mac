@@ -110,8 +110,9 @@ impl Engine {
             }
         }
 
-        let alerts = crate::alerts::derive_alerts(&provider_usages, now);
         let missions = crate::missions::discover(now);
+        let alerts = crate::alerts::derive_alerts(&provider_usages, now);
+        let insights = crate::insights::derive(&provider_usages, &missions, now);
 
         UsageSnapshot {
             protocol_version: PROTOCOL_VERSION,
@@ -121,6 +122,7 @@ impl Engine {
             providers: provider_usages,
             alerts,
             missions,
+            insights,
             pricing_note: format!(
                 "Costs are local estimates from an embedded price table (list prices as of {PRICING_AS_OF}); verify against your provider billing."
             ),

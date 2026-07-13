@@ -73,6 +73,7 @@ fn snapshot_with(providers: Vec<ProviderUsage>, now: i64) -> UsageSnapshot {
         providers,
         alerts: Vec::new(),
         missions: Vec::new(),
+        insights: Vec::new(),
         pricing_note: "test".into(),
     }
 }

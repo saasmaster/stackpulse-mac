@@ -17,6 +17,7 @@ pub mod alerts;
 pub mod datetime;
 pub mod engine;
 pub mod history;
+pub mod insights;
 pub mod missions;
 pub mod paths;
 pub mod pricing;

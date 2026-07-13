@@ -18,6 +18,27 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Insights & reporting (app 0.3.0 / protocol 1.8.0)
+
+- **Derived insights engine (core, protocol 1.8.0).** New `Insight` /
+  `InsightImpact` / `InsightKind` types + an additive `UsageSnapshot.insights`
+  list. The portable core now turns each scan into ranked, actionable
+  observations — all computed **locally**, no network: **low cache efficiency**
+  (savings left unclaimed), **spend anomaly** (today vs. the 30-day average),
+  **approaching limit** (a heads-up band that sits a notch below the alert
+  threshold so the two never double-fire), **idle provider** (detected but unused
+  30 days), **cost concentration** (one model dominating spend), and a hedged
+  **possibly-stalled session** (an AI coding session idle mid-task — surfaced for
+  you to judge, never auto-acted upon). Ranked most-useful-first. 19 new tests.
+- **Insights section (app).** A new **Insights** sidebar destination with a count
+  badge, impact-grouped Liquid-Glass cards (High → Medium → Low), each showing the
+  provider, a highlighted metric, and a relative time — plus a friendly empty
+  state and a "these are suggestions; nothing changes automatically" reassurance.
+- **Data export & reporting (app).** Export your usage as **CSV or JSON** and a
+  one-click **Copy summary** — snapshot export + Copy summary live in Settings
+  ("Data & export"), history export lives in Trends. Saves go through a standard
+  save panel (you pick the location); everything stays on your Mac.
+
 ### Notifications & proactive alerting (app 0.2.0 — app-only, no protocol/core change)
 
 - **Native macOS notifications for needs-attention alerts.** When a new alert

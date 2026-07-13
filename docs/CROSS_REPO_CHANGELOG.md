@@ -202,6 +202,23 @@ is breaking for downstream consumers, and the action they should take.
   A Windows/Chrome client that stores API keys can populate it the same way the
   macOS app does.
 
+### 2026-07-13 — Derived insights (protocol 1.8.0)
+
+- **Surface:** protocol + core
+- **Versions:** protocol **1.8.0** / core **0.1.0** / manifest *(not yet defined)*
+- **Breaking for downstream:** no (purely additive)
+- **Change:** new `Insight` type with `InsightImpact` (`low|medium|high`) and
+  `InsightKind` (open enum: `low_cache_efficiency`, `spend_anomaly`,
+  `approaching_limit`, `idle_provider`, `cost_concentration`, `stalled_session`,
+  `other`), plus an additive `UsageSnapshot.insights` list. Insights are derived
+  **locally by the portable core** from the same scan (efficiency/cost/idle
+  observations + possibly-stalled coding sessions) — no network. They are
+  observations for the user to consider, distinct from `alerts`.
+- **Downstream action:** target protocol **1.8.0**; treat `insights` as an
+  additive, possibly-empty list and keep decoding `InsightKind`/`InsightImpact`
+  with an unknown-value fallback. Any client linking the core gets insights for
+  free.
+
 ---
 
 ## Pending / anticipated (not yet shipped)
