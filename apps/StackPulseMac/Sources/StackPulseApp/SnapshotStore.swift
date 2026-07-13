@@ -168,6 +168,89 @@ final class SnapshotStore: ObservableObject {
             : defaults.bool(forKey: liveLimitsKey)
     }
 
+    // MARK: Notifications (proactive alerts)
+
+    /// The thin AppKit bridge that actually posts banners. Owned here so there's a
+    /// single source of truth; the AppDelegate wires its `onOpen` on launch.
+    let notifications = NotificationManager()
+
+    /// App-level preference: deliver a macOS notification when a new needs-attention
+    /// alert appears. Independent of the OS-level permission (see
+    /// `notificationsAuthorized`). Persisted; **default on**.
+    @Published var notificationsEnabled: Bool = SnapshotStore.loadBool(
+        SnapshotStore.notificationsEnabledKey, default: true
+    ) {
+        didSet {
+            guard notificationsEnabled != oldValue else { return }
+            UserDefaults.standard.set(notificationsEnabled, forKey: Self.notificationsEnabledKey)
+            if notificationsEnabled {
+                notifications.requestAuthorization()
+            } else {
+                notifications.clearDelivered()
+            }
+        }
+    }
+
+    /// Minimum severity that triggers a notification. `.info` = everything,
+    /// `.warning` = warnings + critical, `.critical` = critical only. Persisted by
+    /// raw value; **default `.warning`** (info-level rarely warrants a banner).
+    @Published var notifyMinSeverity: AlertSeverity = SnapshotStore.loadMinSeverity() {
+        didSet {
+            guard notifyMinSeverity != oldValue else { return }
+            UserDefaults.standard.set(notifyMinSeverity.rawValue, forKey: Self.notifyMinSeverityKey)
+        }
+    }
+
+    /// Quiet hours: when on, banners are suppressed between `quietStartHour` and
+    /// `quietEndHour` (may wrap midnight). Alerts still appear in-app and in the
+    /// menu bar — this only mutes the interruption.
+    @Published var quietHoursEnabled: Bool = SnapshotStore.loadBool(
+        SnapshotStore.quietHoursEnabledKey, default: false
+    ) {
+        didSet { UserDefaults.standard.set(quietHoursEnabled, forKey: Self.quietHoursEnabledKey) }
+    }
+    @Published var quietStartHour: Int = SnapshotStore.loadHour(SnapshotStore.quietStartKey, default: 22) {
+        didSet { UserDefaults.standard.set(quietStartHour, forKey: Self.quietStartKey) }
+    }
+    @Published var quietEndHour: Int = SnapshotStore.loadHour(SnapshotStore.quietEndKey, default: 8) {
+        didSet { UserDefaults.standard.set(quietEndHour, forKey: Self.quietEndKey) }
+    }
+
+    /// OS-level authorization, updated by the manager. When `false` while
+    /// `notificationsEnabled` is on, Settings hints to enable banners in System
+    /// Settings. Defaults to `false` until the first status check resolves.
+    @Published private(set) var notificationsAuthorized = false
+
+    /// Active-alert ids we've already delivered a banner for, pruned to still-active
+    /// on every evaluation (so a cleared-then-returning condition re-notifies).
+    private var notifiedAlertIDs: Set<String> = []
+    /// False until the first snapshot seeds the notified set silently.
+    private var notificationsSeeded = false
+
+    private static let notificationsEnabledKey = "stackpulse.notificationsEnabled"
+    private static let notifyMinSeverityKey = "stackpulse.notifyMinSeverity"
+    private static let quietHoursEnabledKey = "stackpulse.quietHoursEnabled"
+    private static let quietStartKey = "stackpulse.quietStartHour"
+    private static let quietEndKey = "stackpulse.quietEndHour"
+
+    /// Reads a persisted Bool, returning `default` when the key was never set.
+    private static func loadBool(_ key: String, default def: Bool) -> Bool {
+        UserDefaults.standard.object(forKey: key) == nil ? def : UserDefaults.standard.bool(forKey: key)
+    }
+
+    /// Reads a persisted 0–23 hour, clamping out-of-range/unset values to `default`.
+    private static func loadHour(_ key: String, default def: Int) -> Int {
+        guard UserDefaults.standard.object(forKey: key) != nil else { return def }
+        let v = UserDefaults.standard.integer(forKey: key)
+        return (0...23).contains(v) ? v : def
+    }
+
+    /// Reads the persisted notification severity threshold, defaulting to `.warning`.
+    private static func loadMinSeverity() -> AlertSeverity {
+        guard UserDefaults.standard.object(forKey: notifyMinSeverityKey) != nil else { return .warning }
+        return AlertSeverity(rawValue: UserDefaults.standard.integer(forKey: notifyMinSeverityKey)) ?? .warning
+    }
+
     private let keepAwakeAssertion = KeepAwake()
 
     /// Optional demo alerts injected only when `STACKPULSE_DEMO_ALERTS` is set in
@@ -209,6 +292,18 @@ final class SnapshotStore: ObservableObject {
         // Seed the connected-providers set before the first refresh completes so
         // its completion can fetch balances for already-saved keys.
         loadAPIKeyProviders()
+        // Notifications: install the delegate + reflect OS authorization. Only
+        // force the system prompt when the user has notifications enabled;
+        // otherwise just read the current status for the Settings hint.
+        notifications.onAuthorizationResolved = { [weak self] granted in
+            self?.notificationsAuthorized = granted
+        }
+        notifications.configure()
+        if notificationsEnabled {
+            notifications.requestAuthorization()
+        } else {
+            notifications.refreshAuthorizationStatus()
+        }
         refresh()
         rescheduleTimer()
         // Load any accumulated usage history once on launch so Trends has data
@@ -349,6 +444,10 @@ final class SnapshotStore: ObservableObject {
                     // Fold today's usage into the durable history store and refresh
                     // the published series (records every refresh, keeps Trends live).
                     self.recordHistorySnapshot()
+                    // Decide whether anything new warrants a notification. Re-runs
+                    // after the async live-limits merge too (see `applyLiveLimits`),
+                    // so Claude live-limit alerts are considered once they arrive.
+                    self.evaluateNotifications()
                 } else {
                     self.lastError = "Could not read usage data from the core."
                 }
@@ -467,6 +566,10 @@ final class SnapshotStore: ObservableObject {
             return p.replacingLimits(Self.mergeLimits(core: core, live: live))
         }
         snapshot = snap.copy(providers: providers)
+        // Live limits just landed — reconsider notifications so a Claude weekly/
+        // session limit crossing its threshold can alert (the offline core never
+        // sees these, so its own alert set can't cover them).
+        evaluateNotifications()
     }
 
     /// Removes any previously-merged live limits from Claude, restoring the
@@ -642,10 +745,46 @@ final class SnapshotStore: ObservableObject {
 
     // MARK: Alerts
 
-    /// Every alert the core reported this snapshot (plus any demo alerts),
-    /// most-severe-first order preserved.
+    /// Every alert the core reported this snapshot, plus alerts synthesized from
+    /// Claude's *live* limits (which the offline core can't see), plus any demo
+    /// alerts. Core alerts keep their most-severe-first order; synthesized ones
+    /// follow. Drives every needs-attention surface and the notification gate.
     var allAlerts: [Alert] {
-        (snapshot?.alerts ?? []) + demoAlerts
+        (snapshot?.alerts ?? []) + liveLimitAlerts + demoAlerts
+    }
+
+    /// Needs-attention alerts derived from Claude's live limits. The core is
+    /// offline and never sees these, so without this a Claude weekly/session cap
+    /// approaching would silently pass. Warning at ≥ 80%, critical at ≥ 95%. Ids
+    /// are stable per (provider, label) so the notification gate dedups them like
+    /// any core alert, and `created_at` uses the snapshot's own generation time so
+    /// the value is stable across renders (no per-render `Date()` churn). Empty
+    /// unless live limits are present.
+    private var liveLimitAlerts: [Alert] {
+        guard let snap = snapshot,
+              let claude = snap.providers.first(where: { $0.provider == "claude" })
+        else { return [] }
+        return claude.limits.compactMap { limit -> Alert? in
+            guard limit.provenance == AnthropicUsageClient.liveProvenance else { return nil }
+            let pct = Int(limit.used_percent.rounded())
+            let severity: String
+            if limit.used_percent >= 95 { severity = "critical" }
+            else if limit.used_percent >= 80 { severity = "warning" }
+            else { return nil }
+            var detail = "Your Claude \(limit.label) usage is \(pct)% consumed."
+            if let reset = limit.resets_at_unix {
+                detail += " Resets \(Format.relative(Date(timeIntervalSince1970: TimeInterval(reset))))."
+            }
+            return Alert(
+                id: "live:claude:\(limit.label)",
+                provider: "claude",
+                severity: severity,
+                kind: "usage_threshold",
+                title: "Claude \(limit.label) limit at \(pct)%",
+                detail: detail,
+                created_at_unix: snap.generated_at_unix
+            )
+        }
     }
 
     /// Alerts still needing attention: `allAlerts` minus the acknowledged ones.
@@ -674,6 +813,46 @@ final class SnapshotStore: ObservableObject {
     /// Un-dismiss everything acknowledged this session.
     func restoreAcknowledged() {
         acknowledgedAlertIDs.removeAll()
+    }
+
+    // MARK: Notification evaluation
+
+    /// Runs after every snapshot change to decide which alerts warrant a banner.
+    /// Delegates the newly-active/dedup decision to the pure ``NotificationGate``:
+    /// the first evaluation seeds silently (no launch burst), then only genuinely
+    /// new, high-enough-severity alerts notify. The gate state is kept current even
+    /// while notifications are disabled, so re-enabling never fires a backlog.
+    private func evaluateNotifications() {
+        let eligible = activeAlerts.filter { $0.severityKind >= notifyMinSeverity }
+        let currentIDs = Set(eligible.map(\.id))
+        let result = NotificationGate.transition(
+            current: currentIDs, alreadyNotified: notifiedAlertIDs, seeded: notificationsSeeded
+        )
+        notifiedAlertIDs = result.notified
+        notificationsSeeded = true
+
+        guard notificationsEnabled, !result.toNotify.isEmpty else { return }
+        // Quiet hours mute the banner (Do-Not-Disturb semantics) — the alerts are
+        // already marked notified above, so they still surface in-app and won't
+        // re-fire once quiet hours end.
+        if quietHoursEnabled, isQuietNow() { return }
+        for alert in eligible where result.toNotify.contains(alert.id) {
+            notifications.deliver(alert)
+        }
+    }
+
+    /// Whether the current local hour falls inside the configured quiet-hours
+    /// window (may wrap midnight).
+    private func isQuietNow() -> Bool {
+        let hour = Calendar.current.component(.hour, from: Date())
+        return NotificationGate.isQuiet(hour: hour, start: quietStartHour, end: quietEndHour)
+    }
+
+    /// Posts a one-off test banner (requesting permission on first use) so the
+    /// user can confirm notifications reach them. Bypasses quiet hours and the
+    /// dedup gate intentionally — it's an explicit, on-demand check.
+    func sendTestNotification() {
+        notifications.sendTest()
     }
 
     // MARK: Missions (observed AI coding sessions)

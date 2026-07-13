@@ -8,7 +8,7 @@ struct SettingsSection: View {
     @EnvironmentObject var theme: ThemeManager
 
     /// The macOS app's own version (distinct from the Rust core version).
-    private let appVersion = "0.1.0"
+    private let appVersion = "0.2.0"
 
     var body: some View {
         SectionScaffold(section: .settings) { snapshot in
@@ -17,6 +17,7 @@ struct SettingsSection: View {
                 versionsCard(snapshot)
                 refreshCard(snapshot)
                 commandCenterCard
+                notificationsCard
                 liveLimitsCard
                 ProviderConnectionsCard()
                 powerCard
@@ -123,6 +124,92 @@ struct SettingsSection: View {
             .padding(.top, 2)
         }
     }
+
+    // MARK: Notifications
+
+    /// Proactive alerting. When on, a new needs-attention alert (a usage limit
+    /// nearing its cap, a spend spike, an integration issue) also raises a macOS
+    /// notification, with a severity threshold and optional quiet hours. Purely
+    /// local — it only surfaces alerts already derived from your own data.
+    private var notificationsCard: some View {
+        SettingsCard(title: "Notifications", systemImage: "bell.badge") {
+            Toggle(isOn: $store.notificationsEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Notify me when something needs attention")
+                        .font(.callout)
+                    Text("Raises a macOS notification when a new alert appears — a usage limit nearing its cap, a spend spike, or an integration issue. Alerts always show in-app too.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.switch)
+
+            if store.notificationsEnabled {
+                if !store.notificationsAuthorized {
+                    Label(
+                        "Notifications are turned off for StackPulse in System Settings → Notifications. Enable them there to receive alerts.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .labelStyle(.titleAndIcon)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Notify me about")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    GlassSegmentedControl(segments: Self.severitySegments, selection: $store.notifyMinSeverity)
+                    Text("“Warnings” includes critical; “Critical” is the loudest alerts only.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.top, 2)
+
+                Toggle(isOn: $store.quietHoursEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Quiet hours")
+                            .font(.callout)
+                        Text("Mute banners during these hours. Alerts still appear in the app and menu bar.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                if store.quietHoursEnabled {
+                    HStack(spacing: 14) {
+                        HourPicker(label: "From", hour: $store.quietStartHour)
+                        HourPicker(label: "To", hour: $store.quietEndHour)
+                        Spacer()
+                    }
+                    .padding(.top, 2)
+                }
+
+                HStack {
+                    Button {
+                        store.sendTestNotification()
+                    } label: {
+                        Label("Send a test notification", systemImage: "bell.and.waves.left.and.right")
+                    }
+                    .buttonStyle(.glass(tint: .accentColor))
+                    Spacer()
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    /// The notification severity threshold, shown as a three-way pill (minimum
+    /// severity that triggers a banner).
+    private static let severitySegments: [GlassSegment<AlertSeverity>] = [
+        GlassSegment(value: .info, systemImage: "bell", label: "All"),
+        GlassSegment(value: .warning, systemImage: "exclamationmark.triangle", label: "Warnings"),
+        GlassSegment(value: .critical, systemImage: "exclamationmark.octagon", label: "Critical"),
+    ]
 
     // MARK: Live limits
 
@@ -245,6 +332,28 @@ private struct SettingsCard<Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard(padding: 16)
+    }
+}
+
+/// A compact hour-of-day picker (`00:00`–`23:00`) for the quiet-hours range.
+private struct HourPicker: View {
+    let label: String
+    @Binding var hour: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker(label, selection: $hour) {
+                ForEach(0..<24, id: \.self) { h in
+                    Text(String(format: "%02d:00", h)).tag(h)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 92)
+        }
     }
 }
 

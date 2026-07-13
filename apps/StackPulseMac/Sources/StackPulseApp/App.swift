@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+@preconcurrency import UserNotifications
 
 /// Entry point.
 ///
@@ -25,9 +26,11 @@ enum StackPulseMain {
         if args.contains("--selftest-parsers") {
             let live = AnthropicUsageClient._selftest()
             let balances = ProviderBalanceClient._selftest()
+            let notify = NotificationManager._selftest()
             print("anthropic-usage parser: \(live ? "PASS" : "FAIL")")
             print("provider-balance parser: \(balances ? "PASS" : "FAIL")")
-            exit(live && balances ? 0 : 1)
+            print("notification-gate logic: \(notify ? "PASS" : "FAIL")")
+            exit(live && balances && notify ? 0 : 1)
         }
         // Hidden diagnostic: exercise the live-limits path (Keychain read + fetch)
         // and print the outcome — the credential *state* and the limit
@@ -50,6 +53,32 @@ enum StackPulseMain {
                 sem.signal()
             }
             sem.wait()
+            return
+        }
+        // Hidden diagnostic: prove the notification pipeline end-to-end. Requests
+        // authorization (prompts once if never asked), posts one banner, then reads
+        // it back from Notification Center as a programmatic delivery proof. Only
+        // meaningful inside the packaged `.app` (a bare executable has no bundle id,
+        // so the system won't deliver). Prints state only — never any user data.
+        if args.contains("--selftest-notify") {
+            Task {
+                let center = UNUserNotificationCenter.current()
+                let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
+                print("notify authorization granted: \(granted)")
+                let content = UNMutableNotificationContent()
+                content.title = "StackPulse notification test"
+                content.body = "If you can see this banner, notifications are working."
+                content.sound = .default
+                let req = UNNotificationRequest(identifier: "selftest:notify", content: content, trigger: nil)
+                try? await center.add(req)
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                let delivered = await center.deliveredNotifications().map { $0.request.identifier }
+                print("delivered notifications: \(delivered.count) \(delivered)")
+                CFRunLoopStop(CFRunLoopGetMain())
+            }
+            // Pump the main run loop so the UserNotifications XPC callbacks are
+            // actually serviced (a bare semaphore wait would starve them).
+            CFRunLoopRunInMode(.defaultMode, 15, false)
             return
         }
 
@@ -120,6 +149,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateKeepAwakeMenuState() }
             .store(in: &cancellables)
+
+        // A click on a delivered notification opens the app on needs-attention.
+        // Set the target section first, then open — matching the popover's
+        // navigation pattern so both the first-open and already-open paths route.
+        store.notifications.onOpen = { [weak self] in
+            guard let self else { return }
+            self.store.pendingSection = .alerts
+            self.openMainWindow()
+        }
 
         store.start()
 

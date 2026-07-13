@@ -18,6 +18,40 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Notifications & proactive alerting (app 0.2.0 — app-only, no protocol/core change)
+
+- **Native macOS notifications for needs-attention alerts.** When a new alert
+  appears (a usage limit nearing its cap, a spend anomaly, an integration issue),
+  StackPulse now raises a system notification — a menu-bar app is far more useful
+  when it can tap you on the shoulder instead of only showing state when opened.
+  Clicking a notification opens the app on the needs-attention section.
+  Everything stays local: notifications only ever surface an alert already derived
+  from your own data; nothing is originated or sent anywhere.
+- **Transition-based, non-spammy delivery.** A pure, self-tested gate
+  (`NotificationGate`) notifies only when an alert *newly* becomes active — the
+  first snapshot after launch seeds silently (no burst for pre-existing state),
+  a persisting alert never re-fires, and a cleared-then-returning condition
+  notifies again. Re-delivery replaces (not stacks) by alert id.
+- **Proactive Claude live-limit alerts.** The offline core can't see Claude's
+  live session/weekly limits, so it never alerted on them. The app now synthesizes
+  needs-attention alerts from the merged live limits — warning at ≥ 80%, critical
+  at ≥ 95% — surfaced across the popover, inbox, and menu-bar badge, and eligible
+  for notification. Codex limit alerts continue to come from the core (no dupes).
+- **Notification preferences (Settings).** Master toggle, a severity threshold
+  (All / Warnings+ / Critical), quiet hours (a from/to window that may wrap
+  midnight, muting banners while keeping alerts in-app), a one-click *Send a test
+  notification* button, and a hint when banners are disabled in System Settings.
+  All persisted in `UserDefaults`.
+- **Self-tests + a diagnostic.** `--selftest-parsers` now also asserts the
+  notification gate and quiet-hours logic; `--selftest-notify` posts a test banner
+  and reads it back from Notification Center as an end-to-end delivery probe.
+- **Fixed:** a Swift 6 actor-isolation trap (`dispatch_assert_queue_fail`) that
+  crashed the app on launch — the `UNUserNotificationCenter` Objective-C
+  completion bridge, invoked from a `@MainActor` context, resumed its continuation
+  with a main-actor isolation check that failed on the daemon's background queue.
+  The center calls now run from a `nonisolated static` helper, hopping back to the
+  main actor only to publish results.
+
 ### Added
 
 - **Portable Rust core (`stackpulse-core`, 0.1.0).** A platform-neutral engine
