@@ -239,6 +239,28 @@ is breaking for downstream consumers, and the action they should take.
   client that hard-coded "Antigravity is detection-only" should drop that
   assumption.
 
+### 2026-07-13 — Stack Health + Services (protocol 1.9.0)
+
+- **Surface:** protocol + core
+- **Versions:** protocol **1.9.0** / core **0.1.0** / manifest *(not yet defined)*
+- **Breaking for downstream:** no (purely additive)
+- **Change:** two new capabilities.
+  - **Stack Health** — `ProjectStack` / `Dependency` / `Advisory` /
+    `DependencyStatus` (open enum) / `AdvisorySeverity` (open enum) /
+    `StackSummary` types, plus `get_stack_health` → `stack_health`. The portable
+    core produces an **offline dependency inventory** (parses npm + cargo
+    manifests/lockfiles); it does NOT hit the network — latest-version / advisory
+    enrichment is a **client-layer** concern (the macOS app uses the npm/crates
+    registries + OSV), keeping the core free of a TLS/C crypto dependency that
+    would break the Windows-cross gate.
+  - **Services** — `RunningService` type + `get_services` → `services`. Detects
+    locally-running dev servers by listening TCP port (via `lsof` on macOS) and
+    matches them to approved project roots. Read-only.
+- **Downstream action:** target protocol **1.9.0**; treat both responses as
+  additive. A Windows/Linux client reusing the core gets the offline inventory
+  and (on macOS) service detection; it would supply its own registry/OSV
+  enrichment and its own port-enumeration for non-macOS.
+
 ---
 
 ## Pending / anticipated (not yet shipped)

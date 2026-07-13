@@ -511,3 +511,73 @@ struct HistoryPoint: Codable, Sendable, Identifiable {
     /// Stable per (date, provider) so two providers on the same day never collide.
     var id: String { date + "\u{1}" + provider }
 }
+
+// MARK: - Stack Health (protocol ≥ 1.9.0)
+
+// The Rust core serializes every field (serde `default` only affects decoding),
+// so simple synthesized `Codable` is sufficient here — no custom decoders needed.
+// String-valued enums (`status`, `severity`) are interpreted in the view layer so
+// a newer core adding a variant never breaks decoding.
+
+/// One security advisory affecting a dependency.
+struct Advisory: Codable, Sendable, Identifiable {
+    let id: String
+    let severity: String   // low | moderate | high | critical | unknown
+    let title: String
+    let url: String?
+    let affected_range: String?
+}
+
+/// One dependency in a project's manifest, with its update + security status.
+struct Dependency: Codable, Sendable, Identifiable {
+    let name: String
+    let ecosystem: String
+    let required: String?
+    let installed: String?
+    let latest: String?
+    let status: String     // up_to_date | minor_behind | major_behind | deprecated | unknown | other
+    let is_dev: Bool
+    let advisories: [Advisory]
+
+    var id: String { ecosystem + "\u{1}" + name }
+}
+
+/// Roll-up counts for a project's stack health.
+struct StackSummary: Codable, Sendable {
+    let total: Int
+    let minor_behind: Int
+    let major_behind: Int
+    let deprecated: Int
+    let vulnerable: Int
+    let max_severity: String?
+    let checked_updates: Bool
+}
+
+/// One project's dependency/stack health.
+struct ProjectStack: Codable, Sendable, Identifiable {
+    let name: String
+    let path: String
+    let ecosystem: String
+    let package_manager: String?
+    let summary: StackSummary
+    let dependencies: [Dependency]
+    let notes: [String]
+
+    var id: String { path }
+}
+
+// MARK: - Services & runtime (protocol ≥ 1.9.0)
+
+/// A locally-running dev server / service detected by its listening TCP port.
+struct RunningService: Codable, Sendable, Identifiable {
+    let pid: Int
+    let port: Int
+    let command: String
+    let cwd: String?
+    let project_path: String?
+    let project_name: String?
+    let kind: String?
+    let url: String?
+
+    var id: String { "\(pid)\u{1}\(port)" }
+}

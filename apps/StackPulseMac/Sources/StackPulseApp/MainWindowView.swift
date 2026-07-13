@@ -11,6 +11,8 @@ enum MainSection: String, CaseIterable, Identifiable {
     case usage
     case trends
     case projects
+    case stackHealth
+    case services
     case integrations
     case settings
 
@@ -25,6 +27,8 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .usage: return "Usage"
         case .trends: return "Trends"
         case .projects: return "Projects"
+        case .stackHealth: return "Stack Health"
+        case .services: return "Services"
         case .integrations: return "Integrations"
         case .settings: return "Settings"
         }
@@ -39,6 +43,8 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .usage: return "chart.line.uptrend.xyaxis"
         case .trends: return "chart.xyaxis.line"
         case .projects: return "folder"
+        case .stackHealth: return "shield.lefthalf.filled"
+        case .services: return "server.rack"
         case .integrations: return "puzzlepiece.extension"
         case .settings: return "gearshape"
         }
@@ -54,6 +60,8 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .usage: return "Per-model and per-window breakdowns of tokens, cost, and cache efficiency."
         case .trends: return "Long-run spend and token trends across providers, built from durable usage history that outlives the 30-day logs."
         case .projects: return "Remembered commands for your project folders — copy or run them safely."
+        case .stackHealth: return "Is each project's stack current, compatible, and secure — outdated dependencies, breaking updates, and advisories."
+        case .services: return "Dev servers and services running right now — their ports, which project they belong to, and quick actions."
         case .integrations: return "Detection, health, and the capability matrix for each provider."
         case .settings: return "Versions, refresh cadence, cost methodology, and accessibility."
         }
@@ -231,6 +239,8 @@ struct MainWindowView: View {
         case .usage: UsageSection()
         case .trends: TrendsSection()
         case .projects: ProjectsSection()
+        case .stackHealth: StackHealthSection()
+        case .services: ServicesSection()
         case .integrations: IntegrationsSection()
         case .settings: SettingsSection()
         }

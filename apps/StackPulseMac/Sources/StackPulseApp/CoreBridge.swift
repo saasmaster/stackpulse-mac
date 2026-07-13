@@ -97,4 +97,47 @@ enum CoreBridge {
         guard let data = json.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode(Response.self, from: data))?.points ?? []
     }
+
+    // MARK: Stack Health (protocol ≥ 1.9.0)
+
+    /// Analyze dependency/stack health for projects under the approved roots.
+    /// `checkUpdates` gates the core's network access (registry latest + OSV);
+    /// scans manifests/lockfiles + optional network, so call off the main actor.
+    /// Returns `[]` on any error, empty roots, or an undecodable payload.
+    static func stackHealth(roots: [String], checkUpdates: Bool, maxDepth: Int = 4) -> [ProjectStack] {
+        guard !roots.isEmpty else { return [] }
+        struct Request: Encodable {
+            let op = "get_stack_health"
+            let roots: [String]
+            let max_depth: Int
+            let check_updates: Bool
+        }
+        struct Response: Decodable { let projects: [ProjectStack] }
+        guard let reqData = try? JSONEncoder().encode(
+            Request(roots: roots, max_depth: maxDepth, check_updates: checkUpdates)),
+              let reqJSON = String(data: reqData, encoding: .utf8)
+        else { return [] }
+        let json = handle(reqJSON)
+        guard let data = json.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode(Response.self, from: data))?.projects ?? []
+    }
+
+    // MARK: Services (protocol ≥ 1.9.0)
+
+    /// Detect locally-running dev servers/services, matched to the approved roots.
+    /// Runs `lsof` + reads process cwds, so call off the main actor. Returns `[]`
+    /// on any error or an undecodable payload.
+    static func services(roots: [String]) -> [RunningService] {
+        struct Request: Encodable {
+            let op = "get_services"
+            let roots: [String]
+        }
+        struct Response: Decodable { let services: [RunningService] }
+        guard let reqData = try? JSONEncoder().encode(Request(roots: roots)),
+              let reqJSON = String(data: reqData, encoding: .utf8)
+        else { return [] }
+        let json = handle(reqJSON)
+        guard let data = json.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode(Response.self, from: data))?.services ?? []
+    }
 }

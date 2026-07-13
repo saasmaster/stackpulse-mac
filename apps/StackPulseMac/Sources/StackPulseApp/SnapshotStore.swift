@@ -378,7 +378,13 @@ final class SnapshotStore: ObservableObject {
         // before the first refresh finishes (off the main thread).
         loadHistory()
         // Auto-scan remembered project roots on launch (off the main thread).
-        if !approvedRoots.isEmpty { rescanProjects() }
+        if !approvedRoots.isEmpty {
+            rescanProjects()
+            rescanStackHealth()
+        }
+        // Running dev servers are independent of approved roots (matched to them
+        // when present), so always detect on launch.
+        rescanServices()
     }
 
     /// Cancels any running timer and installs a new one for the current
@@ -479,6 +485,66 @@ final class SnapshotStore: ObservableObject {
                 self.projectsError = found.isEmpty
                     ? "No projects with recognizable commands were found in the selected folder\(roots.count == 1 ? "" : "s")."
                     : nil
+            }
+        }
+    }
+
+    // MARK: Stack Health (dependency/security intelligence, protocol ≥ 1.9.0)
+
+    /// Per-project dependency/stack health from the last scan (most-actionable
+    /// first). Empty until a scan runs (needs approved roots).
+    @Published private(set) var stackHealth: [ProjectStack] = []
+    @Published private(set) var isScanningStack = false
+    @Published private(set) var stackUpdatedAt: Date?
+
+    /// When on, Stack Health contacts official registries + OSV for latest
+    /// versions and advisories; off = local-only inventory (no network). Persisted.
+    @Published var stackCheckUpdates: Bool = SnapshotStore.loadBool(
+        SnapshotStore.stackCheckUpdatesKey, default: true
+    ) {
+        didSet {
+            guard stackCheckUpdates != oldValue else { return }
+            UserDefaults.standard.set(stackCheckUpdates, forKey: Self.stackCheckUpdatesKey)
+        }
+    }
+    private static let stackCheckUpdatesKey = "stackpulse.stackCheckUpdates"
+
+    /// Scans dependency/stack health for the approved roots off the main actor.
+    /// Coalesced; no-op with no roots. `check_updates` follows `stackCheckUpdates`.
+    func rescanStackHealth() {
+        guard !isScanningStack, !approvedRoots.isEmpty else { return }
+        isScanningStack = true
+        let roots = approvedRoots
+        let check = stackCheckUpdates
+        Task.detached(priority: .utility) {
+            let result = CoreBridge.stackHealth(roots: roots, checkUpdates: check, maxDepth: 4)
+            await MainActor.run {
+                self.isScanningStack = false
+                self.stackUpdatedAt = Date()
+                self.stackHealth = result
+            }
+        }
+    }
+
+    // MARK: Services & runtime (running dev servers, protocol ≥ 1.9.0)
+
+    /// Locally-running dev servers/services from the last detection.
+    @Published private(set) var services: [RunningService] = []
+    @Published private(set) var isScanningServices = false
+    @Published private(set) var servicesUpdatedAt: Date?
+
+    /// Detects running dev servers/services off the main actor. Coalesced. Matches
+    /// them to the approved project roots when any are set.
+    func rescanServices() {
+        guard !isScanningServices else { return }
+        isScanningServices = true
+        let roots = approvedRoots
+        Task.detached(priority: .utility) {
+            let result = CoreBridge.services(roots: roots)
+            await MainActor.run {
+                self.isScanningServices = false
+                self.servicesUpdatedAt = Date()
+                self.services = result
             }
         }
     }

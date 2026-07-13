@@ -21,6 +21,12 @@ native-messaging host and a Windows client.
   - **1.8.0** — Insights: `Insight` + `InsightImpact` / `InsightKind` (open enum)
     types and the `UsageSnapshot.insights` list (derived intelligence, computed
     locally by the core).
+  - **1.9.0** — Stack Health + Services: `ProjectStack` / `Dependency` /
+    `Advisory` / `DependencyStatus` / `AdvisorySeverity` / `StackSummary` types +
+    the `get_stack_health` op and `stack_health` response; `RunningService` +
+    the `get_services` op and `services` response. The core produces an offline
+    dependency inventory and detects running dev servers by listening port;
+    latest-version / advisory enrichment happens in the client layer (network).
   - **1.1.0** — `ProviderAnalytics` / `DailyUsage` types and the optional
     `ProviderUsage.analytics` field.
   - **1.2.0** — `Alert` / `AlertSeverity` / `AlertKind` types and the
@@ -141,7 +147,7 @@ ignoring the extra `"kind":"usage_snapshot"` key.
 
 ### `Version`
 
-A `const`-friendly semantic version. `PROTOCOL_VERSION` is `1.8.0`.
+A `const`-friendly semantic version. `PROTOCOL_VERSION` is `1.9.0`.
 
 ```json
 { "major": 1, "minor": 0, "patch": 0 }

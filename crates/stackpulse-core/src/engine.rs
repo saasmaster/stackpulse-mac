@@ -73,6 +73,20 @@ impl Engine {
             CoreRequest::GetHistory { data_dir, days } => CoreResponse::History {
                 points: crate::history::query(&data_dir, days, now_unix()),
             },
+            CoreRequest::GetStackHealth {
+                roots,
+                max_depth,
+                check_updates,
+            } => CoreResponse::StackHealth {
+                projects: crate::stack_health::analyze(
+                    &roots,
+                    max_depth.unwrap_or(4),
+                    check_updates,
+                ),
+            },
+            CoreRequest::GetServices { roots } => CoreResponse::Services {
+                services: crate::services::detect(&roots),
+            },
         }
     }
 

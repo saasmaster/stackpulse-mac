@@ -23,6 +23,8 @@ pub mod paths;
 pub mod pricing;
 pub mod projects;
 pub mod providers;
+pub mod services;
+pub mod stack_health;
 
 pub use engine::{core_version, Engine};
 

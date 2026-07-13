@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 8,
+    minor: 9,
     patch: 0,
 };
 
@@ -638,6 +638,145 @@ pub struct HistoryPoint {
 }
 
 // ---------------------------------------------------------------------------
+// Stack Health — development intelligence (since 1.9.0)
+// ---------------------------------------------------------------------------
+
+/// How an installed dependency compares to the latest available version. Open
+/// enum for forward-compat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyStatus {
+    /// Installed version matches the latest.
+    UpToDate,
+    /// Only patch/minor releases behind (non-breaking by semver).
+    MinorBehind,
+    /// A major version behind (potentially breaking).
+    MajorBehind,
+    /// The package is marked deprecated by its registry.
+    Deprecated,
+    /// Latest version couldn't be determined (offline, unknown registry).
+    Unknown,
+    #[serde(other)]
+    Other,
+}
+
+/// Severity of a security advisory affecting a dependency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdvisorySeverity {
+    Low,
+    Moderate,
+    High,
+    Critical,
+    #[serde(other)]
+    Unknown,
+}
+
+/// One known security advisory affecting a dependency (from OSV / a registry).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Advisory {
+    /// Advisory id (e.g. a GHSA / CVE / OSV id).
+    pub id: String,
+    pub severity: AdvisorySeverity,
+    pub title: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Human range of affected versions, when known.
+    #[serde(default)]
+    pub affected_range: Option<String>,
+}
+
+/// One dependency in a project's manifest, with its update + security status.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Dependency {
+    pub name: String,
+    /// Ecosystem/registry: "npm", "cargo", "pypi", …
+    pub ecosystem: String,
+    /// The version/constraint from the manifest (e.g. "^1.2.0", "1.4.0").
+    #[serde(default)]
+    pub required: Option<String>,
+    /// The concrete installed version from the lockfile, when resolvable.
+    #[serde(default)]
+    pub installed: Option<String>,
+    /// The latest published version, when a registry check succeeded.
+    #[serde(default)]
+    pub latest: Option<String>,
+    pub status: DependencyStatus,
+    /// True for a dev/build-only dependency.
+    #[serde(default)]
+    pub is_dev: bool,
+    /// Security advisories affecting the installed version.
+    #[serde(default)]
+    pub advisories: Vec<Advisory>,
+}
+
+/// Roll-up counts for a project's stack health.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct StackSummary {
+    pub total: u32,
+    pub minor_behind: u32,
+    pub major_behind: u32,
+    pub deprecated: u32,
+    /// Dependencies with at least one advisory.
+    pub vulnerable: u32,
+    /// Highest advisory severity present anywhere, when any.
+    #[serde(default)]
+    pub max_severity: Option<AdvisorySeverity>,
+    /// Whether latest-version data is from a live registry check (vs. an offline,
+    /// local-only inventory).
+    pub checked_updates: bool,
+}
+
+/// One project's dependency/stack health (since 1.9.0). Computed locally from the
+/// project's manifests + lockfiles; `latest`/`advisories` come from official
+/// registries + OSV when a network check is allowed (else a local-only inventory).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectStack {
+    pub name: String,
+    pub path: String,
+    /// Primary ecosystem detected ("npm", "cargo", "pypi", …).
+    pub ecosystem: String,
+    #[serde(default)]
+    pub package_manager: Option<String>,
+    pub summary: StackSummary,
+    /// Dependencies, most-actionable first (advisories, then major-behind, …).
+    #[serde(default)]
+    pub dependencies: Vec<Dependency>,
+    /// Human notes (e.g. "no lockfile — versions are from ranges only").
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Services & runtime — running dev servers/ports (since 1.9.0)
+// ---------------------------------------------------------------------------
+
+/// A locally-running dev server / service detected by its listening TCP port
+/// (since 1.9.0). Read-only detection; the app offers open-URL and a confirmed
+/// stop, never silent process control.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunningService {
+    pub pid: i32,
+    pub port: u16,
+    /// The process's command name / argv0 (e.g. "node", "vite", "next-server").
+    pub command: String,
+    /// Working directory of the process, when resolvable.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// The approved project this service belongs to, matched by `cwd`.
+    #[serde(default)]
+    pub project_path: Option<String>,
+    #[serde(default)]
+    pub project_name: Option<String>,
+    /// Best-effort service kind ("vite", "next", "node", "python", "docker", …).
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// A localhost URL when the service looks like an HTTP dev server.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Request / response envelopes (the FFI + native-messaging surface)
 // ---------------------------------------------------------------------------
 
@@ -680,6 +819,23 @@ pub enum CoreRequest {
         #[serde(default)]
         days: Option<u32>,
     },
+    /// Analyze the dependency/stack health of projects under the approved roots
+    /// (since 1.9.0). With `check_updates` the core may contact official package
+    /// registries + OSV for latest versions and advisories; otherwise it returns
+    /// a local-only inventory with no network.
+    GetStackHealth {
+        roots: Vec<String>,
+        #[serde(default)]
+        max_depth: Option<u32>,
+        #[serde(default)]
+        check_updates: bool,
+    },
+    /// Detect locally-running dev servers/services by listening TCP port, matched
+    /// to the approved project roots when provided (since 1.9.0). Read-only.
+    GetServices {
+        #[serde(default)]
+        roots: Vec<String>,
+    },
 }
 
 /// The core's reply. `request_echo` lets async clients correlate.
@@ -699,6 +855,12 @@ pub enum CoreResponse {
     },
     History {
         points: Vec<HistoryPoint>,
+    },
+    StackHealth {
+        projects: Vec<ProjectStack>,
+    },
+    Services {
+        services: Vec<RunningService>,
     },
     Error(CoreError),
 }

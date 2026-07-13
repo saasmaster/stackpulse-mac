@@ -27,10 +27,12 @@ enum StackPulseMain {
             let live = AnthropicUsageClient._selftest()
             let balances = ProviderBalanceClient._selftest()
             let notify = NotificationManager._selftest()
+            let stack = StackHealthClient._selftest()
             print("anthropic-usage parser: \(live ? "PASS" : "FAIL")")
             print("provider-balance parser: \(balances ? "PASS" : "FAIL")")
             print("notification-gate logic: \(notify ? "PASS" : "FAIL")")
-            exit(live && balances && notify ? 0 : 1)
+            print("stack-health semver logic: \(stack ? "PASS" : "FAIL")")
+            exit(live && balances && notify && stack ? 0 : 1)
         }
         // Hidden diagnostic: exercise the live-limits path (Keychain read + fetch)
         // and print the outcome — the credential *state* and the limit

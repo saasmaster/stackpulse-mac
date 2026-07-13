@@ -18,6 +18,24 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Stack Health + Services — Phase 4 begins (app 0.6.0 / protocol 1.9.0)
+
+The app was heavy on *watching* (usage/analytics) and light on the spec's
+differentiators. This starts closing that gap with two new main-window sections.
+
+- **Stack Health** — "is each project's stack current, compatible, and secure?"
+  The portable core parses your **npm + Cargo** manifests/lockfiles into an
+  offline dependency inventory (installed versions); the macOS app then fetches
+  **latest versions** from the npm/crates registries and **security advisories**
+  from **OSV**, flagging what's outdated (minor vs. major) or vulnerable. Network
+  lives in the app layer, not the core, so the core stays pure/portable.
+- **Services** — "what's running right now?" The core detects local **dev servers
+  by listening TCP port** (`lsof`) and matches them to your projects; the app
+  lists them grouped by project with the port, kind, and an **Open** action.
+- Protocol **1.9.0** (additive): `ProjectStack` / `Dependency` / `Advisory` /
+  `DependencyStatus` / `AdvisorySeverity` / `StackSummary` + `get_stack_health`;
+  `RunningService` + `get_services`.
+
 ### Richer edge sidebar, sidebar positioning, quick Settings, deeper Antigravity (app 0.5.0)
 
 - **The edge sidebar is actually useful now.** It was a name + one percentage per
