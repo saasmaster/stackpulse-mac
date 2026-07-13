@@ -1,0 +1,29 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# Swift / SPM
+apps/**/.build
+apps/**/.swiftpm
+*.xcodeproj
+*.xcworkspace
+
+# Build artifacts
+/dist
+/StackPulse.app
+*.dmg
+*.zip
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+*.iml
+.vscode/
+
+# Local secrets / never commit
+*.pem
+*.p12
+secrets.local.*

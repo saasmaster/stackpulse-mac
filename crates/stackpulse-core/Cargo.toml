@@ -1,0 +1,19 @@
+[package]
+name = "stackpulse-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Portable StackPulse engine: provider detection, local usage/cost scanning, pricing, and the request/response dispatcher. No platform-specific code."
+
+[dependencies]
+stackpulse-protocol = { path = "../stackpulse-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# Integration tests (tests/*.rs) name protocol types directly.
+stackpulse-protocol = { path = "../stackpulse-protocol" }
+
+[features]
+default = []

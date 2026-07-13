@@ -1,0 +1,100 @@
+import Foundation
+import CStackPulseCore
+
+/// Swift front door to the Rust portable core over the C ABI.
+///
+/// All methods are `nonisolated` and safe to call off the main actor — the
+/// snapshot scan is heavy (it reads the local session logs) and must never run
+/// on the main thread. Every string returned by the core is freed here via
+/// `sp_core_string_free`, honoring the FFI memory contract.
+enum CoreBridge {
+    /// Send a raw JSON `CoreRequest`, return the raw JSON `CoreResponse`.
+    static func handle(_ requestJSON: String) -> String {
+        requestJSON.withCString { reqPtr -> String in
+            guard let out = sp_core_handle_request(reqPtr) else { return "" }
+            defer { sp_core_string_free(out) }
+            return String(cString: out)
+        }
+    }
+
+    /// The Rust core crate version.
+    static func coreVersion() -> String {
+        guard let out = sp_core_version() else { return "?" }
+        defer { sp_core_string_free(out) }
+        return String(cString: out)
+    }
+
+    /// Full usage snapshot, decoded. `nil` if the core returned an error or the
+    /// payload could not be decoded.
+    static func snapshot() -> UsageSnapshot? {
+        let json = handle(#"{"op":"get_usage_snapshot"}"#)
+        guard let data = json.data(using: .utf8) else { return nil }
+        // The response carries an extra "kind":"usage_snapshot" tag which the
+        // decoder simply ignores (unknown keys are skipped).
+        return try? JSONDecoder().decode(UsageSnapshot.self, from: data)
+    }
+
+    /// Discover projects and their runnable commands under `roots`. Heavy (walks
+    /// the filesystem), so call off the main actor. Returns `[]` on any error, an
+    /// error response, empty roots, or an undecodable payload — never throws.
+    static func projects(roots: [String], maxDepth: Int = 4) -> [Project] {
+        guard !roots.isEmpty else { return [] }
+
+        struct Request: Encodable {
+            let op = "get_projects"
+            let roots: [String]
+            let max_depth: Int
+        }
+        // Response is tagged `{"kind":"projects","projects":[…]}`; an error
+        // response omits `projects`, so decoding simply yields `[]`.
+        struct Response: Decodable { let projects: [Project] }
+
+        guard let reqData = try? JSONEncoder().encode(Request(roots: roots, max_depth: maxDepth)),
+              let reqJSON = String(data: reqData, encoding: .utf8)
+        else { return [] }
+
+        let json = handle(reqJSON)
+        guard let data = json.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode(Response.self, from: data))?.projects ?? []
+    }
+
+    // MARK: Usage history (protocol ≥ 1.6.0)
+
+    /// Fold today's usage into the durable history store under `dataDir` (seeding
+    /// from the 30-day analytics on first run), then return the accumulated
+    /// history — optionally limited to the most recent `days`. Reads the local
+    /// logs and writes the store, so call off the main actor. Returns `[]` on any
+    /// error, an error response, or an undecodable payload — never throws.
+    static func recordHistory(dataDir: String, days: Int? = nil) -> [HistoryPoint] {
+        history(op: "record_history", dataDir: dataDir, days: days)
+    }
+
+    /// Read the accumulated usage history from `dataDir` **without** recording,
+    /// optionally limited to the most recent `days`. Cheap (a single file read),
+    /// still `nonisolated`. Returns `[]` on any error or undecodable payload.
+    static func getHistory(dataDir: String, days: Int? = nil) -> [HistoryPoint] {
+        history(op: "get_history", dataDir: dataDir, days: days)
+    }
+
+    /// Shared encoder/decoder for the two history ops. The `days` optional is
+    /// encoded as-if-present (nil → key omitted), matching the core's
+    /// `#[serde(default)]`, so omitting it returns the full history.
+    private static func history(op: String, dataDir: String, days: Int?) -> [HistoryPoint] {
+        struct Request: Encodable {
+            let op: String
+            let data_dir: String
+            let days: Int?
+        }
+        // Response is tagged `{"kind":"history","points":[…]}`; an error response
+        // omits `points`, so decoding simply yields `[]`.
+        struct Response: Decodable { let points: [HistoryPoint] }
+
+        guard let reqData = try? JSONEncoder().encode(Request(op: op, data_dir: dataDir, days: days)),
+              let reqJSON = String(data: reqData, encoding: .utf8)
+        else { return [] }
+
+        let json = handle(reqJSON)
+        guard let data = json.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode(Response.self, from: data))?.points ?? []
+    }
+}

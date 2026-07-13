@@ -1,0 +1,4 @@
+module CStackPulseCore {
+    header "include/stackpulse_core.h"
+    export *
+}

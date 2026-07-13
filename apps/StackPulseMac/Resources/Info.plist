@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>StackPulse</string>
+    <key>CFBundleDisplayName</key>
+    <string>StackPulse</string>
+    <key>CFBundleIdentifier</key>
+    <string>ai.stackpulse.mac</string>
+    <key>CFBundleExecutable</key>
+    <string>StackPulseApp</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <!-- Menu-bar accessory app: no Dock icon by default. The main window
+         raises the activation policy at runtime when the user opens it. -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
+    <key>NSSupportsSuddenTermination</key>
+    <false/>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 StackPulse contributors. MIT-licensed. Incorporates attributed open-source work (see NOTICE).</string>
+    <!-- Required so the "Run in Terminal" action can drive Terminal.app via
+         Apple Events (the user still approves the automation prompt once). -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>StackPulse opens Terminal to run a project command you explicitly chose, in a visible window.</string>
+</dict>
+</plist>

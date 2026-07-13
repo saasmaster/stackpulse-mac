@@ -1,0 +1,518 @@
+import SwiftUI
+
+/// Projects (Command Memory): the user approves project folders, StackPulse asks
+/// the core to discover their runnable commands, and this surface remembers them.
+///
+/// Safety is the whole point of the running model here: **Copy** only copies;
+/// **Run in Terminal** opens Terminal at the command's `cwd` so the user watches
+/// it run; and any command whose safety ≠ `read_only` is gated behind an explicit
+/// glass confirmation dialog (destructive ones get a red, extra-loud warning).
+/// Nothing ever runs automatically or in-process.
+struct ProjectsSection: View {
+    @EnvironmentObject var store: SnapshotStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The command awaiting confirmation, if any. Set only for non-read-only
+    /// commands; read-only commands run immediately.
+    @State private var pending: DiscoveredCommand?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                header
+                if store.approvedRoots.isEmpty {
+                    emptyState
+                } else {
+                    rootsBar
+                    discoveredList
+                }
+            }
+            .padding(22)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(WindowBackdrop().ignoresSafeArea())
+        .overlay {
+            if let cmd = pending {
+                CommandConfirmDialog(
+                    command: cmd,
+                    onCancel: { pending = nil },
+                    onConfirm: {
+                        CommandRunner.runInTerminal(command: cmd.command, cwd: cmd.cwd)
+                        pending = nil
+                    }
+                )
+            }
+        }
+        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85),
+                   value: pending?.id)
+    }
+
+    // MARK: Command run gate
+
+    /// Copy just copies. Run gates every non-read-only command behind the dialog;
+    /// read-only commands may run without one (they only read).
+    private func requestRun(_ command: DiscoveredCommand) {
+        if CommandSafety.requiresConfirmation(command.safety) {
+            pending = command
+        } else {
+            CommandRunner.runInTerminal(command: command.command, cwd: command.cwd)
+        }
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Projects")
+                        .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                    Text("Approve project folders and StackPulse remembers their commands — copy them, or run them in Terminal with a safety check.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                if !store.approvedRoots.isEmpty {
+                    Button(action: { store.rescanProjects() }) {
+                        Image(systemName: "arrow.clockwise")
+                            .rotationEffect(.degrees(store.isScanningProjects && !reduceMotion ? 360 : 0))
+                            .animation(store.isScanningProjects && !reduceMotion
+                                ? .linear(duration: 1).repeatForever(autoreverses: false)
+                                : .default, value: store.isScanningProjects)
+                    }
+                    .controlSize(.large)
+                    .help("Rescan project folders")
+                    .disabled(store.isScanningProjects)
+                }
+            }
+            metaBar
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var metaBar: some View {
+        HStack(spacing: 8) {
+            let count = store.projects.count
+            Label("\(count) project\(count == 1 ? "" : "s")", systemImage: "folder")
+            Text("·").foregroundStyle(.tertiary)
+            Label("Scanned \(Format.relative(store.projectsUpdatedAt))", systemImage: "clock.arrow.circlepath")
+            if store.isScanningProjects {
+                Text("·").foregroundStyle(.tertiary)
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.small)
+                    Text("scanning")
+                }
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .labelStyle(.titleAndIcon)
+    }
+
+    // MARK: Empty state
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "folder.badge.plus")
+                .font(.largeTitle)
+                .foregroundStyle(.secondary)
+            Text("Remember your commands")
+                .font(.headline)
+            Text("Add a project folder to let StackPulse remember your commands — test, build, lint, and more — ready to copy or run.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: { store.addRoot() }) {
+                Label("Add Folder…", systemImage: "plus")
+            }
+            .buttonStyle(.glass(tint: .accentColor, prominent: true))
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 44)
+        .glassCard(padding: 24)
+    }
+
+    // MARK: Approved roots
+
+    private var rootsBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Watched folders", systemImage: "folder.badge.gearshape")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: { store.addRoot() }) {
+                    Label("Add Folder…", systemImage: "plus")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.glass(tint: .accentColor))
+            }
+            FlowLayout(spacing: 8, lineSpacing: 8) {
+                ForEach(store.approvedRoots, id: \.self) { root in
+                    RootChip(path: root, onRemove: { store.removeRoot(root) })
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(padding: 16)
+    }
+
+    // MARK: Body for the approved-roots case
+
+    @ViewBuilder private var discoveredList: some View {
+        if store.projects.isEmpty {
+            if store.isScanningProjects {
+                LoadingProjectsView()
+            } else {
+                EmptyStateView(
+                    icon: "magnifyingglass",
+                    title: "Nothing discovered yet",
+                    message: store.projectsError
+                        ?? "No projects with recognizable commands were found in the watched folders."
+                )
+            }
+        } else {
+            ForEach(store.projects) { project in
+                ProjectCard(project: project, onRun: requestRun)
+            }
+        }
+    }
+}
+
+// MARK: - Loading
+
+private struct LoadingProjectsView: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            Text("Scanning your project folders…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+        .glassCard(padding: 24)
+    }
+}
+
+// MARK: - Root chip
+
+private struct RootChip: View {
+    let path: String
+    let onRemove: () -> Void
+
+    private var name: String {
+        (path as NSString).lastPathComponent
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder.fill")
+                .imageScale(.small)
+                .foregroundStyle(.tint)
+            Text(name)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .imageScale(.small)
+                    .foregroundStyle(.tertiary)
+            }
+            .buttonStyle(.borderless)
+            .help("Stop watching \(path)")
+            .accessibilityLabel("Remove \(name)")
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .liquidGlass(cornerRadius: 999, prominence: .low, padding: 0)
+        .help(path)
+    }
+}
+
+// MARK: - Project card
+
+struct ProjectCard: View {
+    let project: Project
+    let onRun: (DiscoveredCommand) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            headerRow
+            pathRow
+            if !metaChips.isEmpty {
+                FlowLayout(spacing: 6, lineSpacing: 6) {
+                    ForEach(metaChips, id: \.0) { chip in
+                        Chip(text: chip.0, systemImage: chip.1, tint: chip.2)
+                    }
+                }
+            }
+            if !project.warnings.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(project.warnings, id: \.self) { warning in
+                        Label(warning, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .labelStyle(.titleAndIcon)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            if !project.commands.isEmpty {
+                Divider().opacity(0.4)
+                VStack(spacing: 6) {
+                    ForEach(project.commands) { command in
+                        CommandRow(command: command, onRun: onRun)
+                    }
+                }
+            } else {
+                Text("No runnable commands discovered for this project.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(padding: 16)
+    }
+
+    private var headerRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "shippingbox.fill")
+                .foregroundStyle(.tint)
+            Text(project.name)
+                .font(.headline)
+            Spacer()
+            if let test = project.testCommand {
+                Button(action: { onRun(test) }) {
+                    Label("Test Project", systemImage: "checkmark.seal")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.glass(tint: .green, prominent: true))
+                .help("Run \"\(test.label)\": \(test.command)")
+            }
+        }
+    }
+
+    private var pathRow: some View {
+        Text(project.path)
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// (text, systemImage, tint) for the identity chips row.
+    private var metaChips: [(String, String, Color)] {
+        var chips: [(String, String, Color)] = []
+        if let branch = project.git_branch {
+            chips.append((branch, "arrow.triangle.branch", .purple))
+        }
+        if let pm = project.package_manager {
+            chips.append((pm, "cube.box", .cyan))
+        }
+        for marker in project.markers {
+            chips.append((marker, "tag", .secondary))
+        }
+        for framework in project.frameworks {
+            chips.append((framework, "square.stack.3d.up", .blue))
+        }
+        return chips
+    }
+}
+
+// MARK: - Command row
+
+struct CommandRow: View {
+    let command: DiscoveredCommand
+    let onRun: (DiscoveredCommand) -> Void
+
+    @State private var copied = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(command.label)
+                        .font(.callout.weight(.semibold))
+                    SafetyChip(safety: command.safety)
+                }
+                Text(command.command)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            Spacer(minLength: 8)
+            Button(action: doCopy) {
+                Label(copied ? "Copied" : "Copy",
+                      systemImage: copied ? "checkmark" : "doc.on.doc")
+                    .font(.caption.weight(.medium))
+            }
+            .buttonStyle(.glass)
+            .help("Copy the command to the clipboard")
+
+            Button(action: { onRun(command) }) {
+                Label("Run in Terminal", systemImage: "play.fill")
+                    .font(.caption.weight(.medium))
+            }
+            .buttonStyle(.glass(tint: CommandSafety.isDestructive(command.safety) ? .red : .accentColor))
+            .help(CommandSafety.requiresConfirmation(command.safety)
+                ? "Confirm, then run in Terminal"
+                : "Run in Terminal")
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func doCopy() {
+        CommandRunner.copy(command.command)
+        copied = true
+        Task {
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            copied = false
+        }
+    }
+}
+
+// MARK: - Command confirmation dialog (safety-critical)
+
+/// A hand-crafted Liquid Glass confirmation gate for running a command — the same
+/// scrim + centered frosted card + glass-buttons pattern as ``GlassConfirmDialog``,
+/// but showing the exact command, its working directory, and its safety label.
+/// Destructive commands get a red, explicit warning. Escape / Cancel always
+/// aborts; the run button is never the default action, so Return can't run it.
+struct CommandConfirmDialog: View {
+    let command: DiscoveredCommand
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    private var isDestructive: Bool { CommandSafety.isDestructive(command.safety) }
+    private var accent: Color { isDestructive ? .red : CommandSafety.color(command.safety) }
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.black.opacity(0.28))
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onCancel)
+
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 8) {
+                    Image(systemName: isDestructive ? "exclamationmark.octagon.fill" : "terminal.fill")
+                        .foregroundStyle(accent)
+                        .font(.title3)
+                    Text(isDestructive ? "Run a destructive command?" : "Run this command?")
+                        .font(.title3.weight(.semibold))
+                }
+
+                Text(command.command)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.primary.opacity(0.06))
+                    )
+
+                Label(command.cwd, systemImage: "folder")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .labelStyle(.titleAndIcon)
+
+                HStack(spacing: 8) {
+                    SafetyChip(safety: command.safety)
+                    Text("Opens in Terminal — you'll see it run and can stop it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if isDestructive {
+                    Label("This can delete or reset files. Make sure you understand exactly what it does before running it.",
+                          systemImage: "trash.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.red)
+                        .labelStyle(.titleAndIcon)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                HStack(spacing: 10) {
+                    Spacer()
+                    Button("Cancel", action: onCancel)
+                        .buttonStyle(.glass)
+                        .keyboardShortcut(.cancelAction)
+                    Button(isDestructive ? "Run anyway" : "Run in Terminal", action: onConfirm)
+                        .buttonStyle(.glass(tint: accent, prominent: true))
+                }
+                .padding(.top, 2)
+            }
+            .frame(maxWidth: 440, alignment: .leading)
+            .liquidGlass(cornerRadius: 24, prominence: .elevated, padding: 24)
+            .padding(40)
+            .transition(.scale(scale: 0.94).combined(with: .opacity))
+        }
+        .accessibilityAddTraits(.isModal)
+    }
+}
+
+// MARK: - Flow layout (wrapping chips)
+
+/// A minimal wrapping layout: lays children left→right, wrapping to a new line
+/// when the row would overflow the proposed width. Used for the roots bar and the
+/// per-project marker/framework chips.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+    var lineSpacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var maxRowWidth: CGFloat = 0
+
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                // wrap
+                maxRowWidth = max(maxRowWidth, x - spacing)
+                x = 0
+                y += rowHeight + lineSpacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        maxRowWidth = max(maxRowWidth, x - spacing)
+        let totalHeight = y + rowHeight
+        let width = maxWidth.isFinite ? maxWidth : max(0, maxRowWidth)
+        return CGSize(width: width, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        let maxWidth = bounds.width
+        var x: CGFloat = bounds.minX
+        var y: CGFloat = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.minX + maxWidth {
+                x = bounds.minX
+                y += rowHeight + lineSpacing
+                rowHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}

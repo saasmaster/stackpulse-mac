@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Portability gate: the shared core must build + test on a non-macOS host.
+  # This catches platform leakage before the Mac app is finished (ADR-0005).
+  portable-core:
+    name: Portable core (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Clippy (portable crates, deny warnings)
+        run: cargo clippy -p stackpulse-protocol -p stackpulse-core -p stackpulse-cli --all-targets -- -D warnings
+      - name: Build portable crates
+        run: cargo build -p stackpulse-protocol -p stackpulse-core -p stackpulse-cli
+      - name: Test portable crates
+        run: cargo test -p stackpulse-protocol -p stackpulse-core -p stackpulse-cli
+
+  # Optional: prove a Windows cross-compile of the pure-logic crates.
+  windows-cross:
+    name: Windows cross-compile (core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - name: Install mingw
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - uses: Swatinem/rust-cache@v2
+      - name: Cross-build portable crates
+        run: cargo build -p stackpulse-protocol -p stackpulse-core -p stackpulse-cli --target x86_64-pc-windows-gnu
+
+  # Full macOS build: workspace + the Swift app + a headless data smoke test.
+  macos-app:
+    name: macOS app
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build workspace + release core
+        run: cargo build --workspace && ./scripts/build-core.sh release
+      - name: Test workspace
+        run: cargo test --workspace
+      - name: Build Swift app
+        working-directory: apps/StackPulseMac
+        run: swift build -c release
+      - name: Headless snapshot smoke (Swift -> FFI -> core)
+        working-directory: apps/StackPulseMac
+        run: |
+          ./.build/release/StackPulseApp --version
+          # On a clean runner there are no provider logs; the snapshot must
+          # still be valid JSON listing the providers.
+          ./.build/release/StackPulseApp --dump | python3 -c 'import sys,json; d=json.load(sys.stdin); assert d["protocol_version"]["major"]==1; print("providers:", len(d["providers"]))'

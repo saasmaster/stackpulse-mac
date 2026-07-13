@@ -1,0 +1,16 @@
+[package]
+name = "stackpulse-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Thin C ABI over stackpulse-core so native clients (the macOS Swift app, and later a Windows client) can call the portable engine. JSON in, JSON out."
+
+[lib]
+name = "stackpulse_ffi"
+# staticlib → linked directly into the Swift executable (single binary, no
+# subprocess). cdylib is also produced for callers that prefer dynamic loading.
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+stackpulse-core = { path = "../stackpulse-core" }

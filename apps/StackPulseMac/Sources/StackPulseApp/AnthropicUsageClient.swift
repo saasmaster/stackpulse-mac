@@ -1,0 +1,340 @@
+import Foundation
+
+/// Fetches Claude's live session/weekly usage limits from Anthropic using the
+/// user's *own* local Claude Code OAuth login.
+///
+/// SECURITY (this whole type is the network boundary):
+///   • The bearer token is read on demand, held in a local value, sent ONLY to
+///     the exact HTTPS endpoint below, and dropped. It is never logged, never
+///     persisted, never written to disk, never printed.
+///   • The raw HTTP response body is never logged either — only parsed. On any
+///     failure we surface a short, generic error string (never the body/token).
+///   • We never attempt a token refresh (that would mutate the user's creds). An
+///     expired token yields an empty result plus a "sign in again" note.
+///
+/// This runs entirely off the main actor (all funcs are `nonisolated`/`static`)
+/// and returns `Sendable` values, so it composes cleanly with Swift 6 strict
+/// concurrency: read creds → fetch → parse → hand `[LimitWindow]` to the store.
+enum AnthropicUsageClient {
+    /// The one and only destination the token is ever sent to.
+    static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+
+    /// Required OAuth beta header value for this endpoint.
+    static let betaHeader = "oauth-2025-04-20"
+
+    /// Fallback User-Agent version when the core hasn't detected the Claude CLI.
+    static let defaultClaudeVersion = "2.1.181"
+
+    /// The provenance stamped on every live-fetched limit, matching the
+    /// protocol's convention for values the provider itself reported.
+    static let liveProvenance = "provider_reported"
+
+    /// Result of a live-limits fetch. `error` is a short, user-facing note (never
+    /// the token or raw response); `nil` means "no problem to report".
+    struct Outcome: Sendable {
+        var limits: [LimitWindow]
+        var error: String?
+
+        static let empty = Outcome(limits: [], error: nil)
+    }
+
+    // MARK: Public entry point
+
+    /// Reads the local Claude Code credentials and, if valid, fetches live
+    /// limits. All failure modes degrade to an empty `Outcome` (silently, or
+    /// with a short note) — never a throw, never a crash.
+    ///
+    /// - Parameter claudeVersion: the core-detected Claude CLI version (e.g.
+    ///   `"2.1.181"`), used to build the `User-Agent`. Falls back to
+    ///   `defaultClaudeVersion` when `nil`.
+    static func fetchClaudeLimits(claudeVersion: String?) async -> Outcome {
+        switch KeychainProbe.readClaudeCredentialsResult() {
+        case .notFound:
+            // No local login → nothing to show, and nothing worth alarming about.
+            return .empty
+        case .accessDenied:
+            return Outcome(
+                limits: [],
+                error: "Allow Keychain access to show Claude's live limits — click “Always Allow” on the macOS prompt."
+            )
+        case .parseFailed:
+            return Outcome(limits: [], error: "Couldn't read the Claude login for live limits.")
+        case .ok(let creds):
+            if creds.isExpired {
+                // Deliberately do NOT refresh (would mutate the user's creds).
+                return Outcome(limits: [], error: "Sign in to Claude Code to refresh live limits.")
+            }
+            return await fetchUsage(token: creds.accessToken, claudeVersion: claudeVersion)
+        }
+    }
+
+    // MARK: Networking
+
+    private static func fetchUsage(token: String, claudeVersion: String?) async -> Outcome {
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 15
+        // The token goes out on THIS header, to THIS endpoint, and nowhere else.
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(betaHeader, forHTTPHeaderField: "anthropic-beta")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(userAgent(claudeVersion: claudeVersion), forHTTPHeaderField: "User-Agent")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return Outcome(limits: [], error: "Live limits: unexpected response.")
+            }
+            guard http.statusCode == 200 else {
+                // Note the status code only — never the body (may echo the token
+                // context or account details).
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    return Outcome(
+                        limits: [],
+                        error: "Sign in to Claude Code to refresh live limits."
+                    )
+                }
+                if http.statusCode == 429 {
+                    // Transient rate-limit — the store keeps the last-good value and
+                    // backs off, so this rarely reaches the UI.
+                    return Outcome(limits: [], error: "Live limits are rate-limited — retrying shortly.")
+                }
+                return Outcome(limits: [], error: "Live limits unavailable (HTTP \(http.statusCode)).")
+            }
+            let limits = parseUsage(data)
+            if limits.isEmpty {
+                return Outcome(limits: [], error: "Live limits: no limit data in response.")
+            }
+            return Outcome(limits: limits, error: nil)
+        } catch {
+            // Offline / TLS / timeout. Report the category, never the details.
+            return Outcome(limits: [], error: "Live limits unavailable (offline?).")
+        }
+    }
+
+    private static func userAgent(claudeVersion: String?) -> String {
+        let version = (claudeVersion?.isEmpty == false ? claudeVersion : nil) ?? defaultClaudeVersion
+        return "claude-code/\(version)"
+    }
+
+    // MARK: Parsing (pure, headless-testable)
+
+    /// Decodes the Anthropic usage payload into `[LimitWindow]`, tolerating BOTH
+    /// the modern `limits: [...]` array and the legacy flat fields. Pure and
+    /// side-effect-free: it never touches the network, Keychain, or disk, so it
+    /// is exercised directly by `_selftest()`.
+    ///
+    /// Uses `JSONSerialization` (rather than `Codable`) on purpose: the two
+    /// shapes differ structurally, `percent`/`utilization` may be Int or Double,
+    /// and `resets_at` may be a unix number OR an ISO-8601 string — a permissive
+    /// hand-decode is far less brittle here than a bespoke `Decodable`.
+    static func parseUsage(_ data: Data) -> [LimitWindow] {
+        guard
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [] }
+
+        var out: [LimitWindow] = []
+        var seen = Set<String>()
+
+        func add(_ window: LimitWindow) {
+            guard !seen.contains(window.label) else { return }   // live/first wins
+            seen.insert(window.label)
+            out.append(window)
+        }
+
+        // --- Modern shape: `limits: [{ kind, group?, percent, resets_at, scope?, is_active? }]`
+        if let limits = root["limits"] as? [[String: Any]] {
+            for entry in limits {
+                if let active = entry["is_active"] as? Bool, active == false { continue }
+                guard let raw = coerceDouble(entry["percent"] ?? entry["utilization"]) else { continue }
+                let kind = (entry["kind"] as? String) ?? ""
+                let group = entry["group"] as? String
+                let label = modernLabel(kind: kind, group: group, scopedModel: scopeModelName(entry["scope"]))
+                add(LimitWindow(
+                    label: label,
+                    used_percent: normalizePercent(raw),
+                    window_minutes: windowMinutes(forLabel: label),
+                    resets_at_unix: parseResetsAt(entry["resets_at"]),
+                    provenance: liveProvenance
+                ))
+            }
+        }
+
+        // --- Legacy flat shape: `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`.
+        let legacy: [(key: String, label: String)] = [
+            ("five_hour", "5h"),
+            ("seven_day", "weekly"),
+            ("seven_day_opus", "weekly (Opus)"),
+            ("seven_day_sonnet", "weekly (Sonnet)"),
+        ]
+        for (key, label) in legacy {
+            guard
+                let entry = root[key] as? [String: Any],
+                let raw = coerceDouble(entry["utilization"] ?? entry["percent"])
+            else { continue }
+            add(LimitWindow(
+                label: label,
+                used_percent: normalizePercent(raw),
+                window_minutes: windowMinutes(forLabel: label),
+                resets_at_unix: parseResetsAt(entry["resets_at"]),
+                provenance: liveProvenance
+            ))
+        }
+
+        return out
+    }
+
+    // MARK: Parsing helpers
+
+    /// Maps a modern `kind`/`group`/`scope` to a display label consistent with the
+    /// legacy variants. Real kinds include `session`, `weekly_all` (→ "weekly"),
+    /// and `weekly_scoped` with a `scope.model.display_name` (→ "weekly (Fable)").
+    static func modernLabel(kind: String, group: String?, scopedModel: String? = nil) -> String {
+        let k = kind.lowercased()
+        let g = (group ?? "").lowercased()
+        let isWeekly = k.contains("seven") || k.contains("week") || k.contains("day") || g.contains("week")
+        if isWeekly {
+            if let m = scopedModel, !m.isEmpty { return "weekly (\(m))" }
+            if g.contains("opus") || k.contains("opus") { return "weekly (Opus)" }
+            if g.contains("sonnet") || k.contains("sonnet") { return "weekly (Sonnet)" }
+            return "weekly"
+        }
+        // session / five_hour / hour → the 5-hour window.
+        return "5h"
+    }
+
+    /// Extracts a scoped model name from a modern limit's `scope.model` object,
+    /// e.g. `{ "model": { "display_name": "Fable" } }` → "Fable".
+    static func scopeModelName(_ any: Any?) -> String? {
+        guard let scope = any as? [String: Any],
+              let model = scope["model"] as? [String: Any] else { return nil }
+        if let name = model["display_name"] as? String, !name.isEmpty { return name }
+        if let id = model["id"] as? String, !id.isEmpty { return id }
+        return nil
+    }
+
+    static func windowMinutes(forLabel label: String) -> Int {
+        label == "5h" ? 300 : 10080
+    }
+
+    /// Normalizes a utilization/percent value: a fraction (≤ 1.0) is scaled ×100;
+    /// anything larger is already a percent.
+    static func normalizePercent(_ value: Double) -> Double {
+        value <= 1.0 ? value * 100.0 : value
+    }
+
+    static func coerceDouble(_ any: Any?) -> Double? {
+        switch any {
+        case let n as NSNumber: return n.doubleValue
+        case let d as Double: return d
+        case let i as Int: return Double(i)
+        case let s as String: return Double(s)
+        default: return nil
+        }
+    }
+
+    /// Parses `resets_at`, which may be a unix epoch (seconds OR milliseconds),
+    /// a numeric string, or an ISO-8601 timestamp. Returns unix **seconds**.
+    static func parseResetsAt(_ any: Any?) -> Int64? {
+        if let d = coerceDouble(any) {
+            return d > 1_000_000_000_000 ? Int64(d / 1000.0) : Int64(d)
+        }
+        if let s = any as? String {
+            return parseISO8601(s)
+        }
+        return nil
+    }
+
+    private static func parseISO8601(_ s: String) -> Int64? {
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFraction.date(from: s) { return Int64(date.timeIntervalSince1970) }
+
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        if let date = plain.date(from: s) { return Int64(date.timeIntervalSince1970) }
+
+        return nil
+    }
+
+    // MARK: Headless self-test
+
+    /// Exercises `parseUsage` against embedded fixtures covering BOTH the legacy
+    /// flat shape and the modern `limits:` array, returning `true` when every
+    /// assertion holds. Pure and offline — safe to run headlessly (it never
+    /// touches the Keychain or network). Kept in the shipping binary (not behind
+    /// `#if DEBUG`) so it can be compiled + run standalone for verification.
+    ///
+    /// Fixtures validated against:
+    ///
+    /// Legacy:
+    /// ```json
+    /// { "five_hour":        { "utilization": 0.45, "resets_at": 1893456000 },
+    ///   "seven_day":        { "utilization": 12.5, "resets_at": "2026-07-19T00:00:00Z" },
+    ///   "seven_day_opus":   { "utilization": 0.9,  "resets_at": 1893456000 },
+    ///   "seven_day_sonnet": { "utilization": 30,   "resets_at": 1893456000000 } }
+    /// ```
+    /// Modern:
+    /// ```json
+    /// { "limits": [
+    ///     { "kind": "five_hour", "percent": 45,   "resets_at": "2026-07-12T18:00:00.500Z", "is_active": true },
+    ///     { "kind": "seven_day", "percent": 0.125,"resets_at": 1893456000 },
+    ///     { "kind": "seven_day", "group": "opus", "percent": 88, "resets_at": 1893456000 },
+    ///     { "kind": "seven_day", "group": "sonnet","percent": 0.02,"resets_at": 1893456000, "is_active": false } ] }
+    /// ```
+    static func _selftest() -> Bool {
+        func approx(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 0.0001 }
+
+        // 1) Legacy flat shape (also checks millis→seconds + ISO parsing).
+        let legacyJSON = """
+        {
+          "five_hour":        { "utilization": 0.45, "resets_at": 1893456000 },
+          "seven_day":        { "utilization": 12.5, "resets_at": "2026-07-19T00:00:00Z" },
+          "seven_day_opus":   { "utilization": 0.9,  "resets_at": 1893456000 },
+          "seven_day_sonnet": { "utilization": 30,   "resets_at": 1893456000000 }
+        }
+        """
+        let legacy = parseUsage(Data(legacyJSON.utf8))
+        func find(_ list: [LimitWindow], _ label: String) -> LimitWindow? {
+            list.first { $0.label == label }
+        }
+        guard legacy.count == 4,
+              let l5 = find(legacy, "5h"), approx(l5.used_percent, 45), l5.window_minutes == 300,
+              l5.resets_at_unix == 1_893_456_000,
+              let lw = find(legacy, "weekly"), approx(lw.used_percent, 12.5), lw.window_minutes == 10080,
+              (lw.resets_at_unix ?? 0) > 1_700_000_000,               // ISO parsed to a real epoch
+              let lo = find(legacy, "weekly (Opus)"), approx(lo.used_percent, 90),
+              let ls = find(legacy, "weekly (Sonnet)"), approx(ls.used_percent, 30),
+              ls.resets_at_unix == 1_893_456_000,                     // millis normalized to seconds
+              legacy.allSatisfy({ $0.provenance == liveProvenance })
+        else { return false }
+
+        // 2) Modern `limits:` array (also checks is_active:false is skipped).
+        let modernJSON = """
+        {
+          "limits": [
+            { "kind": "five_hour", "percent": 45,    "resets_at": "2026-07-12T18:00:00.500Z", "is_active": true },
+            { "kind": "seven_day", "percent": 0.125, "resets_at": 1893456000 },
+            { "kind": "seven_day", "group": "opus",  "percent": 88, "resets_at": 1893456000 },
+            { "kind": "seven_day", "group": "sonnet","percent": 0.02, "resets_at": 1893456000, "is_active": false }
+          ]
+        }
+        """
+        let modern = parseUsage(Data(modernJSON.utf8))
+        guard modern.count == 3,                                       // sonnet skipped (is_active:false)
+              let m5 = find(modern, "5h"), approx(m5.used_percent, 45), m5.window_minutes == 300,
+              (m5.resets_at_unix ?? 0) > 1_700_000_000,                // fractional-second ISO parsed
+              let mw = find(modern, "weekly"), approx(mw.used_percent, 12.5), mw.window_minutes == 10080,
+              let mo = find(modern, "weekly (Opus)"), approx(mo.used_percent, 88), mo.window_minutes == 10080,
+              find(modern, "weekly (Sonnet)") == nil
+        else { return false }
+
+        // 3) Garbage / empty inputs degrade to [].
+        guard parseUsage(Data("not json".utf8)).isEmpty,
+              parseUsage(Data("{}".utf8)).isEmpty
+        else { return false }
+
+        return true
+    }
+}

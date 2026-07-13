@@ -1,0 +1,16 @@
+[package]
+name = "stackpulse-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Command-line front end to the StackPulse core: prints usage snapshots as JSON or a human summary. Also serves as the portability smoke-test target and a fallback bridge for clients."
+
+[[bin]]
+name = "stackpulse"
+path = "src/main.rs"
+
+[dependencies]
+stackpulse-core = { path = "../stackpulse-core" }
+stackpulse-protocol = { path = "../stackpulse-protocol" }
+serde_json.workspace = true
