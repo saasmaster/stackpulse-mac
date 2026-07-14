@@ -108,6 +108,13 @@ enum WebPreview {
         "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
+    /// Whether a project is a launchable web app — a **cheap** check (no file I/O)
+    /// suitable for filtering long lists every render. Full `plan`/`recipe` (which
+    /// read `package.json` for the port) should be computed lazily, once.
+    static func isLaunchable(_ project: Project) -> Bool {
+        devCommand(for: project) != nil
+    }
+
     /// If a dev server for this project is already running (matched by the core),
     /// return its URL so we can open it directly instead of relaunching.
     static func runningURL(for project: Project, among services: [RunningService]) -> String? {

@@ -18,6 +18,25 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Projects performance + sidebar Apps tab (app 0.15.0)
+
+Fixed the Projects scroll stutter with 20+ projects loaded, and added a mini
+launcher to the edge sidebar.
+
+- **Lazy + cached rendering.** The project list is now a lazy two-column grid, so
+  only the visible cards (and their subviews) are ever built. The launch panel
+  used to re-read `node_modules` and parse `package.json` on *every* render for
+  *every* card — that's now resolved **once per project, off the main thread**,
+  and cached. Filtering "is this launchable?" no longer touches the filesystem.
+- **Tighter distribution.** Command lists are collapsed by default (a "N commands"
+  toggle), so each card is short — a 20-project list is far more compact, and the
+  grid uses two columns on wider windows. Launch + Test Project stay always-visible.
+- **Sidebar Apps tab.** The edge sidebar's tabs are now **Cards / Live / Apps** —
+  the new **Apps** tab lists every launchable project with one-tap **Launch** (or
+  **Open** when it's already running), a mini Launcher without opening the window.
+
+Swift-only; build clean.
+
 ### Launcher menu + easier folder adding (app 0.14.0)
 
 - **New Launcher section.** A dedicated sidebar menu (🚀) that lists every web app

@@ -295,8 +295,17 @@ struct ProjectsSection: View {
                 )
             }
         } else {
-            ForEach(store.projects) { project in
-                ProjectCard(project: project, onRun: requestRun, onCapture: requestCapture)
+            // Lazy + two-column so a 20+ project list stays short and only the
+            // visible cards (and their subviews) are ever built — the fix for the
+            // scroll stutter.
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 420, maximum: 680), spacing: 14, alignment: .top)],
+                alignment: .leading,
+                spacing: 14
+            ) {
+                ForEach(store.projects) { project in
+                    ProjectCard(project: project, onRun: requestRun, onCapture: requestCapture)
+                }
             }
         }
     }
@@ -359,6 +368,10 @@ struct ProjectCard: View {
     let onRun: (DiscoveredCommand) -> Void
     let onCapture: (DiscoveredCommand) -> Void
 
+    /// Commands are collapsed by default — the launch panel + Test Project are the
+    /// primary actions, and hiding the command list keeps a 20-card grid light.
+    @State private var showCommands = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             headerRow
@@ -384,9 +397,25 @@ struct ProjectCard: View {
             }
             if !project.commands.isEmpty {
                 Divider().opacity(0.4)
-                VStack(spacing: 6) {
-                    ForEach(project.commands) { command in
-                        CommandRow(command: command, onRun: onRun, onCapture: onCapture)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { showCommands.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: showCommands ? "chevron.down" : "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                        Text("\(project.commands.count) command\(project.commands.count == 1 ? "" : "s")")
+                            .font(.caption.weight(.medium))
+                        Spacer()
+                    }
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if showCommands {
+                    VStack(spacing: 6) {
+                        ForEach(project.commands) { command in
+                            CommandRow(command: command, onRun: onRun, onCapture: onCapture)
+                        }
                     }
                 }
             } else {

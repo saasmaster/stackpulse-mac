@@ -9,9 +9,11 @@ struct LauncherSection: View {
     @EnvironmentObject var store: SnapshotStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// The projects that are actually web-servable (have a launch recipe).
+    /// The projects that are actually web-servable. Uses the cheap check (no file
+    /// I/O) so filtering a long list doesn't stutter; each card resolves its full
+    /// recipe lazily.
     private var launchable: [Project] {
-        store.projects.filter { WebPreview.plan(for: $0) != nil }
+        store.projects.filter(WebPreview.isLaunchable)
     }
 
     var body: some View {

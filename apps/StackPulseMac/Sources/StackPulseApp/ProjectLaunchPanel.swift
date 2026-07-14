@@ -15,23 +15,31 @@ struct ProjectLaunchPanel: View {
     @EnvironmentObject private var store: SnapshotStore
     @State private var copiedCommand = false
     @State private var lanIP: String?
-
-    /// Whether dependencies are already installed (so the recipe can skip install).
-    private var nodeModulesExists: Bool {
-        FileManager.default.fileExists(atPath: (project.path as NSString).appendingPathComponent("node_modules"))
-    }
-
-    /// The one-paste launch recipe for this project, when it's a servable web app.
-    private var launchRecipe: WebPreview.Recipe? {
-        WebPreview.recipe(for: project, installNeeded: !nodeModulesExists)
-    }
+    /// The launch recipe, resolved once (reads `node_modules` + `package.json`) and
+    /// cached — never recomputed during scroll/relayout, which is what made a long
+    /// Projects list stutter.
+    @State private var recipe: WebPreview.Recipe?
 
     /// If a matching dev server is already running, its URL (open it directly).
+    /// Cheap (in-memory filter), so it stays reactive to running servers.
     private var liveURL: String? { WebPreview.runningURL(for: project, among: store.services) }
 
     var body: some View {
         content
-            .onAppear { if lanIP == nil { lanIP = LocalNetwork.primaryIPv4() } }
+            // Resolve the recipe + LAN IP once per distinct project, off the main
+            // thread, instead of on every body evaluation.
+            .task(id: project.id) { await resolve() }
+    }
+
+    private func resolve() async {
+        let proj = project
+        let result = await Task.detached(priority: .utility) { () -> (WebPreview.Recipe?, String?) in
+            let installed = FileManager.default.fileExists(
+                atPath: (proj.path as NSString).appendingPathComponent("node_modules"))
+            return (WebPreview.recipe(for: proj, installNeeded: !installed), LocalNetwork.primaryIPv4())
+        }.value
+        recipe = result.0
+        lanIP = result.1
     }
 
     @ViewBuilder private var content: some View {
@@ -49,7 +57,7 @@ struct ProjectLaunchPanel: View {
                 Chip(text: "running", systemImage: "bolt.fill", tint: .green)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-        } else if let recipe = launchRecipe {
+        } else if let recipe {
             let inner = VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Button { WebPreview.launch(recipe) } label: {

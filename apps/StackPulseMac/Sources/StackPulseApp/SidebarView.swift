@@ -7,13 +7,13 @@ import SwiftUI
 /// Which slice of the sidebar is showing. Persisted across launches so the
 /// sidebar reopens on the tab you left it on.
 enum SidebarTab: String, CaseIterable {
-    case cards, activity, preview
+    case cards, activity, apps
 
     var label: String {
         switch self {
         case .cards: return "Cards"
         case .activity: return "Live"
-        case .preview: return "Web"
+        case .apps: return "Apps"
         }
     }
 
@@ -21,7 +21,7 @@ enum SidebarTab: String, CaseIterable {
         switch self {
         case .cards: return "rectangle.stack"
         case .activity: return "bolt.horizontal"
-        case .preview: return "globe"
+        case .apps: return "rocket"
         }
     }
 }
@@ -104,7 +104,7 @@ struct SidebarView: View {
                     switch tab {
                     case .cards: cardsTab(snapshot)
                     case .activity: activityTab
-                    case .preview: previewTab
+                    case .apps: appsTab
                     }
 
                     quickNav
@@ -216,29 +216,33 @@ struct SidebarView: View {
         }
     }
 
-    /// Preview: locally-running dev servers, one tap to open in the browser.
-    private var previewTab: some View {
-        let running = store.services.filter { ($0.url?.isEmpty == false) }
-        return VStack(alignment: .leading, spacing: 10) {
-            if running.isEmpty {
-                sidebarEmpty("globe", "No dev servers running",
-                             "Launch a preview from Projects — it opens here when it's up.")
+    /// Apps: every launchable web project, one tap to Launch (or Open when it's
+    /// already running). A mini Launcher right in the edge sidebar.
+    private var appsTab: some View {
+        let apps = store.projects.filter(WebPreview.isLaunchable)
+        return VStack(alignment: .leading, spacing: 8) {
+            if apps.isEmpty {
+                sidebarEmpty("rocket", "No apps yet",
+                             "Add a project folder in Projects — your apps show up here to launch.")
                 Button {
-                    store.pendingSection = .projects
+                    store.pendingSection = .launcher
                     onOpenMainWindow?()
                 } label: {
-                    Label("Open Projects", systemImage: "folder")
+                    Label("Open Launcher", systemImage: "rocket")
                         .font(.caption.weight(.medium))
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.glass(tint: .accentColor))
             } else {
-                ForEach(running) { service in
-                    SidebarServiceRow(service: service)
+                ForEach(apps) { project in
+                    SidebarAppRow(project: project)
                 }
             }
         }
-        .onAppear { if store.services.isEmpty { store.rescanServices() } }
+        .onAppear {
+            if store.projects.isEmpty && !store.approvedRoots.isEmpty { store.rescanProjects() }
+            store.rescanServices()
+        }
     }
 
     private func sidebarEmpty(_ icon: String, _ title: String, _ subtitle: String) -> some View {
@@ -424,40 +428,53 @@ private struct SidebarProviderRow: View {
     }
 }
 
-/// A compact running-service row for the sidebar Preview tab: a live green dot,
-/// the project/command, its port, and a one-tap Open in the browser.
-private struct SidebarServiceRow: View {
-    let service: RunningService
+/// A compact launchable-app row for the sidebar Apps tab: project name, and a
+/// one-tap **Open** when a matching dev server is running, else **Launch**. The
+/// full recipe (which reads `package.json`) is resolved only when tapped, so the
+/// list stays cheap to render.
+private struct SidebarAppRow: View {
+    let project: Project
+    @EnvironmentObject private var store: SnapshotStore
+
+    private var liveURL: String? { WebPreview.runningURL(for: project, among: store.services) }
 
     var body: some View {
         HStack(spacing: 8) {
-            StatusDot(color: .green)
-                .accessibilityLabel("running")
-            VStack(alignment: .leading, spacing: 2) {
-                Text(service.project_name ?? service.command)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                HStack(spacing: 5) {
-                    if let kind = service.kind, !kind.isEmpty {
-                        Text(kind)
-                    }
-                    Text("port \(service.port)")
-                }
-                .font(.system(size: 9).monospacedDigit())
-                .foregroundStyle(.secondary)
+            if liveURL != nil {
+                StatusDot(color: .green).accessibilityLabel("running")
+            } else {
+                Image(systemName: "shippingbox.fill")
+                    .imageScale(.small)
+                    .foregroundStyle(.tint)
             }
+            Text(project.name)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer(minLength: 4)
-            if let url = service.url, !url.isEmpty {
-                Button { WebPreview.open(url) } label: {
-                    Image(systemName: "arrow.up.right.square")
+            if let live = liveURL {
+                Button { WebPreview.open(live) } label: {
+                    Label("Open", systemImage: "arrow.up.right.square").font(.caption2.weight(.medium))
                 }
-                .buttonStyle(.borderless)
-                .help("Open \(url)")
-                .accessibilityLabel("Open \(url)")
+                .buttonStyle(.glass(tint: .accentColor))
+                .help("Open \(live)")
+            } else {
+                Button(action: launch) {
+                    Label("Launch", systemImage: "play.fill").font(.caption2.weight(.medium))
+                }
+                .buttonStyle(.glass(tint: .blue))
+                .help("Launch \(project.name) and open it when ready")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard(padding: 10)
+    }
+
+    private func launch() {
+        let installed = FileManager.default.fileExists(
+            atPath: (project.path as NSString).appendingPathComponent("node_modules"))
+        if let recipe = WebPreview.recipe(for: project, installNeeded: !installed) {
+            WebPreview.launch(recipe)
+        }
     }
 }
