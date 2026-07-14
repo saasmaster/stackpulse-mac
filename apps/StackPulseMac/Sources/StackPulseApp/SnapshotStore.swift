@@ -429,6 +429,38 @@ final class SnapshotStore: ObservableObject {
         UserDefaults.standard.set(approvedRoots, forKey: Self.approvedRootsKey)
     }
 
+    // MARK: Favorite projects (pin-to-top)
+
+    /// Favorited project paths — pinned to the top of the Launcher and the sidebar
+    /// Apps tab. Persisted so pins survive relaunch.
+    @Published private(set) var favoriteProjectPaths: Set<String> = SnapshotStore.loadFavorites()
+
+    private static let favoritesKey = "stackpulse.favoriteProjects"
+
+    private static func loadFavorites() -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: favoritesKey) ?? [])
+    }
+
+    func isFavorite(_ path: String) -> Bool { favoriteProjectPaths.contains(path) }
+
+    func toggleFavorite(_ path: String) {
+        if favoriteProjectPaths.contains(path) {
+            favoriteProjectPaths.remove(path)
+        } else {
+            favoriteProjectPaths.insert(path)
+        }
+        UserDefaults.standard.set(Array(favoriteProjectPaths), forKey: Self.favoritesKey)
+    }
+
+    /// Projects ordered favorites-first, then case-insensitively by name.
+    func favoritesFirst(_ projects: [Project]) -> [Project] {
+        projects.sorted { a, b in
+            let fa = isFavorite(a.path), fb = isFavorite(b.path)
+            if fa != fb { return fa }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+    }
+
     /// Presents an open panel for one or more folders and adds any new ones to the
     /// approved roots, then rescans. Directories only, multiple selection allowed.
     func addRoot() {

@@ -18,6 +18,19 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Sidebar Copy command + favorites + filter (app 0.16.0)
+
+- **Copy the one-paste command from the sidebar.** Each app row in the sidebar
+  Apps tab now has a **Copy** button that copies the whole launch recipe (cd +
+  install-if-needed + start) — the same easy one-liner as the main section, not
+  the individual commands. Plus Launch (or Open when running).
+- **Favorites (pin to top).** Tap the ⭐ on any app — in the sidebar or the
+  Launcher — to pin it to the top. Favorites persist across launches.
+- **Filter.** Both the sidebar Apps tab and the Launcher have a search field to
+  filter apps by name, and a **Favorites-only** toggle. Handy with 20+ projects.
+
+Swift-only; build clean.
+
 ### Projects performance + sidebar Apps tab (app 0.15.0)
 
 Fixed the Projects scroll stutter with 20+ projects loaded, and added a mini

@@ -35,6 +35,9 @@ struct SidebarView: View {
     var onOpenMainWindow: (() -> Void)? = nil
 
     @AppStorage("sidebar.tab") private var tabRaw: String = SidebarTab.cards.rawValue
+    /// Apps-tab filter text and favorites-only toggle.
+    @State private var appQuery = ""
+    @State private var favoritesOnly = false
     private var tab: SidebarTab {
         get { SidebarTab(rawValue: tabRaw) ?? .cards }
         nonmutating set { tabRaw = newValue.rawValue }
@@ -216,12 +219,17 @@ struct SidebarView: View {
         }
     }
 
-    /// Apps: every launchable web project, one tap to Launch (or Open when it's
-    /// already running). A mini Launcher right in the edge sidebar.
+    /// Apps: every launchable web project — favorites pinned on top, filterable —
+    /// each with a one-paste **Copy** command and a **Launch** (or **Open** when
+    /// running). A mini Launcher right in the edge sidebar.
     private var appsTab: some View {
-        let apps = store.projects.filter(WebPreview.isLaunchable)
+        let all = store.projects.filter(WebPreview.isLaunchable)
+        let filtered = store.favoritesFirst(all.filter { p in
+            (appQuery.isEmpty || p.name.localizedCaseInsensitiveContains(appQuery))
+                && (!favoritesOnly || store.isFavorite(p.path))
+        })
         return VStack(alignment: .leading, spacing: 8) {
-            if apps.isEmpty {
+            if all.isEmpty {
                 sidebarEmpty("rocket", "No apps yet",
                              "Add a project folder in Projects — your apps show up here to launch.")
                 Button {
@@ -234,8 +242,17 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.glass(tint: .accentColor))
             } else {
-                ForEach(apps) { project in
-                    SidebarAppRow(project: project)
+                appsFilterBar
+                if filtered.isEmpty {
+                    Text(favoritesOnly ? "No favorites yet — tap a star to pin one." : "No apps match “\(appQuery)”.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 8)
+                } else {
+                    ForEach(filtered) { project in
+                        SidebarAppRow(project: project)
+                    }
                 }
             }
         }
@@ -243,6 +260,32 @@ struct SidebarView: View {
             if store.projects.isEmpty && !store.approvedRoots.isEmpty { store.rescanProjects() }
             store.rescanServices()
         }
+    }
+
+    /// A compact filter row: a name search field and a favorites-only toggle.
+    private var appsFilterBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.caption2).foregroundStyle(.secondary)
+            TextField("Filter apps", text: $appQuery)
+                .textFieldStyle(.plain)
+                .font(.caption)
+            if !appQuery.isEmpty {
+                Button { appQuery = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.caption2).foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+            }
+            Button { favoritesOnly.toggle() } label: {
+                Image(systemName: favoritesOnly ? "star.fill" : "star")
+                    .font(.caption)
+                    .foregroundStyle(favoritesOnly ? .yellow : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(favoritesOnly ? "Showing favorites only" : "Show favorites only")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .liquidGlass(cornerRadius: 8, prominence: .low, padding: 0)
     }
 
     private func sidebarEmpty(_ icon: String, _ title: String, _ subtitle: String) -> some View {
@@ -428,53 +471,77 @@ private struct SidebarProviderRow: View {
     }
 }
 
-/// A compact launchable-app row for the sidebar Apps tab: project name, and a
-/// one-tap **Open** when a matching dev server is running, else **Launch**. The
-/// full recipe (which reads `package.json`) is resolved only when tapped, so the
-/// list stays cheap to render.
+/// A compact launchable-app row for the sidebar Apps tab: a favorite star, the
+/// project name (green dot when running), a one-paste **Copy command**, and
+/// **Launch** (or **Open** when a matching dev server is running). The full recipe
+/// (which reads `package.json`) is resolved only when tapped, so the list stays
+/// cheap to render.
 private struct SidebarAppRow: View {
     let project: Project
     @EnvironmentObject private var store: SnapshotStore
+    @State private var copied = false
 
     private var liveURL: String? { WebPreview.runningURL(for: project, among: store.services) }
+    private var isFavorite: Bool { store.isFavorite(project.path) }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
+            Button { store.toggleFavorite(project.path) } label: {
+                Image(systemName: isFavorite ? "star.fill" : "star")
+                    .font(.caption2)
+                    .foregroundStyle(isFavorite ? Color.yellow : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(isFavorite ? "Unpin" : "Pin to top")
+
             if liveURL != nil {
                 StatusDot(color: .green).accessibilityLabel("running")
-            } else {
-                Image(systemName: "shippingbox.fill")
-                    .imageScale(.small)
-                    .foregroundStyle(.tint)
             }
             Text(project.name)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 4)
+
+            Button(action: copyCommand) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.caption2)
+            }
+            .buttonStyle(.glass)
+            .help("Copy the one-paste launch command")
+
             if let live = liveURL {
                 Button { WebPreview.open(live) } label: {
-                    Label("Open", systemImage: "arrow.up.right.square").font(.caption2.weight(.medium))
+                    Image(systemName: "arrow.up.right.square").font(.caption2)
                 }
                 .buttonStyle(.glass(tint: .accentColor))
                 .help("Open \(live)")
             } else {
                 Button(action: launch) {
-                    Label("Launch", systemImage: "play.fill").font(.caption2.weight(.medium))
+                    Image(systemName: "play.fill").font(.caption2)
                 }
                 .buttonStyle(.glass(tint: .blue))
                 .help("Launch \(project.name) and open it when ready")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard(padding: 10)
+        .glassCard(padding: 8)
+    }
+
+    /// Resolve the recipe on demand (reads node_modules + package.json once, on tap).
+    private func recipe() -> WebPreview.Recipe? {
+        let installed = FileManager.default.fileExists(
+            atPath: (project.path as NSString).appendingPathComponent("node_modules"))
+        return WebPreview.recipe(for: project, installNeeded: !installed)
     }
 
     private func launch() {
-        let installed = FileManager.default.fileExists(
-            atPath: (project.path as NSString).appendingPathComponent("node_modules"))
-        if let recipe = WebPreview.recipe(for: project, installNeeded: !installed) {
-            WebPreview.launch(recipe)
-        }
+        if let recipe = recipe() { WebPreview.launch(recipe) }
+    }
+
+    private func copyCommand() {
+        guard let recipe = recipe() else { return }
+        CommandRunner.copy(recipe.oneLiner)
+        copied = true
+        Task { try? await Task.sleep(nanoseconds: 1_400_000_000); copied = false }
     }
 }

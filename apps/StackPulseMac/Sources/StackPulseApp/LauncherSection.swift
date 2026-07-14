@@ -8,12 +8,19 @@ import SwiftUI
 struct LauncherSection: View {
     @EnvironmentObject var store: SnapshotStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var query = ""
+    @State private var favoritesOnly = false
 
-    /// The projects that are actually web-servable. Uses the cheap check (no file
-    /// I/O) so filtering a long list doesn't stutter; each card resolves its full
-    /// recipe lazily.
+    /// Every web-servable project (cheap check, no file I/O so filtering a long
+    /// list doesn't stutter — each card resolves its full recipe lazily).
+    private var allApps: [Project] { store.projects.filter(WebPreview.isLaunchable) }
+
+    /// Filtered by the search text + favorites toggle, favorites pinned on top.
     private var launchable: [Project] {
-        store.projects.filter(WebPreview.isLaunchable)
+        store.favoritesFirst(allApps.filter { p in
+            (query.isEmpty || p.name.localizedCaseInsensitiveContains(query))
+                && (!favoritesOnly || store.isFavorite(p.path))
+        })
     }
 
     var body: some View {
@@ -23,12 +30,21 @@ struct LauncherSection: View {
             } else {
                 VStack(alignment: .leading, spacing: 16) {
                     toolbar
-                    if launchable.isEmpty {
+                    if allApps.isEmpty {
                         noAppsState
                     } else {
-                        LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                            ForEach(launchable) { project in
-                                LaunchCard(project: project)
+                        filterBar
+                        if launchable.isEmpty {
+                            Text(favoritesOnly ? "No favorites yet — tap a project's star to pin it."
+                                 : "No apps match “\(query)”.")
+                                .font(.callout).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 12)
+                        } else {
+                            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                                ForEach(launchable) { project in
+                                    LaunchCard(project: project)
+                                }
                             }
                         }
                     }
@@ -49,7 +65,7 @@ struct LauncherSection: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Label("\(launchable.count) app\(launchable.count == 1 ? "" : "s")", systemImage: "rocket")
+            Label("\(allApps.count) app\(allApps.count == 1 ? "" : "s")", systemImage: "rocket")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             if store.isScanningProjects {
@@ -66,6 +82,33 @@ struct LauncherSection: View {
             }
             .buttonStyle(.glass)
             .disabled(store.isScanningProjects)
+        }
+    }
+
+    /// A search field + favorites-only toggle for the app grid.
+    private var filterBar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Filter apps by name", text: $query)
+                    .textFieldStyle(.plain)
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .liquidGlass(cornerRadius: 10, prominence: .low, padding: 0)
+
+            Button { favoritesOnly.toggle() } label: {
+                Label("Favorites", systemImage: favoritesOnly ? "star.fill" : "star")
+                    .font(.caption.weight(.medium))
+            }
+            .buttonStyle(.glass(tint: favoritesOnly ? .yellow : .secondary, prominent: favoritesOnly))
+            .help("Show only favorited apps")
+            Spacer(minLength: 0)
         }
     }
 
@@ -119,10 +162,19 @@ struct LauncherSection: View {
 /// shared ``ProjectLaunchPanel`` (Launch / Copy command / URLs).
 struct LaunchCard: View {
     let project: Project
+    @EnvironmentObject private var store: SnapshotStore
+
+    private var isFavorite: Bool { store.isFavorite(project.path) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
+                Button { store.toggleFavorite(project.path) } label: {
+                    Image(systemName: isFavorite ? "star.fill" : "star")
+                        .foregroundStyle(isFavorite ? Color.yellow : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(isFavorite ? "Unpin from top" : "Pin to top")
                 Image(systemName: "shippingbox.fill").foregroundStyle(.tint)
                 Text(project.name).font(.headline).lineLimit(1)
                 Spacer()
