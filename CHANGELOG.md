@@ -18,6 +18,29 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Evidence-based completion + handoff packages (app 0.21.0)
+
+Two more Phase-5 capabilities, both composed from data StackPulse already holds —
+no new scanning, no protocol change.
+
+- **Did anyone actually check this?** A mission that changed files now shows its
+  **verification**: the latest captured test/check run for that project, with its
+  outcome and age. Crucially, when there's no evidence it says so —
+  *"Not verified — no test run captured for this project since these changes"* —
+  because an agent going quiet is **not** evidence the work is good. A passing run
+  from *before* the session started is also called out as not evidence for these
+  changes, rather than quietly counted as a pass.
+- **Cross-agent handoff packages.** Every mission gets **Handoff** (copy) and
+  **Save…** — a Markdown package describing what the session touched (changed
+  files), what that risks (scope flags), what it was last doing (latest turn),
+  whether anything verified it, and how to get back (the latest checkpoint + its
+  restore command). Hand it to another agent, or to yourself next week.
+- The package omits sections rather than padding them, so a reader can tell
+  "nothing changed" from "we don't know" — and it never claims work is verified
+  when it isn't.
+
+Swift-only; build clean.
+
 ### Spend budgets — Phase 5 guardrails (app 0.20.0)
 
 - **Set a budget, get warned before it hurts.** Settings → **Spend budget** takes a

@@ -114,9 +114,18 @@ struct MissionRow: View {
 struct MissionCard: View {
     let mission: Mission
 
+    @EnvironmentObject private var store: SnapshotStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var filesExpanded = false
     @State private var copied = false
+    @State private var handedOff = false
+
+    /// The strongest completion evidence we have for this session's project: a real
+    /// test/check outcome. `nil` means unverified — which the UI says out loud
+    /// rather than implying the work is fine.
+    private var verification: CommandRun? {
+        MissionEvidence.latestVerification(for: mission, in: store.commandRuns)
+    }
 
     private var messageLabel: String? {
         guard let count = mission.message_count else { return nil }
@@ -132,8 +141,6 @@ struct MissionCard: View {
         guard let path = mission.project_path, !path.isEmpty else { return nil }
         return path
     }
-
-    private var hasActions: Bool { revealPath != nil || previewText != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -157,11 +164,11 @@ struct MissionCard: View {
             }
             if !mission.changedFiles.isEmpty {
                 changedFilesBlock(mission.changedFiles)
+                verificationRow
             }
             metricsRow
-            if hasActions {
-                actionsRow
-            }
+            // Always present: a handoff package can be built for any session.
+            actionsRow
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .liquidGlass(cornerRadius: 16, tint: cardTint, padding: 14)
@@ -186,6 +193,55 @@ struct MissionCard: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Latest turn: \(preview)")
+    }
+
+    // MARK: Verification (evidence-based completion)
+
+    /// Whether anything actually verified this session's changes. Shown only when
+    /// the agent changed files — that's when "did anyone check?" matters.
+    ///
+    /// An agent going quiet is NOT evidence the work is good, so the no-evidence
+    /// case is stated plainly instead of being left blank (which would read as
+    /// "fine"). A passing run from *before* the session started is also called out,
+    /// since it says nothing about what the agent just did.
+    @ViewBuilder private var verificationRow: some View {
+        if let v = verification {
+            let stale = !MissionEvidence.isAfterSessionStart(v, mission)
+            let tint: Color = stale ? .secondary : (v.status == .passed ? .green : .red)
+            HStack(spacing: 6) {
+                Image(systemName: v.status == .passed
+                      ? (stale ? "clock.badge.questionmark" : "checkmark.seal.fill")
+                      : "xmark.octagon.fill")
+                    .imageScale(.small)
+                    .foregroundStyle(tint)
+                Text(stale
+                     ? "\(v.label) passed, but before this session started — not evidence for these changes"
+                     : "\(v.label) \(v.status == .passed ? "passed" : "failed") \(Format.relative(v.startedAt))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(stale
+                ? "Verification predates this session"
+                : "\(v.label) \(v.status == .passed ? "passed" : "failed")")
+        } else {
+            HStack(spacing: 6) {
+                Image(systemName: "questionmark.circle")
+                    .imageScale(.small)
+                    .foregroundStyle(.orange)
+                Text("Not verified — no test run captured for this project since these changes")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Not verified: no test run captured for these changes")
+        }
     }
 
     // MARK: Scope guard
@@ -292,8 +348,54 @@ struct MissionCard: View {
                 .help("Copy the latest turn")
                 .accessibilityLabel(copied ? "Copied latest turn" : "Copy latest turn")
             }
+
+            Button(action: copyHandoff) {
+                Label(handedOff ? "Copied" : "Handoff",
+                      systemImage: handedOff ? "checkmark" : "arrowshape.turn.up.right")
+                    .font(.caption2)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help("Copy a handoff package — what this session touched, what it risks, whether anything verified it, and how to get back")
+            .accessibilityLabel(handedOff ? "Copied handoff package" : "Copy handoff package")
+
+            Button(action: saveHandoff) {
+                Label("Save…", systemImage: "square.and.arrow.down")
+                    .font(.caption2)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help("Save the handoff package as Markdown")
+
             Spacer(minLength: 0)
         }
+    }
+
+    /// Compose the handoff from what we already know about this session.
+    private func handoffMarkdown() -> String {
+        HandoffPackage.markdown(
+            mission: mission,
+            evidence: MissionEvidence.latestRun(for: mission, in: store.commandRuns),
+            verification: verification,
+            // Only checkpoints already loaded for this project — never trigger a
+            // git read from a button tap in a list.
+            checkpoints: mission.project_path.flatMap { store.checkpoints[$0] } ?? [],
+            generatedAt: Date()
+        )
+    }
+
+    private func copyHandoff() {
+        CommandRunner.copy(handoffMarkdown())
+        handedOff = true
+        Task {
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            handedOff = false
+        }
+    }
+
+    private func saveHandoff() {
+        Exporter.save(text: handoffMarkdown(),
+                      suggestedName: HandoffPackage.suggestedFilename(for: mission))
     }
 
     // MARK: Actions
