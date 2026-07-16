@@ -265,7 +265,7 @@ fn claude_mission(path: &Path, now_unix: i64) -> Option<Mission> {
         if let Some(c) = non_empty(parsed.cwd) {
             project_path = Some(c);
         }
-        if let Some(b) = non_empty(parsed.git_branch) {
+        if let Some(b) = real_branch(parsed.git_branch) {
             branch = Some(b);
         }
         if let Some(msg) = parsed.message {
@@ -309,6 +309,9 @@ fn claude_mission(path: &Path, now_unix: i64) -> Option<Mission> {
     let project_name = project_path.as_deref().map(last_path_component);
     let changed_files = git_changed_files(project_path.as_deref());
     let scope_flags = crate::scope_guard::flags_for(&changed_files);
+    // The log's own value is usually the useless "HEAD"; ask git instead. Live
+    // like `changed_files`, so both describe the same working tree right now.
+    let branch = branch.or_else(|| git_current_branch(project_path.as_deref()));
     let started_at_unix = first_line(path)
         .and_then(|l| serde_json::from_str::<ClaudeLine>(&l).ok())
         .and_then(|l| l.timestamp)
@@ -534,6 +537,10 @@ fn codex_mission(path: &Path, now_unix: i64) -> Option<Mission> {
     let project_name = project_path.as_deref().map(last_path_component);
     let changed_files = git_changed_files(project_path.as_deref());
     let scope_flags = crate::scope_guard::flags_for(&changed_files);
+    // Codex logs don't carry a branch, so read the project's current one — same
+    // live source as `changed_files` above. Computed before the struct literal
+    // takes ownership of `project_path`.
+    let branch = git_current_branch(project_path.as_deref());
 
     Some(Mission {
         provider: ProviderId::Codex,
@@ -541,7 +548,7 @@ fn codex_mission(path: &Path, now_unix: i64) -> Option<Mission> {
         status: status_for(now_unix, last_activity_unix),
         project_path,
         project_name,
-        branch: None, // Codex logs don't carry a git branch
+        branch,
         model,
         started_at_unix,
         last_activity_unix,
@@ -611,6 +618,42 @@ fn status_for(now_unix: i64, last_activity_unix: i64) -> MissionStatus {
 /// `Some(s)` only when `s` is present and non-empty, else `None`.
 fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.is_empty())
+}
+
+/// A *real* branch name, or `None`.
+///
+/// Claude's logs record `gitBranch` as the literal string `"HEAD"` in practice —
+/// that's what `git rev-parse --abbrev-ref HEAD` prints for a detached HEAD, and
+/// it is not a branch anyone is on. Rendering it verbatim put a meaningless
+/// "HEAD" chip on every mission card, so treat it (and git's other placeholder)
+/// as "unknown" rather than passing the noise through.
+fn real_branch(value: Option<String>) -> Option<String> {
+    non_empty(value).filter(|b| b != "HEAD" && b != "(no branch)")
+}
+
+/// The project's current branch, straight from git.
+///
+/// Used when the session log doesn't name a usable one. This reports *now*, not
+/// what the session was on historically — which is exactly consistent with
+/// [`git_changed_files`], the other field on a mission read live from the same
+/// working tree. Returns `None` for a detached HEAD, a non-repo, or any failure.
+fn git_current_branch(project_path: Option<&str>) -> Option<String> {
+    let path = match project_path {
+        Some(p) if !p.is_empty() => p,
+        _ => return None,
+    };
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    real_branch(Some(
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    ))
 }
 
 /// Files changed in a mission's project working tree, from `git status
@@ -967,6 +1010,29 @@ mod tests {
         assert_eq!(
             parse_porcelain("\n M ok.ts\nxy\n"),
             vec!["ok.ts".to_string()]
+        );
+    }
+
+    #[test]
+    /// `HEAD` is what git prints for a detached HEAD, and it's what Claude's logs
+    /// record in practice — it is not a branch, so it must never reach the UI.
+    #[test]
+    fn real_branch_rejects_git_placeholders() {
+        assert_eq!(real_branch(Some("main".into())), Some("main".into()));
+        assert_eq!(real_branch(Some("feat/x".into())), Some("feat/x".into()));
+        assert_eq!(real_branch(Some("HEAD".into())), None);
+        assert_eq!(real_branch(Some("(no branch)".into())), None);
+        assert_eq!(real_branch(Some(String::new())), None);
+        assert_eq!(real_branch(None), None);
+    }
+
+    #[test]
+    fn git_current_branch_is_none_without_a_repo() {
+        assert_eq!(git_current_branch(None), None);
+        assert_eq!(git_current_branch(Some("")), None);
+        assert_eq!(
+            git_current_branch(Some("/nonexistent/definitely/not/here")),
+            None
         );
     }
 

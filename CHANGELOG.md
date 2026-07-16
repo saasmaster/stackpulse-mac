@@ -18,6 +18,23 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Fix: missions showed a meaningless "HEAD" branch (app 0.21.1)
+
+- **Every mission claimed it was on a branch called `HEAD`.** Claude's session logs
+  record `gitBranch` as the literal string `"HEAD"` (verified: 3,237 occurrences
+  across recent sessions, and not one real branch name). `HEAD` is what git prints
+  for a *detached* HEAD — it is not a branch anyone is on — so we were rendering
+  noise on every mission card and writing it into handoff packages.
+- **Now:** `HEAD` / `(no branch)` are rejected as branch names, and the branch is
+  read live from git for the mission's project instead. That's deliberately
+  consistent with `changed_files`, which is already read live from the same working
+  tree — both describe the project *now*.
+- **Codex missions get a branch for the first time** (their logs never carried one,
+  so the field was always empty).
+- Verified on real sessions: `stackpulse-mac` and `zeder-erp` now correctly report
+  **`main`**, and sessions started in the non-repo umbrella folder correctly report
+  **no branch** instead of "HEAD". 132 core tests (3 new), clippy/fmt clean.
+
 ### Evidence-based completion + handoff packages (app 0.21.0)
 
 Two more Phase-5 capabilities, both composed from data StackPulse already holds —
