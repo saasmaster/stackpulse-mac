@@ -32,8 +32,12 @@ enum MainSection: String, CaseIterable, Identifiable {
     case integrations
     case settings
 
-    /// The five deep sections shown in the sidebar, in order.
-    static let primary: [MainSection] = [.home, .launcher, .usage, .missions, .advisor, .projects]
+    /// The deep sections shown in the sidebar, ordered so related surfaces sit
+    /// together: what's happening now (Home), your apps (Launcher → Projects),
+    /// your agents (Missions), your numbers (Usage), what to improve (Advisor).
+    /// Launcher and Projects are adjacent because they're two views of the same
+    /// thing — run it vs. manage it.
+    static let primary: [MainSection] = [.home, .launcher, .projects, .missions, .usage, .advisor]
 
     var id: String { rawValue }
 

@@ -12,7 +12,10 @@ struct AdvisorSection: View {
         var label: String {
             switch self {
             case .efficiency: return "Efficiency"
-            case .projects: return "Projects"
+            // Deliberately NOT "Projects": that word already names a primary
+            // section (folder management). Reusing it here made the same label
+            // mean two different things depending on where you were.
+            case .projects: return "Repo Health"
             case .dependencies: return "Dependencies"
             }
         }

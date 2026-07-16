@@ -18,6 +18,21 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### App icon fix + menu clarity (app 0.18.0)
+
+- **Icon now fills its tile.** The `.icns` artwork was a squircle inset inside the
+  1024 canvas with transparent margins (the pre-Tahoe convention). macOS 26
+  composites such legacy icons onto its **own light backing tile** and shrinks
+  them — the white frame you saw in the Dock. The icon is now rebuilt **full-bleed
+  and fully opaque**, so the system masks *our* art as the tile. Verified by
+  rendering `NSWorkspace.icon(forFile:)` for the packaged app before and after.
+- **"Projects" meant two things.** It named both a primary section (folder
+  management) and an Advisor sub-tab (the repository radar). The Advisor tab is now
+  **Repo Health**, so a label means one thing wherever you read it.
+- **Related menus sit together.** Sidebar order is now Home · Launcher · Projects ·
+  Missions · Usage · Advisor — Launcher and Projects are adjacent because they're
+  two views of the same thing (run it vs. manage it).
+
 ### Project usage attribution + first-run onboarding (app 0.17.0 / protocol 1.13.0)
 
 Closes the Phase 3 "project/task usage" gap and the last Phase 1 gap (onboarding).
