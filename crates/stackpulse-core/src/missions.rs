@@ -255,7 +255,10 @@ fn claude_mission(path: &Path, now_unix: i64) -> Option<Mission> {
             Ok(p) => p,
             Err(_) => continue, // tolerate partial / malformed lines
         };
-        let ts_unix = parsed.timestamp.as_deref().and_then(parse_iso_unix);
+        let ts_unix = parsed
+            .timestamp
+            .as_deref()
+            .and_then(crate::datetime::parse_iso_unix);
         if let Some(t) = ts_unix {
             last_activity_unix = Some(t);
         }
@@ -316,7 +319,7 @@ fn claude_mission(path: &Path, now_unix: i64) -> Option<Mission> {
         .and_then(|l| serde_json::from_str::<ClaudeLine>(&l).ok())
         .and_then(|l| l.timestamp)
         .as_deref()
-        .and_then(parse_iso_unix);
+        .and_then(crate::datetime::parse_iso_unix);
 
     Some(Mission {
         provider: ProviderId::Claude,
@@ -416,7 +419,7 @@ fn codex_mission(path: &Path, now_unix: i64) -> Option<Mission> {
         };
         let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
         let ts = v.get("timestamp").and_then(Value::as_str).unwrap_or("");
-        let ts_unix = parse_iso_unix(ts);
+        let ts_unix = crate::datetime::parse_iso_unix(ts);
         if let Some(t) = ts_unix {
             last_activity_unix = Some(t);
         }
@@ -508,7 +511,7 @@ fn codex_mission(path: &Path, now_unix: i64) -> Option<Mission> {
         started_at_unix = head
             .get("timestamp")
             .and_then(Value::as_str)
-            .and_then(parse_iso_unix);
+            .and_then(crate::datetime::parse_iso_unix);
         if head.get("type").and_then(Value::as_str) == Some("session_meta") {
             if let Some(meta) = head.get("payload") {
                 if session_id.is_none() {
@@ -785,64 +788,6 @@ fn tail_lines(path: &Path, max_bytes: u64) -> Vec<String> {
     lines
 }
 
-/// Parse an ISO-8601 timestamp into Unix seconds. Reuses
-/// [`crate::datetime`] for the date math (no `chrono`). The `Z`/UTC forms used
-/// by both providers are the common case; a numeric offset is honored if
-/// present, and sub-second precision is ignored.
-fn parse_iso_unix(ts: &str) -> Option<i64> {
-    let date = crate::datetime::parse_iso_date(ts)?;
-    let days = crate::datetime::days_from_civil(date.year, date.month, date.day);
-    let mut secs = days * 86_400;
-
-    // Optional "THH:MM:SS[.fff][±HH:MM|Z]" tail (byte index 10 is the 'T').
-    if let Some(time_part) = ts.get(11..) {
-        let b = time_part.as_bytes();
-        if b.len() >= 8 && b[2] == b':' && b[5] == b':' {
-            let hh: i64 = time_part
-                .get(0..2)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-            let mm: i64 = time_part
-                .get(3..5)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-            let ss: i64 = time_part
-                .get(6..8)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-            if hh <= 23 && mm <= 59 && ss <= 60 {
-                secs += hh * 3600 + mm * 60 + ss;
-                // A trailing numeric offset shifts local → UTC.
-                //
-                // `.get`, not `[8..]`: the ':' checks above only prove bytes 2
-                // and 5 are ASCII, so a multi-byte char can straddle byte 8 and
-                // slicing there panics. The FFI catches it, which turned one odd
-                // character in one log line into an error for the WHOLE snapshot
-                // — every provider blank. This file promises never to panic.
-                let rest = time_part
-                    .get(8..)
-                    .unwrap_or("")
-                    .trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
-                if let Some(pos) = rest.find(['+', '-']) {
-                    let off = &rest[pos..];
-                    let sign = if off.starts_with('-') { -1 } else { 1 };
-                    let digits: String = off.chars().filter(char::is_ascii_digit).collect();
-                    if digits.len() >= 2 {
-                        let oh: i64 = digits[0..2].parse().unwrap_or(0);
-                        let om: i64 = if digits.len() >= 4 {
-                            digits[2..4].parse().unwrap_or(0)
-                        } else {
-                            0
-                        };
-                        secs -= sign * (oh * 3600 + om * 60);
-                    }
-                }
-            }
-        }
-    }
-    Some(secs)
-}
-
 #[cfg(test)]
 mod tests {
     /// A multi-byte char can straddle byte 8 of the time field (only bytes 2 and
@@ -852,10 +797,10 @@ mod tests {
     #[test]
     fn parse_iso_unix_survives_multibyte_in_the_time_field() {
         // Must not panic; the date still resolves.
-        let midnight = parse_iso_unix("2026-01-01T00:00:00Z").unwrap();
-        let got = parse_iso_unix("2026-01-01T12:34:\u{20ac}X").unwrap();
+        let midnight = crate::datetime::parse_iso_unix("2026-01-01T00:00:00Z").unwrap();
+        let got = crate::datetime::parse_iso_unix("2026-01-01T12:34:\u{20ac}X").unwrap();
         assert_eq!(got, midnight + 12 * 3600 + 34 * 60);
-        assert!(parse_iso_unix("2026-01-01T\u{20ac}\u{20ac}:00:00Z").is_some());
+        assert!(crate::datetime::parse_iso_unix("2026-01-01T\u{20ac}\u{20ac}:00:00Z").is_some());
     }
 
     use super::*;
@@ -863,19 +808,25 @@ mod tests {
     #[test]
     fn parse_iso_unix_matches_midnight_and_time() {
         let midnight = crate::datetime::days_from_civil(2026, 7, 12) * 86_400;
-        assert_eq!(parse_iso_unix("2026-07-12"), Some(midnight));
         assert_eq!(
-            parse_iso_unix("2026-07-12T00:00:00Z"),
+            crate::datetime::parse_iso_unix("2026-07-12"),
+            Some(midnight)
+        );
+        assert_eq!(
+            crate::datetime::parse_iso_unix("2026-07-12T00:00:00Z"),
             Some(midnight),
             "Z is treated as UTC"
         );
         assert_eq!(
-            parse_iso_unix("2026-07-12T01:02:03.500Z"),
+            crate::datetime::parse_iso_unix("2026-07-12T01:02:03.500Z"),
             Some(midnight + 3600 + 120 + 3)
         );
         // +02:00 offset means the UTC instant is two hours earlier.
-        assert_eq!(parse_iso_unix("2026-07-12T02:00:00+02:00"), Some(midnight));
-        assert_eq!(parse_iso_unix("not-a-date"), None);
+        assert_eq!(
+            crate::datetime::parse_iso_unix("2026-07-12T02:00:00+02:00"),
+            Some(midnight)
+        );
+        assert_eq!(crate::datetime::parse_iso_unix("not-a-date"), None);
     }
 
     #[test]

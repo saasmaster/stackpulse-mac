@@ -72,16 +72,20 @@ struct SidebarView: View {
                     .accessibilityLabel("Keep Awake is on")
             }
             // Quick toggle: flip the sidebar to the other screen edge live.
+            // These three are icon-only, so each needs an explicit label — the
+            // `.help` beside it is AX *help* (supplemental, hint-gated), not a name.
             Button(action: { store.sidebarOnLeft.toggle() }) {
                 Image(systemName: store.sidebarOnLeft ? "arrow.right.to.line" : "arrow.left.to.line")
             }
             .buttonStyle(.borderless)
             .help(store.sidebarOnLeft ? "Move sidebar to the right edge" : "Move sidebar to the left edge")
+            .accessibilityLabel(store.sidebarOnLeft ? "Move sidebar to the right edge" : "Move sidebar to the left edge")
             Button(action: { store.refresh() }) {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.borderless)
             .help("Refresh now")
+            .accessibilityLabel("Refresh now")
             .disabled(store.isLoading)
             if onClose != nil {
                 Button(action: { onClose?() }) {
@@ -89,6 +93,7 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Hide sidebar")
+                .accessibilityLabel("Hide sidebar")
             }
         }
         .padding(.horizontal, 12)

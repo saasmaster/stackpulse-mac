@@ -274,8 +274,12 @@ struct ActiveNowBlock: View {
             .contentShape(Rectangle())
             .onTapGesture { onTap?() }
             .help(onTap == nil ? "" : "Open the Missions section")
+            // See NeedsAttentionBlock: traits + action keep the per-mission rows
+            // separately readable, which a wrapping Button would collapse.
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Active now: \(missions.count) AI coding session\(missions.count == 1 ? "" : "s")")
+            .accessibilityAddTraits(onTap == nil ? [] : .isButton)
+            .accessibilityAction { onTap?() }
         }
     }
 }
@@ -453,6 +457,11 @@ struct ProviderCard: View {
             // token expired or a fetch failed), label their age honestly rather
             // than implying they're live. Shared with Home/Overview, which used to
             // render the same cached number with no age at all.
+            // Every provider's reading can be stale, not just Claude's — Codex's
+            // come from its logs and were 18.5h old on a real machine.
+            if let hottest = provider.hottestLimit {
+                LimitAgeNote(limit: hottest)
+            }
             if provider.provider == "claude" {
                 LiveLimitsStatusNote(capturedAt: store.liveLimitsCapturedAt,
                                      isStale: store.liveLimitsAreStale,
@@ -542,7 +551,13 @@ struct OtherProvidersCard: View {
                       alignment: .leading, spacing: 6) {
                 ForEach(providers) { p in
                     HStack(spacing: 5) {
+                        // The dot's label is also what carries "detected" here:
+                        // the name's .primary/.secondary color is the only visual
+                        // cue for `installed`, and the core guarantees an
+                        // undetected provider reports `not_detected` health
+                        // (providers/detection.rs) — so the health label says it.
                         StatusDot(color: SPStatus.healthColor(p.health))
+                            .accessibilityLabel(SPStatus.healthLabel(p.health))
                         Text(p.display_name)
                             .font(.caption2)
                             .lineLimit(1)
@@ -550,9 +565,11 @@ struct OtherProvidersCard: View {
                         if store.isAuthenticated(p) {
                             Image(systemName: "checkmark.seal.fill")
                                 .imageScale(.small).foregroundStyle(.green)
+                                .accessibilityLabel("Authenticated")
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
                 }
             }
             if let onOpenMainWindow {

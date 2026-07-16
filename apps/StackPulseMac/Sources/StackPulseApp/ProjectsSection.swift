@@ -576,6 +576,10 @@ struct CommandRow: View {
             .help(CommandSafety.requiresConfirmation(command.safety)
                 ? "Confirm, then run in Terminal"
                 : "Run in Terminal")
+            // The name must not vary with `safety`: this button sits beside "Run"
+            // and also executes the command, so it has to stay distinguishable
+            // from it by name alone. `.help` is AX *help*, never a name.
+            .accessibilityLabel("Run in Terminal")
         }
         .padding(.vertical, 3)
     }

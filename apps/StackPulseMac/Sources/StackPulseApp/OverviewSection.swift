@@ -209,9 +209,12 @@ struct OverviewProviderCard: View {
                 MeterBar(fraction: limit.used_percent / 100,
                          tint: SPStatus.limitColor(limit.used_percent),
                          glowsWhenHigh: true)
-                // Claude's limits can be a cached value the fetch could not
-                // refresh. Unlabelled, a stale 82% reads exactly like a live 82% —
-                // this card showed no age at all while the popover did.
+                // Every provider's limit can be old, not just Claude's. Codex's
+                // come from whatever its logs last recorded — measured at 18.5
+                // hours on this machine while the card rendered the % as "now".
+                // The reading carries its own capture time now, so age it from the
+                // limit itself rather than from a Claude-only store field.
+                LimitAgeNote(limit: limit)
                 if provider.provider == "claude" {
                     LiveLimitsStatusNote(capturedAt: store.liveLimitsCapturedAt,
                                          isStale: store.liveLimitsAreStale,

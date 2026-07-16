@@ -79,7 +79,7 @@ pub fn aggregate(
 
     for rec in records {
         let rec_days = days_from_civil(rec.date.year, rec.date.month, rec.date.day);
-        let cost = pricing::estimate_cost(&rec.model, &rec.tokens);
+        let cost = pricing::estimate_cost(&rec.model, &rec.tokens, rec.date);
         if cost.is_none() && rec.tokens.grand_total() > 0 {
             unpriceable.insert(rec.model.clone(), ());
         }
@@ -162,11 +162,11 @@ pub fn compute_analytics(records: &[UsageRecord], now_unix: i64) -> ProviderAnal
         if d < cutoff || d > today_days {
             continue;
         }
-        let cost = pricing::estimate_cost(&rec.model, &rec.tokens);
+        let cost = pricing::estimate_cost(&rec.model, &rec.tokens, rec.date);
 
         // Measured cache savings: cache-read tokens × (input − cache_read) rate.
         if rec.tokens.cache_read_tokens > 0 {
-            if let Some(rates) = pricing::rates_for(&rec.model) {
+            if let Some(rates) = pricing::rates_for(&rec.model, rec.date) {
                 let saved =
                     rec.tokens.cache_read_tokens as f64 * (rates.input - rates.cache_read) / 1e6;
                 if saved > 0.0 {

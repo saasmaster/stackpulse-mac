@@ -79,7 +79,37 @@ struct LimitWindow: Codable, Sendable, Identifiable {
     let window_minutes: Int
     let resets_at_unix: Int64?
     let provenance: String
+    /// When this reading was taken (protocol ≥ 1.20.0). `nil` = the source didn't
+    /// say — treat as **unknown**, never as fresh.
+    let captured_at_unix: Int64?
     var id: String { label }
+
+    init(label: String, used_percent: Double, window_minutes: Int,
+         resets_at_unix: Int64?, provenance: String, captured_at_unix: Int64? = nil) {
+        self.label = label
+        self.used_percent = used_percent
+        self.window_minutes = window_minutes
+        self.resets_at_unix = resets_at_unix
+        self.provenance = provenance
+        self.captured_at_unix = captured_at_unix
+    }
+
+    /// How old this reading is, or `nil` when the source didn't timestamp it.
+    func age(now: Date = Date()) -> TimeInterval? {
+        captured_at_unix.map { now.timeIntervalSince1970 - TimeInterval($0) }
+    }
+
+    /// True when this reading is old enough that presenting it as current would be
+    /// a lie.
+    ///
+    /// `resets_at_unix` deliberately plays no part. It answers a different question
+    /// and comes from the same possibly-stale reading — a weekly window's reset is
+    /// days out, so a stale weekly % never looks expired. Age is the only guard
+    /// that works. An untimestamped reading is NOT assumed fresh.
+    func isStale(now: Date = Date(), staleAfter: TimeInterval) -> Bool {
+        guard let age = age(now: now) else { return false }
+        return age > staleAfter
+    }
 }
 
 /// A provider's credit balance (protocol ≥ 1.7.0). Optional on the wire and

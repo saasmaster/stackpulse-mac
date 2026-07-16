@@ -50,8 +50,16 @@ struct NeedsAttentionBlock: View {
             .contentShape(Rectangle())
             .onTapGesture { onTap?() }
             .help(onTap == nil ? "" : "Open the needs-attention inbox")
+            // Traits + action rather than a wrapping Button: `children: .contain`
+            // keeps each AlertRow below separately readable, and a Button would
+            // collapse them into one announcement. Both hosts (the popover and
+            // the non-activating edge panel) are also weak on key focus, so a
+            // Button buys little here. Trait is conditional — with no `onTap`
+            // this card is inert and must not claim to be a button.
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Needs attention: \(alerts.count) alert\(alerts.count == 1 ? "" : "s")")
+            .accessibilityAddTraits(onTap == nil ? [] : .isButton)
+            .accessibilityAction { onTap?() }
         }
     }
 }

@@ -236,10 +236,15 @@ Stated in `pricing.rs` rather than hidden. All three are live today:
    Anthropic's published price list. The GPT/Codex cards were not — they are
    inherited from an earlier revision. Tightening them without verification would
    only trade one unverified answer for another.
-3. **Sonnet 5 is on introductory pricing** through **2026-08-31**
-   (`SONNET_5_INTRO_ENDS`), after which it rises to the standard Sonnet rate.
-   `rates_for()` has no clock, so on that date the table silently becomes wrong
-   for Sonnet 5 until someone updates it.
+3. **Data-residency and fast-mode multipliers are not modelled** (`inference_geo:
+   "us"` is 1.1×; fast mode has its own rate card). Nothing in the local logs says
+   which a given turn used, so applying either would be a guess.
+
+Sonnet 5's introductory pricing (through **2026-08-31**, `SONNET_5_INTRO_ENDS`) is
+**handled**, not a caveat: every rate lookup takes the date of the record being
+priced, so tokens spent before the switch price at the introductory rate and
+tokens after it price at the standard one — including inside a single 30-day
+window that straddles the date.
 
 Rates are hand-maintained and go stale. `PRICING_AS_OF` (`2026-07-16`) is the only
 thing telling you how stale — it must move whenever the table does. There is no

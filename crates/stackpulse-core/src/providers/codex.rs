@@ -330,6 +330,12 @@ fn capture_rate_limits(payload: &Value, ts: &str, now_unix: i64, state: &mut Sca
                 window_minutes: minutes,
                 resets_at_unix: resets,
                 provenance: Provenance::ProviderReported,
+                // When Codex WROTE this reading — not when we read the file. These
+                // limits are only as current as the last session that logged them,
+                // which was 18 hours old on a real machine while the UI showed the
+                // % as "now". The reset check above cannot catch that: a weekly
+                // window's reset is days out, so a stale weekly % never expires.
+                captured_at_unix: crate::datetime::parse_iso_unix(ts),
             });
         }
     }

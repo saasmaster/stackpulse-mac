@@ -86,6 +86,65 @@ pub fn parse_iso_date(ts: &str) -> Option<CivilDate> {
     Some(CivilDate { year, month, day })
 }
 
+/// Parse an ISO-8601 timestamp into Unix seconds. No `chrono`.
+///
+/// Lives here because it was copy-pasted into two modules and was about to become
+/// three. The duplication was not free: the byte-8 slicing panic that blanked an
+/// entire snapshot had to be found and fixed in BOTH copies, and a third would
+/// have silently kept it.
+///
+/// Degrades, never panics: an unparseable tail yields the date at midnight rather
+/// than an error, and a malformed string yields `None`.
+pub fn parse_iso_unix(ts: &str) -> Option<i64> {
+    let date = parse_iso_date(ts)?;
+    let mut secs = days_from_civil(date.year, date.month, date.day) * 86_400;
+
+    // Optional "THH:MM:SS[.fff][±HH:MM|Z]" tail (byte index 10 is the 'T').
+    let Some(time_part) = ts.get(11..) else {
+        return Some(secs);
+    };
+    let b = time_part.as_bytes();
+    if b.len() < 8 || b[2] != b':' || b[5] != b':' {
+        return Some(secs); // date-only, or a shape we don't recognize
+    }
+    let part = |range: std::ops::Range<usize>| -> i64 {
+        time_part
+            .get(range)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
+    };
+    let (hh, mm, ss) = (part(0..2), part(3..5), part(6..8));
+    if hh > 23 || mm > 59 || ss > 60 {
+        return Some(secs);
+    }
+    secs += hh * 3600 + mm * 60 + ss;
+
+    // A trailing numeric offset shifts local → UTC.
+    //
+    // `.get`, not `[8..]`: the ':' checks above only prove bytes 2 and 5 are
+    // ASCII, so a multi-byte char can straddle byte 8 and slicing there panics —
+    // which the FFI turns into an error for the entire snapshot.
+    let rest = time_part
+        .get(8..)
+        .unwrap_or("")
+        .trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
+    if let Some(pos) = rest.find(['+', '-']) {
+        let off = &rest[pos..];
+        let sign = if off.starts_with('-') { -1 } else { 1 };
+        let digits: String = off.chars().filter(char::is_ascii_digit).collect();
+        if digits.len() >= 2 {
+            let oh: i64 = digits[0..2].parse().unwrap_or(0);
+            let om: i64 = if digits.len() >= 4 {
+                digits[2..4].parse().unwrap_or(0)
+            } else {
+                0
+            };
+            secs -= sign * (oh * 3600 + om * 60);
+        }
+    }
+    Some(secs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -401,6 +401,7 @@ mod tests {
             window_minutes: 300,
             resets_at_unix: Some(NOW + 3600),
             provenance: Provenance::ProviderReported,
+            captured_at_unix: None,
         }
     }
 

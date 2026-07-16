@@ -25,18 +25,30 @@
 //! 1-hour rate (2× input). Pricing everything as 5-minute understated real cost —
 //! 86% of writes on a real machine are 1-hour.
 //!
+//! ## A rate is a function of the record's date
+//!
+//! A published rate can have an expiry: Sonnet 5's introductory price runs
+//! through [`SONNET_5_INTRO_ENDS`] and reverts to the standard Sonnet card the
+//! next day. So every lookup takes the date of the **record being priced** — not
+//! the wall clock, and not a single "current" answer. A 30-day window straddling
+//! such a switch legitimately contains records at both rates, and pricing them
+//! all alike is wrong on one side of the line no matter which side is chosen.
+//!
+//! The date is always injected by the caller (every record carries its own; see
+//! [`crate::providers::UsageRecord`]). This module reads no clock: a rate table
+//! that consults `SystemTime::now()` cannot be tested against the day its own
+//! prices change.
+//!
 //! ## Known inaccuracies (stated, not hidden)
 //!
 //! 1. **OpenAI rates are unverified.** The Claude rates below were read off
 //!    Anthropic's published price list; the GPT/Codex cards were not, and are
 //!    inherited from an earlier revision.
-//! 2. **Sonnet 5 is on introductory pricing** through [`SONNET_5_INTRO_ENDS`],
-//!    after which it rises to the standard Sonnet rate. `rates_for` has no clock,
-//!    so on that date this table silently becomes wrong for Sonnet 5 until updated.
-//! 3. **Data-residency and fast-mode multipliers are not modelled** (`inference_geo:
+//! 2. **Data-residency and fast-mode multipliers are not modelled** (`inference_geo:
 //!    "us"` is 1.1×; fast mode has its own card). Nothing local says which a turn
 //!    used, so applying either would be a guess.
 
+use crate::datetime::CivilDate;
 use stackpulse_protocol::TokenTotals;
 
 /// Human-readable provenance note attached to every snapshot.
@@ -45,6 +57,10 @@ use stackpulse_protocol::TokenTotals;
 /// move whenever the table does. It sat at a month that predated the rates it
 /// described while Opus was priced 3× high — the label said "current" and the
 /// numbers weren't.
+///
+/// It dates when the price list was **read**, not how long the table stays right:
+/// a change already published with a future effective date (see
+/// [`SONNET_5_INTRO_ENDS`]) is encoded below and does not make this stale.
 pub const PRICING_AS_OF: &str = "2026-07-16";
 
 /// Rates in USD per **million** tokens.
@@ -141,11 +157,18 @@ const HAIKU_35: ModelRates = ModelRates {
     cache_read: 0.08,
 };
 
-/// Sonnet 5's introductory rate runs through 2026-08-31; on 2026-09-01 it becomes
-/// the standard [`SONNET`] rate. Recorded as a constant because `rates_for` has no
-/// clock: the table is only claimed accurate as of [`PRICING_AS_OF`], and this is
-/// a known, dated expiry rather than a surprise.
-pub const SONNET_5_INTRO_ENDS: &str = "2026-08-31";
+/// Last day Sonnet 5 bills at [`SONNET_5_INTRO`]; from the following day it bills
+/// at the standard [`SONNET`] rate.
+///
+/// A [`CivilDate`] rather than a label because [`rates_for`] compares against it.
+/// It was previously a `&str` that nothing read: the expiry was documented, the
+/// table was not going to apply it, and the only thing standing between a correct
+/// number and a silently wrong one was someone remembering this date.
+pub const SONNET_5_INTRO_ENDS: CivilDate = CivilDate {
+    year: 2026,
+    month: 8,
+    day: 31,
+};
 // OpenAI GPT-5 / Codex family. cached input priced at the read column.
 const GPT5: ModelRates = ModelRates {
     input: 1.25,
@@ -162,9 +185,23 @@ const GPT41: ModelRates = ModelRates {
     cache_read: 0.50,
 };
 
-/// Resolve a model string to a rate card. Returns `None` for models we cannot
-/// price — the caller must exclude them from cost totals and surface a note
-/// (see [`crate::canary`]). **Never guess a price.**
+/// Resolve a model string to the rate card in effect **on `date`** — the date of
+/// the record being priced, not today. Returns `None` for models we cannot price
+/// — the caller must exclude them from cost totals and surface a note (see
+/// [`crate::canary`]). **Never guess a price.**
+///
+/// ## Why the date is a parameter and not a clock read
+///
+/// Rates change on announced dates. Tokens spent last Tuesday cost what they cost
+/// last Tuesday, so the only defensible input is the record's own date — which
+/// every caller already holds. Reading the clock here would instead re-price
+/// history every time it ran, and would make the day the price changes the one
+/// day that cannot be tested.
+///
+/// `None`-ness does not depend on `date`: a model is priceable or it isn't, and
+/// the date only chooses between cards. [`crate::canary`] relies on that — it
+/// reads "tokens counted, no cost" as the unpriced-model signal, which would be
+/// incoherent if the same model were priceable on some days and not others.
 ///
 /// ## Why this parses the version instead of matching the family name
 ///
@@ -179,7 +216,7 @@ const GPT41: ModelRates = ModelRates {
 /// borrowing a sibling's price. "We don't know" is a fact the canary can report;
 /// a confidently wrong number is not. Strictness is only safe *because* the canary
 /// surfaces the gap — the two are a pair.
-pub fn rates_for(model: &str) -> Option<ModelRates> {
+pub fn rates_for(model: &str, date: CivilDate) -> Option<ModelRates> {
     let m = model.to_ascii_lowercase();
     // Order matters: more specific families first.
     if m.contains("fable") || m.contains("mythos") {
@@ -195,8 +232,11 @@ pub fn rates_for(model: &str) -> Option<ModelRates> {
         };
     }
     if m.contains("sonnet") {
+        // Sonnet 5 is the only card with a dated expiry today. `CivilDate` orders
+        // chronologically, so the comparison is the whole rule.
         return match family_version(&m, "sonnet") {
-            Some((5, _)) => Some(SONNET_5_INTRO),
+            Some((5, _)) if date <= SONNET_5_INTRO_ENDS => Some(SONNET_5_INTRO),
+            Some((5, _)) => Some(SONNET),
             Some((4, _)) => Some(SONNET),
             _ => None,
         };
@@ -241,23 +281,52 @@ fn family_version(model: &str, family: &str) -> Option<(u32, Option<u32>)> {
     Some((major, minor))
 }
 
-/// Estimate the cost for `tokens` produced by `model`. `None` when unpriceable.
-pub fn estimate_cost(model: &str, tokens: &TokenTotals) -> Option<f64> {
-    rates_for(model).map(|r| r.cost(tokens))
+/// Estimate the cost for `tokens` produced by `model` on `date`, at the rates in
+/// effect that day. `None` when unpriceable.
+pub fn estimate_cost(model: &str, tokens: &TokenTotals, date: CivilDate) -> Option<f64> {
+    rates_for(model, date).map(|r| r.cost(tokens))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The day the cards below were read off the published list ([`PRICING_AS_OF`]),
+    /// which is inside Sonnet 5's introductory period.
+    const AS_OF: CivilDate = CivilDate {
+        year: 2026,
+        month: 7,
+        day: 16,
+    };
+    /// The two sides of Sonnet 5's switch, written as literal dates rather than
+    /// derived from [`SONNET_5_INTRO_ENDS`]: a test that restates the constant it
+    /// is checking would pass just as happily with the constant wrong.
+    const LAST_INTRO_DAY: CivilDate = CivilDate {
+        year: 2026,
+        month: 8,
+        day: 31,
+    };
+    const FIRST_STANDARD_DAY: CivilDate = CivilDate {
+        year: 2026,
+        month: 9,
+        day: 1,
+    };
+
+    /// `(input, output, cache_write, cache_read)` for a model on a date.
+    fn card(model: &str, date: CivilDate) -> (f64, f64, f64, f64) {
+        let r = rates_for(model, date)
+            .unwrap_or_else(|| panic!("{model} must be priceable on {}", date.iso()));
+        (r.input, r.output, r.cache_write, r.cache_read)
+    }
+
     #[test]
     fn matches_model_families() {
-        assert!(rates_for("claude-opus-4-8-20260101").is_some());
-        assert!(rates_for("claude-sonnet-5").is_some());
-        assert!(rates_for("claude-haiku-4-5-20251001").is_some());
-        assert!(rates_for("gpt-5-codex").is_some());
-        assert!(rates_for("gpt-5").is_some());
-        assert!(rates_for("totally-unknown-model").is_none());
+        assert!(rates_for("claude-opus-4-8-20260101", AS_OF).is_some());
+        assert!(rates_for("claude-sonnet-5", AS_OF).is_some());
+        assert!(rates_for("claude-haiku-4-5-20251001", AS_OF).is_some());
+        assert!(rates_for("gpt-5-codex", AS_OF).is_some());
+        assert!(rates_for("gpt-5", AS_OF).is_some());
+        assert!(rates_for("totally-unknown-model", AS_OF).is_none());
     }
 
     /// The published rates, pinned. Nothing else in the repo checked that a rate
@@ -277,17 +346,105 @@ mod tests {
             ("claude-opus-4-1-20250805", 15.0, 75.0, 18.75, 1.50),
             ("claude-opus-4-20250514", 15.0, 75.0, 18.75, 1.50),
             ("claude-fable-5", 10.0, 50.0, 12.50, 1.00),
-            ("claude-sonnet-5", 2.0, 10.0, 2.50, 0.20), // introductory
+            ("claude-mythos-5", 10.0, 50.0, 12.50, 1.00),
+            ("claude-sonnet-5", 2.0, 10.0, 2.50, 0.20), // introductory, on this date
             ("claude-sonnet-4-6", 3.0, 15.0, 3.75, 0.30),
             ("claude-haiku-4-5-20251001", 1.0, 5.0, 1.25, 0.10),
             ("claude-haiku-3-5-20241022", 0.80, 4.0, 1.00, 0.08),
         ];
         for (model, input, output, write, read) in cases {
-            let r = rates_for(model).unwrap_or_else(|| panic!("{model} must be priceable"));
-            assert_eq!(r.input, input, "{model} input");
-            assert_eq!(r.output, output, "{model} output");
-            assert_eq!(r.cache_write, write, "{model} cache_write");
-            assert_eq!(r.cache_read, read, "{model} cache_read");
+            assert_eq!(card(model, AS_OF), (input, output, write, read), "{model}");
+        }
+    }
+
+    /// Sonnet 5's introductory rate is in effect through its last day — the
+    /// boundary is inclusive, and an off-by-one here silently overcharges a day.
+    #[test]
+    fn sonnet_5_prices_at_the_introductory_rate_through_the_last_intro_day() {
+        assert_eq!(
+            card("claude-sonnet-5", LAST_INTRO_DAY),
+            (2.0, 10.0, 2.50, 0.20)
+        );
+        assert_eq!(
+            card("claude-sonnet-5-20260401", LAST_INTRO_DAY),
+            (2.0, 10.0, 2.50, 0.20),
+            "a date-stamped id is the same model"
+        );
+    }
+
+    /// The failure this whole change exists to prevent: on 2026-09-01 Sonnet 5
+    /// reverts to the standard Sonnet card. The old table had no clock, so it
+    /// would have kept charging the introductory rate — wrong, silently, forever.
+    #[test]
+    fn sonnet_5_prices_at_the_standard_rate_once_the_intro_ends() {
+        assert_eq!(
+            card("claude-sonnet-5", FIRST_STANDARD_DAY),
+            (3.0, 15.0, 3.75, 0.30)
+        );
+        // ...and stays there.
+        let far_future = CivilDate {
+            year: 2030,
+            month: 1,
+            day: 1,
+        };
+        assert_eq!(card("claude-sonnet-5", far_future), (3.0, 15.0, 3.75, 0.30));
+        // Post-intro Sonnet 5 is exactly the standard Sonnet card, not a copy of it.
+        assert_eq!(
+            card("claude-sonnet-5", FIRST_STANDARD_DAY),
+            card("claude-sonnet-4-6", FIRST_STANDARD_DAY)
+        );
+    }
+
+    /// The capability the old signature could not express at all: one window,
+    /// two rates. A 30-day window straddling 2026-09-01 holds records of both.
+    #[test]
+    fn the_same_record_prices_differently_on_each_side_of_the_switch() {
+        let t = TokenTotals {
+            input_tokens: 1_000_000,
+            output_tokens: 1_000_000,
+            ..Default::default()
+        };
+        let intro = estimate_cost("claude-sonnet-5", &t, LAST_INTRO_DAY).unwrap();
+        let standard = estimate_cost("claude-sonnet-5", &t, FIRST_STANDARD_DAY).unwrap();
+        assert_eq!(intro, 2.0 + 10.0);
+        assert_eq!(standard, 3.0 + 15.0);
+        assert!(intro < standard, "the introductory rate is the cheaper one");
+    }
+
+    /// Only Sonnet 5 has a dated expiry. Every other card must be indifferent to
+    /// the date — a date-aware lookup that quietly moved another family's price
+    /// would be the same silent-wrongness bug wearing a clock.
+    #[test]
+    fn other_families_are_unaffected_by_date() {
+        let dates = [
+            CivilDate {
+                year: 2024,
+                month: 1,
+                day: 1,
+            },
+            AS_OF,
+            LAST_INTRO_DAY,
+            FIRST_STANDARD_DAY,
+            CivilDate {
+                year: 2030,
+                month: 6,
+                day: 30,
+            },
+        ];
+        let cases = [
+            ("claude-opus-4-8", (5.0, 25.0, 6.25, 0.50)),
+            ("claude-opus-4-1-20250805", (15.0, 75.0, 18.75, 1.50)),
+            ("claude-fable-5", (10.0, 50.0, 12.50, 1.00)),
+            ("claude-mythos-5", (10.0, 50.0, 12.50, 1.00)),
+            ("claude-sonnet-4-6", (3.0, 15.0, 3.75, 0.30)),
+            ("claude-haiku-4-5-20251001", (1.0, 5.0, 1.25, 0.10)),
+            ("claude-haiku-3-5-20241022", (0.80, 4.0, 1.00, 0.08)),
+            ("gpt-5-codex", (1.25, 10.0, 1.25, 0.125)),
+        ];
+        for (model, expected) in cases {
+            for date in dates {
+                assert_eq!(card(model, date), expected, "{model} on {}", date.iso());
+            }
         }
     }
 
@@ -295,8 +452,8 @@ mod tests {
     /// 4.8 with Opus 4.1's card. The two must never resolve to the same rates.
     #[test]
     fn opus_versions_are_not_interchangeable() {
-        let current = rates_for("claude-opus-4-8").unwrap();
-        let legacy = rates_for("claude-opus-4-1-20250805").unwrap();
+        let current = rates_for("claude-opus-4-8", AS_OF).unwrap();
+        let legacy = rates_for("claude-opus-4-1-20250805", AS_OF).unwrap();
         assert_ne!(current.input, legacy.input);
         assert_eq!(
             legacy.input / current.input,
@@ -308,13 +465,35 @@ mod tests {
     /// A model family we know, at a version we don't, must be UNPRICED rather than
     /// borrowing a sibling's rate — that silent borrow is what caused the 3× error.
     /// The canary reports these; a wrong number reports nothing.
+    ///
+    /// This holds on every date. Priceability is a property of the model id alone,
+    /// and [`crate::canary`] reads "tokens but no cost" as the unpriced signal — a
+    /// model that were priceable only on some days would make that signal a lie.
     #[test]
-    fn an_unknown_version_of_a_known_family_is_unpriced() {
-        assert!(rates_for("claude-opus-9-0").is_none());
-        assert!(rates_for("claude-sonnet-7").is_none());
-        assert!(rates_for("claude-haiku-9-9").is_none());
-        // ...and the real one that showed up in local logs with no version at all.
-        assert!(rates_for("<synthetic>").is_none());
+    fn an_unknown_version_of_a_known_family_is_unpriced_at_any_date() {
+        let dates = [
+            CivilDate {
+                year: 2024,
+                month: 1,
+                day: 1,
+            },
+            AS_OF,
+            LAST_INTRO_DAY,
+            FIRST_STANDARD_DAY,
+            CivilDate {
+                year: 2030,
+                month: 6,
+                day: 30,
+            },
+        ];
+        for date in dates {
+            assert!(rates_for("claude-opus-9-0", date).is_none());
+            assert!(rates_for("claude-sonnet-7", date).is_none());
+            assert!(rates_for("claude-sonnet-6", date).is_none());
+            assert!(rates_for("claude-haiku-9-9", date).is_none());
+            // ...and the real one that showed up in local logs with no version at all.
+            assert!(rates_for("<synthetic>", date).is_none());
+        }
     }
 
     /// A 1-hour cache write bills at 2× input; a 5-minute one at 1.25×. Pricing
@@ -322,7 +501,7 @@ mod tests {
     /// machine are 1-hour.
     #[test]
     fn one_hour_cache_writes_cost_more_than_five_minute_ones() {
-        let rates = rates_for("claude-opus-4-8").unwrap();
+        let rates = rates_for("claude-opus-4-8", AS_OF).unwrap();
         let all_5m = TokenTotals {
             cache_creation_tokens: 1_000_000,
             ..Default::default()
@@ -341,7 +520,7 @@ mod tests {
     /// price each half once — never double-count, never lose a token.
     #[test]
     fn a_mixed_record_prices_each_half_exactly_once() {
-        let rates = rates_for("claude-opus-4-8").unwrap();
+        let rates = rates_for("claude-opus-4-8", AS_OF).unwrap();
         let mixed = TokenTotals {
             cache_creation_tokens: 1_000_000,
             cache_creation_1h_tokens: 800_000, // 80% 1-hour, like real logs
@@ -357,7 +536,7 @@ mod tests {
     /// underflow or invent cost. Degrade, never panic.
     #[test]
     fn an_impossible_split_is_clamped() {
-        let rates = rates_for("claude-opus-4-8").unwrap();
+        let rates = rates_for("claude-opus-4-8", AS_OF).unwrap();
         let bogus = TokenTotals {
             cache_creation_tokens: 100,
             cache_creation_1h_tokens: 999_999,
@@ -372,7 +551,7 @@ mod tests {
     /// 1.19.0 existed.
     #[test]
     fn a_provider_without_the_ttl_concept_prices_unchanged() {
-        let rates = rates_for("gpt-5-codex").unwrap();
+        let rates = rates_for("gpt-5-codex", AS_OF).unwrap();
         let t = TokenTotals {
             input_tokens: 1_000_000,
             output_tokens: 1_000_000,
@@ -409,8 +588,8 @@ mod tests {
             output_tokens: 1_000_000,
             ..Default::default()
         };
-        let opus = estimate_cost("claude-opus-4", &t).unwrap();
-        let sonnet = estimate_cost("claude-sonnet-4", &t).unwrap();
+        let opus = estimate_cost("claude-opus-4", &t, AS_OF).unwrap();
+        let sonnet = estimate_cost("claude-sonnet-4", &t, AS_OF).unwrap();
         // Opus is materially more expensive than Sonnet.
         assert!(opus > sonnet);
         // 1M input @ $15 + 1M output @ $75 = $90 for opus.
@@ -427,8 +606,8 @@ mod tests {
             cache_read_tokens: 1_000_000,
             ..Default::default()
         };
-        let a = estimate_cost("claude-sonnet-4", &fresh).unwrap();
-        let b = estimate_cost("claude-sonnet-4", &cached).unwrap();
+        let a = estimate_cost("claude-sonnet-4", &fresh, AS_OF).unwrap();
+        let b = estimate_cost("claude-sonnet-4", &cached, AS_OF).unwrap();
         assert!(b < a);
     }
 }

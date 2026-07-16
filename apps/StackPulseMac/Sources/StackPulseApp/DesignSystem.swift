@@ -404,6 +404,38 @@ struct ProviderBalanceLabel: View {
     }
 }
 
+/// "as of …" for ANY provider's limit reading that is no longer current.
+///
+/// Works off the reading's own `captured_at_unix` (protocol 1.20.0), so it covers
+/// every provider rather than just Claude. Codex's limits come from its logs and
+/// are only as fresh as the last session that wrote them — 18.5 hours old on a
+/// real machine, rendered as if measured now, because nothing on screen or on the
+/// wire said when the number was taken.
+///
+/// Draws nothing when the reading is recent, and nothing when the source didn't
+/// timestamp it (unknown is not a claim of staleness either — but note
+/// `LimitWindow.isStale` also refuses to call an untimestamped reading fresh).
+struct LimitAgeNote: View {
+    let limit: LimitWindow
+    /// Anything older than this stops being "live". Matches the live-limits
+    /// staleness bound in `SnapshotStore`.
+    var staleAfter: TimeInterval = 60 * 60
+
+    var body: some View {
+        if limit.isStale(staleAfter: staleAfter), let captured = limit.captured_at_unix {
+            let at = Date(timeIntervalSince1970: TimeInterval(captured))
+            HStack(spacing: 4) {
+                Image(systemName: "clock.arrow.circlepath").imageScale(.small)
+                Text("measured \(Format.relative(at)) — not live")
+            }
+            .font(.system(size: 9))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel("This limit was measured \(Format.relative(at)) and is not live.")
+        }
+    }
+}
+
 /// The honest state of Claude's live limits: either "as of …" for a value we're
 /// still willing to stand behind, or the reason there is no number.
 ///

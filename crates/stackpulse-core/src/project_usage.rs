@@ -26,7 +26,7 @@
 //! shows — never billed amounts. A model with no pricing entry contributes its
 //! tokens but no cost.
 
-use crate::datetime::{days_from_civil, parse_iso_date, utc_date};
+use crate::datetime::{days_from_civil, utc_date};
 use crate::paths;
 use crate::pricing;
 use crate::providers::UsageRecord;
@@ -103,7 +103,7 @@ fn group(attributed: &[Attributed], now_unix: i64) -> Vec<ProjectUsage> {
         if !in_30 {
             continue; // outside every window we report
         }
-        let cost = pricing::estimate_cost(&a.record.model, &a.record.tokens);
+        let cost = pricing::estimate_cost(&a.record.model, &a.record.tokens, a.record.date);
         let bucket = buckets.entry(a.project_path.as_str()).or_default();
 
         apply(&mut bucket.last_30, &a.record.tokens, cost);
@@ -290,7 +290,11 @@ fn scan_claude_file(file: &Path, out: &mut Vec<Attributed>, seen: &mut HashSet<(
         {
             continue;
         }
-        let Some(ts_unix) = parsed.timestamp.as_deref().and_then(parse_iso_unix) else {
+        let Some(ts_unix) = parsed
+            .timestamp
+            .as_deref()
+            .and_then(crate::datetime::parse_iso_unix)
+        else {
             continue; // undated turns can't be bucketed
         };
         // Dedup by (message.id, requestId) — replays across resumed sessions
@@ -423,7 +427,7 @@ fn scan_codex_file(file: &Path, out: &mut Vec<Attributed>, seen: &mut HashSet<(S
                 if input + output + reasoning == 0 {
                     continue;
                 }
-                let Some(ts_unix) = parse_iso_unix(ts) else {
+                let Some(ts_unix) = crate::datetime::parse_iso_unix(ts) else {
                     continue;
                 };
                 pending.push(Pending {
@@ -483,59 +487,6 @@ fn recently_modified(path: &Path, cutoff_unix: i64) -> bool {
     }
 }
 
-/// Parse an ISO-8601 timestamp into Unix seconds, reusing [`crate::datetime`]
-/// for the date math (no `chrono`). Both providers log the `Z`/UTC form; a
-/// numeric offset is honored and sub-second precision is ignored.
-fn parse_iso_unix(ts: &str) -> Option<i64> {
-    let date = parse_iso_date(ts)?;
-    let mut secs = days_from_civil(date.year, date.month, date.day) * 86_400;
-
-    // Optional "THH:MM:SS[.fff][±HH:MM|Z]" tail (byte index 10 is the 'T').
-    let Some(time_part) = ts.get(11..) else {
-        return Some(secs);
-    };
-    let b = time_part.as_bytes();
-    if b.len() < 8 || b[2] != b':' || b[5] != b':' {
-        return Some(secs); // date-only, or a shape we don't recognize
-    }
-    let part = |range: std::ops::Range<usize>| -> i64 {
-        time_part
-            .get(range)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0)
-    };
-    let (hh, mm, ss) = (part(0..2), part(3..5), part(6..8));
-    if hh > 23 || mm > 59 || ss > 60 {
-        return Some(secs);
-    }
-    secs += hh * 3600 + mm * 60 + ss;
-
-    // A trailing numeric offset shifts local → UTC.
-    //
-    // `.get`, not `[8..]`: the ':' checks above only prove bytes 2 and 5 are
-    // ASCII, so a multi-byte char can straddle byte 8 and slicing there panics —
-    // which the FFI turns into an error for the entire snapshot.
-    let rest = time_part
-        .get(8..)
-        .unwrap_or("")
-        .trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
-    if let Some(pos) = rest.find(['+', '-']) {
-        let off = &rest[pos..];
-        let sign = if off.starts_with('-') { -1 } else { 1 };
-        let digits: String = off.chars().filter(char::is_ascii_digit).collect();
-        if digits.len() >= 2 {
-            let oh: i64 = digits[0..2].parse().unwrap_or(0);
-            let om: i64 = if digits.len() >= 4 {
-                digits[2..4].parse().unwrap_or(0)
-            } else {
-                0
-            };
-            secs -= sign * (oh * 3600 + om * 60);
-        }
-    }
-    Some(secs)
-}
-
 #[cfg(test)]
 mod tests {
     /// A multi-byte char can straddle byte 8 of the time field (only bytes 2 and
@@ -545,10 +496,10 @@ mod tests {
     #[test]
     fn parse_iso_unix_survives_multibyte_in_the_time_field() {
         // Must not panic; the date still resolves.
-        let midnight = parse_iso_unix("2026-01-01T00:00:00Z").unwrap();
-        let got = parse_iso_unix("2026-01-01T12:34:\u{20ac}X").unwrap();
+        let midnight = crate::datetime::parse_iso_unix("2026-01-01T00:00:00Z").unwrap();
+        let got = crate::datetime::parse_iso_unix("2026-01-01T12:34:\u{20ac}X").unwrap();
         assert_eq!(got, midnight + 12 * 3600 + 34 * 60);
-        assert!(parse_iso_unix("2026-01-01T\u{20ac}\u{20ac}:00:00Z").is_some());
+        assert!(crate::datetime::parse_iso_unix("2026-01-01T\u{20ac}\u{20ac}:00:00Z").is_some());
     }
 
     use super::*;
@@ -793,14 +744,23 @@ mod tests {
     #[test]
     fn parse_iso_unix_handles_utc_offsets_and_junk() {
         let midnight = days_from_civil(2026, 7, 12) * 86_400;
-        assert_eq!(parse_iso_unix("2026-07-12"), Some(midnight));
-        assert_eq!(parse_iso_unix("2026-07-12T00:00:00Z"), Some(midnight));
         assert_eq!(
-            parse_iso_unix("2026-07-12T01:02:03.500Z"),
+            crate::datetime::parse_iso_unix("2026-07-12"),
+            Some(midnight)
+        );
+        assert_eq!(
+            crate::datetime::parse_iso_unix("2026-07-12T00:00:00Z"),
+            Some(midnight)
+        );
+        assert_eq!(
+            crate::datetime::parse_iso_unix("2026-07-12T01:02:03.500Z"),
             Some(midnight + 3723)
         );
         // +02:00 local means the UTC instant is two hours earlier.
-        assert_eq!(parse_iso_unix("2026-07-12T02:00:00+02:00"), Some(midnight));
-        assert_eq!(parse_iso_unix("not-a-date"), None);
+        assert_eq!(
+            crate::datetime::parse_iso_unix("2026-07-12T02:00:00+02:00"),
+            Some(midnight)
+        );
+        assert_eq!(crate::datetime::parse_iso_unix("not-a-date"), None);
     }
 }

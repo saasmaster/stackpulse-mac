@@ -199,7 +199,8 @@ enum AnthropicUsageClient {
     /// shapes differ structurally, `percent`/`utilization` may be Int or Double,
     /// and `resets_at` may be a unix number OR an ISO-8601 string — a permissive
     /// hand-decode is far less brittle here than a bespoke `Decodable`.
-    static func parseUsage(_ data: Data, assumePercentScale: Bool = false) -> ParsedUsage {
+    static func parseUsage(_ data: Data, assumePercentScale: Bool = false,
+                           capturedAt: Date = Date()) -> ParsedUsage {
         guard
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return .empty }
@@ -259,7 +260,11 @@ enum AnthropicUsageClient {
                     used_percent: s.raw * scale,
                     window_minutes: windowMinutes(forLabel: s.label),
                     resets_at_unix: s.resetsAt,
-                    provenance: liveProvenance
+                    provenance: liveProvenance,
+                    // Injected, not read from a clock here: this function is pure so
+                    // the self-test can exercise it, and a rate table that reads
+                    // `Date()` internally can't be tested against its own edges.
+                    captured_at_unix: Int64(capturedAt.timeIntervalSince1970)
                 )
             },
             provedPercentScale: provedPercentScale

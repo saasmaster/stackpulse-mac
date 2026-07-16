@@ -5,7 +5,7 @@ contract shared by every StackPulse surface: the Rust core, the macOS app (over
 the C ABI), the `stackpulse` CLI, and — in the future — a Chrome
 native-messaging host and a Windows client.
 
-- **Current version:** `PROTOCOL_VERSION = 1.19.0`. Additive history (older
+- **Current version:** `PROTOCOL_VERSION = 1.20.0`. Additive history (older
   readers keep parsing):
   - **1.3.0** — added a `Gemini` variant to the (open) `ProviderId` enum; the
     engine now lists eleven providers.
@@ -60,6 +60,15 @@ native-messaging host and a Windows client.
     `remove_command` (never for the main worktree) for the client to gate. The
     client passes a `worktrees_dir` so the copies land outside the user's project
     folders and can't be mistaken for new projects.
+  - **1.20.0** — one additive field: `LimitWindow.captured_at_unix`, when the
+    reading was actually taken. A percentage is a measurement, and a measurement
+    with no time is not interpretable: Codex's limits come from whatever its logs
+    last recorded (18 hours old on a real machine) and Claude's may come from a
+    cached fetch, yet both rendered as "now" because nothing on the wire said
+    otherwise. `resets_at_unix` cannot stand in — it answers a different question
+    and comes from the same possibly-stale reading, so a weekly window (reset days
+    out) never looks expired no matter how old the % is. Absent ⇒ **unknown, not
+    fresh**.
   - **1.19.0** — one additive field: `TokenTotals.cache_creation_1h_tokens`, how
     many of `cache_creation_tokens` were **1-hour** cache writes. It is a
     **SUBSET**, never an addition — `grand_total` must not sum the two, and an

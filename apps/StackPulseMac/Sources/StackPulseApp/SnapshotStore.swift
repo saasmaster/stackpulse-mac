@@ -154,10 +154,15 @@ final class SnapshotStore: ObservableObject {
     private var isFetchingLive = false
 
     /// The last successfully-fetched live limits + when. Persisted to disk (see
-    /// `persistLiveLimits`/`loadPersistedLiveLimits`) so the last-known % survives
-    /// an app restart AND a stale/expired Claude Code token — rather than the card
-    /// blanking to a "sign in" message. Re-applied on every refresh; a transient
-    /// failure (HTTP 429, offline, expired token) keeps showing it, labeled "as of".
+    /// `persistLiveLimits`/`loadPersistedLiveLimits`) so a momentary blip — a 429,
+    /// a closed laptop, an app restart — doesn't blank the card.
+    ///
+    /// It buys **an hour**, not indefinite cover. This comment used to promise that
+    /// an *expired token* would "keep showing it, labeled as of", and that is
+    /// exactly the bug that shipped: the token expired, the fetch failed for 70
+    /// hours, and an 82% from a window that had already reset stayed on screen.
+    /// Past `liveLimitsStaleAfter` the value is dropped and the reason is shown
+    /// instead — see `cachedLiveLimitsUsable`.
     private var lastGoodLiveLimits: [LimitWindow] = []
     private var lastGoodLiveLimitsAt: Date?
     /// Minimum time between actual network fetches — the cached value is reused in

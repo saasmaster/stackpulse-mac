@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 19,
+    minor: 20,
     patch: 0,
 };
 
@@ -308,6 +308,21 @@ pub struct LimitWindow {
     /// Unix seconds when the window resets, if known.
     pub resets_at_unix: Option<i64>,
     pub provenance: Provenance,
+    /// Unix seconds when this reading was actually **taken** (since 1.20.0).
+    ///
+    /// A percentage is a measurement, and a measurement without a time is not
+    /// interpretable. Codex's limits come from whatever its logs last recorded —
+    /// 18 hours ago on a real machine — and Claude's can come from a cached fetch;
+    /// both rendered as "now" because nothing on the wire said otherwise.
+    ///
+    /// `resets_at_unix` cannot substitute for this. It answers a different
+    /// question, and it comes from the *same* possibly-stale reading — a weekly
+    /// window's reset is days out, so a stale weekly % never looks expired. Age is
+    /// the only honest guard, so it has to travel with the number.
+    ///
+    /// `None` = the source didn't say when. Treat that as **unknown, not fresh**.
+    #[serde(default)]
+    pub captured_at_unix: Option<i64>,
 }
 
 /// A live credit/balance reading for an API-key provider (OpenRouter, LiteLLM,

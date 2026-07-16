@@ -18,6 +18,37 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Codex's % was stale too; date-aware pricing; a11y (app 0.30.0 / protocol 1.20.0)
+
+**The check found the same staleness bug in Codex.** Its limits come from log
+files, and `LimitWindow` carried **no capture time for any provider** — so
+`weekly 32%`, measured **2026-07-15 20:02 (18.5 hours earlier)**, rendered as
+current. Fixed on the wire (`LimitWindow.captured_at_unix`, protocol 1.20.0) so
+every provider's reading carries its own age, and the UI ages the reading itself
+rather than a Claude-only store field. `resets_at_unix` cannot substitute: it
+answers a different question and comes from the same possibly-stale reading, which
+is why a weekly window (reset days out) never looked expired no matter how old the
+number was.
+
+**Sonnet 5's dated rate no longer expires silently.** Its introductory price runs
+through 2026-08-31; `rates_for` had no clock, so the table would have gone quietly
+wrong that day — the same "silently wrong number" class as the Opus 2.75×
+overstatement. Every rate lookup now takes the date of the **record being priced**,
+which is strictly more correct: a 30-day window straddling the switch legitimately
+contains records at both rates, and the old code could not express that at all.
+Pinned by tests on both sides of the boundary, mutation-checked.
+
+**Accessibility:** the needs-attention and active-missions cards were mouse-only
+(`.isButton`/`.accessibilityAction` had zero hits app-wide) — now reachable and
+activatable by VoiceOver, with the per-row labels preserved. `OtherProvidersCard`
+conveyed health, auth, and installed state by **color alone** across nine
+providers. An icon-only button that **executes commands** had no accessible name.
+Three sidebar buttons unlabelled.
+
+**Also:** `parse_iso_unix` existed in two modules and was about to become three —
+consolidated into `datetime`. That duplication was not free: the byte-8 panic that
+blanked whole snapshots had to be fixed in both copies.
+
 ### Live limits opt-in + cache-write TTL pricing (app 0.27.0 / protocol 1.19.0)
 
 **Live limits now default to OFF.** It is the one feature that reads a secret —

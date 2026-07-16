@@ -260,6 +260,36 @@ fn unknown_enum_values_fall_back_instead_of_failing() {
     assert_eq!(src, CommandSource::Other);
 }
 
+/// `LimitWindow::captured_at_unix` is additive (since 1.20.0) and absent must mean
+/// **unknown**, never "fresh" — that distinction is the entire point of the field.
+#[test]
+fn limit_window_captured_at_is_additive_and_absent_means_unknown() {
+    let old: LimitWindow = serde_json::from_value(json!({
+        "label": "weekly",
+        "used_percent": 82.0,
+        "window_minutes": 10080,
+        "resets_at_unix": 1_784_343_600,
+        "provenance": "provider_reported"
+    }))
+    .expect("a pre-1.20.0 LimitWindow must still decode");
+    assert_eq!(old.captured_at_unix, None, "absent ⇒ unknown, never 'now'");
+
+    let new: LimitWindow = serde_json::from_value(json!({
+        "label": "weekly",
+        "used_percent": 32.0,
+        "window_minutes": 10080,
+        "resets_at_unix": 1_784_343_600,
+        "provenance": "provider_reported",
+        "captured_at_unix": 1_784_260_000
+    }))
+    .unwrap();
+    assert_eq!(new.captured_at_unix, Some(1_784_260_000));
+    // The two timestamps answer different questions. A reading taken long ago can
+    // still name a reset far in the future — which is exactly how a stale weekly
+    // percentage passed as current.
+    assert!(new.captured_at_unix.unwrap() < new.resets_at_unix.unwrap());
+}
+
 /// `TokenTotals::cache_creation_1h_tokens` is additive (since 1.19.0) AND a
 /// subset of `cache_creation_tokens`. Both halves matter to a consumer: absent
 /// must decode, and the field must never be added to a total.
