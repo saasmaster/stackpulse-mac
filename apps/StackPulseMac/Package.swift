@@ -42,6 +42,25 @@ let package = Package(
                     "-liconv",
                 ])
             ]
+        ),
+        .testTarget(
+            name: "StackPulseAppTests",
+            dependencies: ["StackPulseApp"],
+            path: "Tests/StackPulseAppTests",
+            swiftSettings: [
+                .swiftLanguageMode(.v6)
+            ],
+            linkerSettings: [
+                // Same static archive the executable links: the test binary pulls
+                // in the app module, which calls the Rust core over the C ABI.
+                .unsafeFlags([
+                    "../../target/release/libstackpulse_ffi.a",
+                    "-framework", "CoreFoundation",
+                    "-framework", "Security",
+                    "-framework", "SystemConfiguration",
+                    "-liconv",
+                ])
+            ]
         )
     ]
 )

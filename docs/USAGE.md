@@ -431,8 +431,18 @@ cargo fmt --all -- --check
 cargo clippy -p stackpulse-protocol -p stackpulse-core -p stackpulse-cli --all-targets -- -D warnings
 cargo test --workspace
 cd apps/StackPulseMac && swift build -c release
+swift test                                     # Swift app tests
 ./.build/release/StackPulseApp --selftest-parsers
 ```
+
+Or `make test-all` for both suites.
+
+The Swift tests cover the logic that has actually broken here — the live-limits
+staleness rule and the usage-payload parser — and each was **mutation-checked**:
+reintroducing the original bug fails exactly the test that names it. The
+`--selftest-*` binary flags remain, because they are the only way to exercise the
+real packaged `.app` (`--selftest-live` reports the live-limits path end to end,
+credential state included, without ever printing the token).
 
 CI additionally builds and tests the portable crates on **Linux** and
 cross-compiles them for **Windows** — that is the guardrail that keeps platform

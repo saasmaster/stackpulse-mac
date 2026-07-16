@@ -18,6 +18,13 @@ build: ## Build the whole workspace (Rust) in debug
 test: ## Run all Rust tests
 	cargo test --workspace
 
+.PHONY: test-swift
+test-swift: core ## Run the Swift app tests (needs the core static lib)
+	cd apps/StackPulseMac && swift test
+
+.PHONY: test-all
+test-all: test test-swift ## Every test: Rust workspace + Swift app
+
 .PHONY: cli
 cli: ## Build + run the CLI snapshot against local logs
 	cargo run -p stackpulse-cli --quiet -- snapshot

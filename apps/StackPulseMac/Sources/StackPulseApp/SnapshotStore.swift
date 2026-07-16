@@ -1129,8 +1129,10 @@ final class SnapshotStore: ObservableObject {
     /// This is the rule that failed in the field: the app showed **82% for 70
     /// hours** after that window had reset. Never captured ⇒ never trustworthy —
     /// `nil` must not read as "fresh".
-    static func cachedLimitsAreTrustworthy(capturedAt: Date?, now: Date,
-                                           staleAfter: TimeInterval) -> Bool {
+    /// `nonisolated`: it reads nothing but its arguments, so binding it to the main
+    /// actor would only make the rule harder to test than to trust.
+    nonisolated static func cachedLimitsAreTrustworthy(capturedAt: Date?, now: Date,
+                                                       staleAfter: TimeInterval) -> Bool {
         guard let capturedAt else { return false }
         return now.timeIntervalSince(capturedAt) < staleAfter
     }
