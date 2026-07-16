@@ -43,6 +43,15 @@ enum StackHealthClient {
         let url: String?
     }
 
+    /// What ONE registry document says about a package. `repositoryURL` and
+    /// `homepageURL` are already normalized to a browsable `https://` URL, or are
+    /// `nil` — nothing here is ever derived from the package's *name*.
+    struct RegistryFacts: Sendable, Equatable {
+        let latest: String?
+        let repositoryURL: String?
+        let homepageURL: String?
+    }
+
     /// The network-derived enrichment for one dependency, keyed by `Dependency.id`
     /// in the map `enrich(_:)` returns. Everything is optional/degradable: a failed
     /// fetch yields `latest == nil`, `status == "unknown"`, `advisories == []`.
@@ -51,6 +60,64 @@ enum StackHealthClient {
         /// up_to_date | minor_behind | major_behind | unknown
         let status: String
         let advisories: [AdvisoryLite]
+        /// Where the package itself says its source lives, per the registry.
+        let repositoryURL: String?
+        /// The package's own stated homepage, per the registry.
+        let homepageURL: String?
+        /// The instant the registry answered for this dependency. `nil` means no
+        /// registry ever answered — which is why it isn't a `Date` with a default.
+        let checkedAt: Date?
+
+        /// Explicit (not synthesized) so the three fields above can default: this
+        /// type is constructed by tests and by `enrich`, and a memberwise init has
+        /// no defaults for `let`s.
+        init(
+            latest: String?,
+            status: String,
+            advisories: [AdvisoryLite],
+            repositoryURL: String? = nil,
+            homepageURL: String? = nil,
+            checkedAt: Date? = nil
+        ) {
+            self.latest = latest
+            self.status = status
+            self.advisories = advisories
+            self.repositoryURL = repositoryURL
+            self.homepageURL = homepageURL
+            self.checkedAt = checkedAt
+        }
+    }
+
+    // MARK: - Change routes
+
+    /// A route to where a package publishes what changed between versions.
+    ///
+    /// "react is major behind" is a semver label, not analysis: it says a number
+    /// moved, not what moved with it. StackPulse does not read release notes and
+    /// will not say what a bump breaks — so the only honest thing it can add is a
+    /// *verified way to go find out*. Every case below is a URL the package's own
+    /// registry metadata pointed at; none is derived from its name.
+    ///
+    /// Deliberately NOT built: a `…/compare/<a>…<b>` diff. A compare URL needs the
+    /// two git TAG names, and a version is not a tag — `react` tags `v19.1.0`,
+    /// some crates tag a bare `1.0.219`, and monorepos tag `next@15.0.0` for a
+    /// package whose own version string is different again. Guessing the tag ships
+    /// a 404 dressed as an answer, which is strictly worse than the releases page.
+    struct ChangeLink: Sendable, Equatable {
+        enum Kind: Sendable, Equatable {
+            /// The repository is on GitHub, so `/releases` is that host's real,
+            /// canonical route to the notes maintainers publish. (It can be empty
+            /// — that's the maintainer's answer, not a wrong link.)
+            case githubReleases
+            /// A repo page on some other host. Browsable — but where, or whether,
+            /// that host publishes releases is not something we know, so the link
+            /// promises only the repository.
+            case repository
+            /// No repository in the metadata at all; only a stated homepage.
+            case homepage
+        }
+        let kind: Kind
+        let url: String
     }
 
     // MARK: - Ecosystem normalization
@@ -98,15 +165,26 @@ enum StackHealthClient {
         let fetchable = deps.filter { normalizedEcosystem($0.ecosystem) != nil }
         guard !fetchable.isEmpty else { return [:] }
 
-        // 1) Latest versions — bounded-concurrency, one GET per package.
-        var latestByID: [String: String] = [:]
+        // 1) Registry facts — bounded-concurrency, one GET per package. The same
+        //    document that carries the latest version also carries the package's
+        //    own repository/homepage, so the "what changed" route costs no extra
+        //    request: it's a field we were already downloading and discarding.
+        var factsByID: [String: RegistryFacts] = [:]
+        var checkedAtByID: [String: Date] = [:]
         for chunk in chunk(fetchable, size: maxInFlight) {
-            await withTaskGroup(of: (String, String?).self) { group in
+            await withTaskGroup(of: (String, RegistryFacts?, Date?).self) { group in
                 for dep in chunk {
-                    group.addTask { (dep.id, await fetchLatest(dep)) }
+                    group.addTask {
+                        let facts = await fetchFacts(dep)
+                        // Stamped ONLY when the registry actually answered. A
+                        // request that timed out gets no time rather than "now".
+                        let at: Date? = facts == nil ? nil : Date()
+                        return (dep.id, facts, at)
+                    }
                 }
-                for await (id, latest) in group {
-                    if let latest, !latest.isEmpty { latestByID[id] = latest }
+                for await (id, facts, at) in group {
+                    if let facts { factsByID[id] = facts }
+                    if let at { checkedAtByID[id] = at }
                 }
             }
         }
@@ -118,46 +196,50 @@ enum StackHealthClient {
         var out: [String: DependencyEnrichment] = [:]
         out.reserveCapacity(fetchable.count)
         for dep in fetchable {
-            let latest = latestByID[dep.id]
+            let facts = factsByID[dep.id]
+            let latest = facts?.latest
             let advisories = advisoriesByID[dep.id] ?? []
             let status = compareStatus(installed: installedVersion(dep), latest: latest)
             out[dep.id] = DependencyEnrichment(
                 latest: latest,
                 status: status,
-                advisories: advisories
+                advisories: advisories,
+                repositoryURL: facts?.repositoryURL,
+                homepageURL: facts?.homepageURL,
+                checkedAt: checkedAtByID[dep.id]
             )
         }
         return out
     }
 
-    // MARK: - Latest version fetchers
+    // MARK: - Registry fetchers
 
-    private static func fetchLatest(_ dep: Dependency) async -> String? {
+    private static func fetchFacts(_ dep: Dependency) async -> RegistryFacts? {
         switch normalizedEcosystem(dep.ecosystem) {
-        case .npm: return await fetchNpmLatest(dep.name)
-        case .crates: return await fetchCratesLatest(dep.name)
+        case .npm: return await fetchNpmFacts(dep.name)
+        case .crates: return await fetchCratesFacts(dep.name)
         case nil: return nil
         }
     }
 
-    /// `GET https://registry.npmjs.org/<name>/latest` → `{ "version": "x.y.z" }`.
-    /// Scoped names (`@scope/pkg`) have their `/` percent-encoded to `%2F`.
-    static func fetchNpmLatest(_ name: String) async -> String? {
+    /// `GET https://registry.npmjs.org/<name>/latest` → the latest version's
+    /// document (`version`, `repository`, `homepage` — the package's published
+    /// package.json fields). Scoped names (`@scope/pkg`) percent-encode their `/`.
+    static func fetchNpmFacts(_ name: String) async -> RegistryFacts? {
         let encoded = name.replacingOccurrences(of: "/", with: "%2F")
         guard let url = URL(string: "https://registry.npmjs.org/\(encoded)/latest") else { return nil }
         guard let data = await get(url) else { return nil }
-        return parseNpmLatest(data)
+        return parseNpmFacts(data)
     }
 
-    /// `GET https://crates.io/api/v1/crates/<name>` →
-    /// `{ "crate": { "max_stable_version": "x", "newest_version": "y" } }`.
-    /// Prefers the max *stable* version, falling back to the newest. crates.io
-    /// requires a descriptive `User-Agent`.
-    static func fetchCratesLatest(_ name: String) async -> String? {
+    /// `GET https://crates.io/api/v1/crates/<name>` → `{ "crate": { … } }` with
+    /// `max_stable_version` / `newest_version`, `repository`, `homepage`.
+    /// crates.io requires a descriptive `User-Agent`.
+    static func fetchCratesFacts(_ name: String) async -> RegistryFacts? {
         let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
         guard let url = URL(string: "https://crates.io/api/v1/crates/\(encoded)") else { return nil }
         guard let data = await get(url) else { return nil }
-        return parseCratesLatest(data)
+        return parseCratesFacts(data)
     }
 
     // MARK: - Advisories (OSV batch)
@@ -225,13 +307,58 @@ enum StackHealthClient {
     /// npm `.../latest` → `.version`.
     static func parseNpmLatest(_ data: Data) -> String? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return (root["version"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return npmLatest(root)
     }
 
     /// crates.io crate → `.crate.max_stable_version` (fallback `.crate.newest_version`).
     static func parseCratesLatest(_ data: Data) -> String? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let crate = root["crate"] as? [String: Any] else { return nil }
+        return cratesLatest(crate)
+    }
+
+    /// npm `.../latest` → version + the package's own repository/homepage.
+    ///
+    /// `repository` is either a string shorthand or `{ "type": …, "url": … }`, and
+    /// may carry a `directory` for a monorepo package. The directory is ignored on
+    /// purpose: releases are published at the repo root, so it would narrow the
+    /// link without making it truer.
+    static func parseNpmFacts(_ data: Data) -> RegistryFacts? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        var repoRaw: String?
+        if let s = root["repository"] as? String {
+            repoRaw = s
+        } else if let d = root["repository"] as? [String: Any] {
+            repoRaw = d["url"] as? String
+        }
+        return RegistryFacts(
+            latest: npmLatest(root),
+            repositoryURL: normalizeRepositoryURL(repoRaw),
+            homepageURL: normalizeHomepageURL(root["homepage"] as? String)
+        )
+    }
+
+    /// crates.io crate → version + repository/homepage. crates.io stores plain URL
+    /// strings, already in browsable form.
+    static func parseCratesFacts(_ data: Data) -> RegistryFacts? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let crate = root["crate"] as? [String: Any] else { return nil }
+        return RegistryFacts(
+            latest: cratesLatest(crate),
+            repositoryURL: normalizeRepositoryURL(crate["repository"] as? String),
+            homepageURL: normalizeHomepageURL(crate["homepage"] as? String)
+        )
+    }
+
+    /// The one npm latest-version formula, shared by both parsers above so the
+    /// `latest` a row shows and the `latest` a facts fetch carries cannot drift.
+    private static func npmLatest(_ root: [String: Any]) -> String? {
+        (root["version"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// The one crates.io latest-version formula: prefer the max *stable* version,
+    /// fall back to the newest.
+    private static func cratesLatest(_ crate: [String: Any]) -> String? {
         if let stable = crate["max_stable_version"] as? String, !stable.isEmpty { return stable }
         if let newest = crate["newest_version"] as? String, !newest.isEmpty { return newest }
         return nil
@@ -315,6 +442,152 @@ enum StackHealthClient {
         case ..<9.0: return "high"
         default: return "critical"
         }
+    }
+
+    // MARK: - Repository / homepage resolution (pure)
+
+    /// The best verified route to what changed for one dependency, or `nil` when
+    /// the registry gave us nowhere to send the user.
+    ///
+    /// `nil` is an ORDINARY answer — plenty of packages publish no repository — and
+    /// it must stay one. The alternative (composing `github.com/<name>`) is right
+    /// often enough to look like it works and wrong often enough to send someone to
+    /// a stranger's repo, so it is not attempted anywhere in this file.
+    static func changeLink(for e: DependencyEnrichment) -> ChangeLink? {
+        // A GitHub repo — from `repository`, or from a `homepage` that IS the repo
+        // (`"homepage": "https://github.com/foo/bar#readme"` is an npm norm).
+        if let slug = githubSlug(e.repositoryURL) ?? githubSlug(e.homepageURL) {
+            return ChangeLink(kind: .githubReleases, url: "https://github.com/\(slug)/releases")
+        }
+        if let repo = e.repositoryURL { return ChangeLink(kind: .repository, url: repo) }
+        if let home = e.homepageURL { return ChangeLink(kind: .homepage, url: home) }
+        return nil
+    }
+
+    /// `owner/repo` when a URL resolves to a GitHub repository, else `nil`.
+    static func githubSlug(_ raw: String?) -> String? {
+        guard let norm = normalizeRepositoryURL(raw) else { return nil }
+        let prefix = "https://github.com/"
+        guard norm.hasPrefix(prefix) else { return nil }
+        let slug = String(norm.dropFirst(prefix.count))
+        guard slug.split(separator: "/").count == 2 else { return nil }
+        return slug
+    }
+
+    /// A package's stated repository → a browsable `https://` URL, or `nil`.
+    ///
+    /// Handles the shapes registries actually contain: npm's `git+https://….git`,
+    /// `git://`, `git+ssh://git@host/…`, scp-style `git@host:owner/repo.git`, the
+    /// package.json shorthands, and plain `https://` pages. Anything else — most
+    /// importantly a repo on a host we can't browse — returns `nil`, never a guess.
+    static func normalizeRepositoryURL(_ raw: String?) -> String? {
+        guard var s = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+        if let short = shorthandRepositoryURL(s) { return short }
+        // npm records the VCS as a URL prefix ("git+https://…"); drop it.
+        if s.lowercased().hasPrefix("git+") { s = String(s.dropFirst(4)) }
+        // scp-style "git@github.com:owner/repo.git" has no scheme to parse.
+        if !s.contains("://"), let rewritten = scpStyleToURLString(s) { s = rewritten }
+
+        guard let comps = URLComponents(string: s),
+              let rawHost = comps.host, !rawHost.isEmpty else { return nil }
+        let host = rawHost.lowercased()
+        var segs = comps.percentEncodedPath.split(separator: "/").map(String.init)
+        guard !segs.isEmpty else { return nil }
+        segs[segs.count - 1] = stripDotGit(segs[segs.count - 1])
+
+        // GitHub: the repo is exactly the first two segments, whatever else the URL
+        // carries — `…/tree/canary/packages/next` is still the vercel/next.js repo.
+        // The scheme is ignored here (and only here) because github.com over https
+        // is known-true, not assumed.
+        if host == "github.com" || host == "www.github.com" {
+            guard segs.count >= 2, isRepoSegment(segs[0]) else { return nil }
+            let repo = stripDotGit(segs[1])
+            guard isRepoSegment(repo) else { return nil }
+            return "https://github.com/\(segs[0])/\(repo)"
+        }
+
+        // Any other host: pass through only what is ALREADY browsable over https.
+        // Upgrading a `git://` or `ssh://` URL on an unknown host to https assumes
+        // that host serves the same path over the web — exactly the guess this
+        // function exists to refuse.
+        guard comps.scheme?.lowercased() == "https" else { return nil }
+        return "https://\(host)/" + segs.joined(separator: "/")
+    }
+
+    /// A package's stated homepage → the URL, if it's a web page we can open.
+    /// Not normalized further: a homepage is whatever the maintainer says it is.
+    static func normalizeHomepageURL(_ raw: String?) -> String? {
+        guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+        guard let comps = URLComponents(string: s),
+              let scheme = comps.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              let host = comps.host, !host.isEmpty else { return nil }
+        return s
+    }
+
+    /// package.json's documented `repository` shorthands: `github:` / `gitlab:` /
+    /// `bitbucket:` name their host, and a bare `"owner/repo"` means GitHub.
+    ///
+    /// The bare form is the SPEC's own default, not an inference from the package
+    /// name — `repoPair` still rejects anything that isn't exactly two plausible
+    /// path segments, so a name like `@babel/core` can never be mistaken for one.
+    /// `gist:` is unhandled on purpose: a gist has no releases page.
+    static func shorthandRepositoryURL(_ raw: String) -> String? {
+        let hosts: [(String, String)] = [
+            ("github:", "https://github.com/"),
+            ("gitlab:", "https://gitlab.com/"),
+            ("bitbucket:", "https://bitbucket.org/"),
+        ]
+        let lowered = raw.lowercased()
+        for (prefix, base) in hosts where lowered.hasPrefix(prefix) {
+            guard let pair = repoPair(String(raw.dropFirst(prefix.count))) else { return nil }
+            return base + pair.0 + "/" + pair.1
+        }
+        // Bare "owner/repo". Anything carrying a scheme or host has a colon and is
+        // not the shorthand — it falls through to full-URL parsing.
+        guard !raw.contains(":"), let pair = repoPair(raw) else { return nil }
+        return "https://github.com/" + pair.0 + "/" + pair.1
+    }
+
+    /// Splits exactly `owner/repo` (a trailing `.git` or `/` tolerated) into its two
+    /// segments, or `nil` when it isn't that shape.
+    static func repoPair(_ raw: String) -> (String, String)? {
+        var s = raw
+        while s.hasSuffix("/") { s = String(s.dropLast()) }
+        s = stripDotGit(s)
+        let parts = s.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2, isRepoSegment(parts[0]), isRepoSegment(parts[1]) else { return nil }
+        return (parts[0], parts[1])
+    }
+
+    /// `git@github.com:owner/repo.git` → an https URL string.
+    ///
+    /// Restricted to GitHub deliberately. scp-style syntax carries no scheme, so
+    /// rewriting it to `https://` assumes the host serves that path over the web:
+    /// known-true for github.com, a guess anywhere else — so anywhere else gets no
+    /// link at all.
+    static func scpStyleToURLString(_ s: String) -> String? {
+        guard let at = s.firstIndex(of: "@") else { return nil }
+        let rest = s[s.index(after: at)...]
+        guard let colon = rest.firstIndex(of: ":") else { return nil }
+        let host = String(rest[..<colon]).lowercased()
+        guard host == "github.com" || host == "www.github.com" else { return nil }
+        let path = String(rest[rest.index(after: colon)...])
+        guard !path.isEmpty else { return nil }
+        return "https://github.com/\(path)"
+    }
+
+    /// A plausible owner/repo path segment: ASCII letters, digits, `.`, `-`, `_`.
+    /// Strict on purpose — a segment we can't vouch for yields NO link rather than
+    /// a link to somewhere else.
+    static func isRepoSegment(_ s: String) -> Bool {
+        guard !s.isEmpty, s.count <= 100, s != ".", s != ".." else { return false }
+        return s.allSatisfy { c in
+            (c.isASCII && (c.isLetter || c.isNumber)) || c == "." || c == "-" || c == "_"
+        }
+    }
+
+    private static func stripDotGit(_ s: String) -> String {
+        s.hasSuffix(".git") ? String(s.dropLast(4)) : s
     }
 
     // MARK: - Version resolution + semver comparison
@@ -453,6 +726,92 @@ enum StackHealthClient {
               cvssBand("5.0") == "moderate",
               cvssBand("2.0") == "low",
               cvssBand("CVSS:3.1/AV:N/AC:L") == nil
+        else { return false }
+
+        // 7) Repository normalization. This is the ONLY thing separating a "what
+        // changed" route from a fabricated one, so every shape a registry actually
+        // returns is pinned here — including the shapes that must yield NOTHING.
+        guard normalizeRepositoryURL("git+https://github.com/facebook/react.git") == "https://github.com/facebook/react",
+              normalizeRepositoryURL("https://github.com/facebook/react") == "https://github.com/facebook/react",
+              normalizeRepositoryURL("git://github.com/foo/bar.git") == "https://github.com/foo/bar",
+              normalizeRepositoryURL("git+ssh://git@github.com/foo/bar.git") == "https://github.com/foo/bar",
+              normalizeRepositoryURL("git@github.com:foo/bar.git") == "https://github.com/foo/bar",
+              // A monorepo package points at a path inside its repo; the repo is
+              // still the first two segments.
+              normalizeRepositoryURL("https://github.com/vercel/next.js/tree/canary/packages/next") == "https://github.com/vercel/next.js",
+              normalizeRepositoryURL("github:foo/bar") == "https://github.com/foo/bar",
+              normalizeRepositoryURL("foo/bar") == "https://github.com/foo/bar",
+              normalizeRepositoryURL("gitlab:foo/bar") == "https://gitlab.com/foo/bar",
+              normalizeRepositoryURL("https://gitlab.com/foo/bar.git") == "https://gitlab.com/foo/bar",
+              // Unknown host with no browsable scheme → no link, not a guessed one.
+              normalizeRepositoryURL("git@example.com:foo/bar.git") == nil,
+              normalizeRepositoryURL("git://example.com/foo/bar.git") == nil,
+              normalizeRepositoryURL("https://github.com/onlyowner") == nil,
+              // A package NAME must never resolve to a repo. Scoped npm names are
+              // `owner/repo`-shaped, and this is the fabrication the file refuses.
+              normalizeRepositoryURL("@babel/core") == nil,
+              normalizeRepositoryURL("react") == nil,
+              normalizeRepositoryURL("") == nil,
+              normalizeRepositoryURL(nil) == nil
+        else { return false }
+
+        // 8) Change links follow the evidence, and no evidence → no link.
+        let gh = DependencyEnrichment(
+            latest: "19.1.0", status: "major_behind", advisories: [],
+            repositoryURL: "https://github.com/facebook/react"
+        )
+        guard changeLink(for: gh)?.kind == .githubReleases,
+              changeLink(for: gh)?.url == "https://github.com/facebook/react/releases"
+        else { return false }
+
+        // A homepage that IS the repo still resolves to releases.
+        let homeIsRepo = DependencyEnrichment(
+            latest: "1.0.0", status: "major_behind", advisories: [],
+            homepageURL: "https://github.com/foo/bar#readme"
+        )
+        guard changeLink(for: homeIsRepo)?.kind == .githubReleases,
+              changeLink(for: homeIsRepo)?.url == "https://github.com/foo/bar/releases"
+        else { return false }
+
+        // A non-GitHub repo links the repo and promises nothing more.
+        let gl = DependencyEnrichment(
+            latest: "1.0.0", status: "major_behind", advisories: [],
+            repositoryURL: "https://gitlab.com/foo/bar"
+        )
+        guard changeLink(for: gl)?.kind == .repository,
+              changeLink(for: gl)?.url == "https://gitlab.com/foo/bar"
+        else { return false }
+
+        // A homepage that isn't a repo is offered as a homepage, nothing more.
+        let onlyHome = DependencyEnrichment(
+            latest: "1.0.0", status: "major_behind", advisories: [],
+            homepageURL: "https://example.com/docs"
+        )
+        guard changeLink(for: onlyHome)?.kind == .homepage else { return false }
+
+        // A package that told us nothing gets NO link. This is the normal case for
+        // plenty of packages and must never become an invented one.
+        guard changeLink(for: DependencyEnrichment(latest: "1.0.0", status: "major_behind", advisories: [])) == nil
+        else { return false }
+
+        // 9) Facts carry the repository the package itself published (`directory`
+        // present and ignored — releases live at the repo root).
+        let npmDoc = #"{"name":"react","version":"19.1.0","homepage":"https://react.dev","repository":{"type":"git","url":"git+https://github.com/facebook/react.git","directory":"packages/react"}}"#
+        let facts = parseNpmFacts(Data(npmDoc.utf8))
+        guard facts?.latest == "19.1.0",
+              facts?.repositoryURL == "https://github.com/facebook/react",
+              facts?.homepageURL == "https://react.dev",
+              parseNpmFacts(Data("not json".utf8)) == nil,
+              // No repository field is ordinary, not an error.
+              parseNpmFacts(Data(#"{"version":"1.0.0"}"#.utf8))?.repositoryURL == nil
+        else { return false }
+
+        let crateDoc = #"{"crate":{"max_stable_version":"1.0.219","newest_version":"1.0.220-beta","repository":"https://github.com/serde-rs/serde"}}"#
+        let cFacts = parseCratesFacts(Data(crateDoc.utf8))
+        guard cFacts?.latest == "1.0.219",
+              cFacts?.repositoryURL == "https://github.com/serde-rs/serde",
+              cFacts?.homepageURL == nil,
+              parseCratesFacts(Data("{}".utf8)) == nil
         else { return false }
 
         return true

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Stack Health section (main window)
@@ -117,6 +118,12 @@ private struct Resolved: Identifiable {
     let worstAdvisory: AdvisoryLevel?
     /// Sort key: advisories first, then most-behind, then unknown, then up-to-date.
     let actionRank: Int
+    /// A verified route to this package's own release notes — present only on a row
+    /// that is actually behind a major/deprecated AND whose registry gave us a real
+    /// destination. `nil` on every other row, including `.unknown` ones.
+    let changeLink: StackHealthClient.ChangeLink?
+    /// When the registry answered for this dep. `nil` = it never did.
+    let checkedAt: Date?
 
     var id: String { dep.id }
 
@@ -125,7 +132,8 @@ private struct Resolved: Identifiable {
         latest: String?,
         statusRaw: String,
         advisoryCount: Int,
-        worstAdvisory: AdvisoryLevel?
+        worstAdvisory: AdvisoryLevel?,
+        enrichment: StackHealthClient.DependencyEnrichment? = nil
     ) {
         let status = DepStatus(statusRaw)
         self.dep = dep
@@ -143,6 +151,18 @@ private struct Resolved: Identifiable {
             case .upToDate: self.actionRank = 4
             }
         }
+        // Resolved here, gated on status, for two separate reasons. Honesty: on an
+        // `.unknown` row a "what changed" affordance would imply a comparison
+        // nobody made, and on an up-to-date row it implies a change that isn't
+        // there. Cost: resolving a link parses a URL, and ~90% of a portfolio's
+        // deps are fine — that's work with nowhere to land.
+        switch status {
+        case .majorBehind, .deprecated:
+            self.changeLink = enrichment.flatMap { StackHealthClient.changeLink(for: $0) }
+        case .upToDate, .minorBehind, .unknown:
+            self.changeLink = nil
+        }
+        self.checkedAt = enrichment?.checkedAt
     }
 }
 
@@ -237,11 +257,14 @@ private func resolve(
         return Resolved(
             dep: dep, latest: e.latest,
             statusRaw: projectStatusRaw(dep, latest: e.latest),
-            advisoryCount: e.advisories.count, worstAdvisory: worst
+            advisoryCount: e.advisories.count, worstAdvisory: worst,
+            enrichment: e
         )
     }
     if checking {
-        // Enrichment not ready yet → the core's own (possibly "unknown") data.
+        // Enrichment not ready yet → the core's own (possibly "unknown") data. No
+        // enrichment means no repository and no check time: the core is offline and
+        // has never seen either, so this row gets no link and no timestamp.
         let worst = dep.advisories.map { AdvisoryLevel($0.severity) }.max()
         return Resolved(
             dep: dep, latest: dep.latest, statusRaw: dep.status,
@@ -320,6 +343,11 @@ private struct DigestGroup: Identifiable {
     /// only when this holds does the advisory provably apply to all of `projects`.
     /// When it's false the row says so instead of naming projects as confirmed.
     let versionsAgree: Bool
+    /// A verified route to this package's release notes, or `nil`. Like `latest`,
+    /// this is a property of the PACKAGE, not of any one project.
+    let changeLink: StackHealthClient.ChangeLink?
+    /// When the registry answered for this dep. `nil` = it never did.
+    let checkedAt: Date?
 }
 
 /// Per-dependency accumulator for the fold below.
@@ -333,6 +361,12 @@ private struct DigestAccum {
     var advisoryCount = 0
     var worst: AdvisoryLevel?
     var hasDeprecated = false
+    var changeLink: StackHealthClient.ChangeLink?
+    /// Set once per dep id: a `nil` link is a real answer ("this package publishes
+    /// no repository"), so without this flag the fold would re-resolve it for every
+    /// project using the dep.
+    var linkResolved = false
+    var checkedAt: Date?
 }
 
 /// The whole digest, folded from every project's dependency list in a SINGLE pass.
@@ -350,6 +384,10 @@ private struct StackDigest {
     /// Deps with no known latest version — not checked, and not "fine".
     let uncheckedDeps: Int
     let projectCount: Int
+    /// The OLDEST registry answer behind this feed, so "checked 5m ago" is true of
+    /// everything in it rather than of whichever fetch happened to land last. `nil`
+    /// when no registry ever answered — the feed then claims no time at all.
+    let registriesCheckedAt: Date?
 
     var checkedDeps: Int { totalDeps - uncheckedDeps }
     /// Nothing has been compared against a registry yet — the feed has no opinion.
@@ -360,6 +398,7 @@ private struct StackDigest {
         var acc: [String: DigestAccum] = [:]
         var total = 0
         var unchecked = 0
+        var oldestChecked: Date?
 
         for proj in projects {
             for dep in proj.dependencies {
@@ -368,10 +407,14 @@ private struct StackDigest {
                 let latest = e?.latest
                 let status = DepStatus(projectStatusRaw(dep, latest: latest))
                 if status == .unknown { unchecked += 1 }
+                if let at = e?.checkedAt {
+                    oldestChecked = oldestChecked.map { Swift.min($0, at) } ?? at
+                }
 
                 let version = StackHealthClient.installedVersion(dep) ?? "—"
                 var a = acc[dep.id] ?? DigestAccum(name: dep.name, latest: latest)
                 a.latest = latest
+                a.checkedAt = e?.checkedAt
                 a.allProjects.append(proj.name)
                 a.allVersions.insert(version)
                 if let e, !e.advisories.isEmpty {
@@ -386,6 +429,13 @@ private struct StackDigest {
                     a.actionProjects.append(proj.name)
                     a.actionVersions.insert(version)
                     if status == .deprecated { a.hasDeprecated = true }
+                    // Only an actionable dep pays for a link, and it pays once: the
+                    // first project that finds this dep behind resolves it for the
+                    // row, because the destination is the package's, not theirs.
+                    if !a.linkResolved, let e {
+                        a.changeLink = StackHealthClient.changeLink(for: e)
+                        a.linkResolved = true
+                    }
                 }
                 acc[dep.id] = a
             }
@@ -400,7 +450,8 @@ private struct StackDigest {
                     id: id, name: a.name, latest: a.latest,
                     projects: a.allProjects.sorted(), versions: a.allVersions.sorted(),
                     advisoryCount: a.advisoryCount, worstAdvisory: a.worst,
-                    deprecated: a.hasDeprecated, versionsAgree: agree
+                    deprecated: a.hasDeprecated, versionsAgree: agree,
+                    changeLink: a.changeLink, checkedAt: a.checkedAt
                 ))
             }
             if !a.actionProjects.isEmpty {
@@ -408,7 +459,8 @@ private struct StackDigest {
                     id: id, name: a.name, latest: a.latest,
                     projects: a.actionProjects.sorted(), versions: a.actionVersions.sorted(),
                     advisoryCount: 0, worstAdvisory: nil,
-                    deprecated: a.hasDeprecated, versionsAgree: agree
+                    deprecated: a.hasDeprecated, versionsAgree: agree,
+                    changeLink: a.changeLink, checkedAt: a.checkedAt
                 ))
             }
         }
@@ -438,6 +490,7 @@ private struct StackDigest {
         self.totalDeps = total
         self.uncheckedDeps = unchecked
         self.projectCount = projects.count
+        self.registriesCheckedAt = oldestChecked
     }
 }
 
@@ -709,9 +762,17 @@ private struct StackDigestCard: View {
 
     private var subtitle: String {
         let projWord = digest.projectCount == 1 ? "project" : "projects"
-        let base = "\(digest.projectCount) \(projWord) · \(digest.totalDeps) deps"
+        var base = "\(digest.projectCount) \(projWord) · \(digest.totalDeps) deps"
         guard !digest.nothingChecked else { return base }
-        return "\(base) · \(digest.checkedDeps) checked"
+        base += " · \(digest.checkedDeps) checked"
+        // The registries' OWN answer time — the clock these recommendations
+        // actually rest on. The header's "scanned" is a different clock (when the
+        // manifests were read) and never was a claim about the registries; before
+        // enrichment carried a time, it was the only one this card had.
+        if let at = digest.registriesCheckedAt {
+            base += " · registries checked \(Format.relative(at))"
+        }
+        return base
     }
 
     // MARK: Ranked lists
@@ -782,27 +843,36 @@ private struct StackDigestCard: View {
         let status: DepStatus = g.deprecated ? .deprecated : .majorBehind
         let projWord = g.projects.count == 1 ? "project" : "projects"
         return HStack(spacing: 8) {
-            StatusDot(color: status.color, size: 7)
-            Text(g.name)
-                .font(.callout.weight(.medium))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Text(versionArrow(g))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Chip(text: status.label, systemImage: status.icon, tint: status.color)
-            Spacer(minLength: 8)
-            Text("\(g.projects.count) \(projWord) · \(projectList(g.projects))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            HStack(spacing: 8) {
+                StatusDot(color: status.color, size: 7)
+                Text(g.name)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(versionArrow(g))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Chip(text: status.label, systemImage: status.icon, tint: status.color)
+                Spacer(minLength: 8)
+                Text("\(g.projects.count) \(projWord) · \(projectList(g.projects))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "\(g.name), \(versionArrow(g)), \(status.label), \(g.projects.count) \(projWord): \(g.projects.joined(separator: ", "))"
+            )
+
+            // Outside the combined element on purpose: `children: .combine`
+            // flattens its subtree, which would leave this button unreachable to
+            // VoiceOver. Absent for a dep whose registry named no destination.
+            if let link = g.changeLink {
+                ChangeLinkButton(link: link, name: g.name, checkedAt: g.checkedAt)
+            }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "\(g.name), \(versionArrow(g)), \(status.label), \(g.projects.count) \(projWord): \(g.projects.joined(separator: ", "))"
-        )
     }
 
     private func advisoryAccessibilityText(_ g: DigestGroup) -> String {
@@ -1005,6 +1075,77 @@ private struct StackProjectCard: View {
     }
 }
 
+// MARK: - "What changed" link
+
+/// The only affordance this section adds to a major/deprecated row: a route to the
+/// package's own release notes.
+///
+/// This is where Stack Health stops being a semver label and starts being useful —
+/// and exactly where it must not overreach. StackPulse never fetches release notes,
+/// so it says NOTHING about what a bump breaks; the label names the destination,
+/// never its contents. `.help` carries the whole claim: what the link is, which
+/// registry field it came from, and when that registry answered.
+///
+/// Opening is always a deliberate click. This is the section's only outward-facing
+/// action, and nothing here ever fires on its own.
+private struct ChangeLinkButton: View {
+    let link: StackHealthClient.ChangeLink
+    let name: String
+    /// When the registry that supplied this URL answered. `nil` → the tooltip says
+    /// nothing about time rather than implying a freshness we can't back.
+    let checkedAt: Date?
+
+    var body: some View {
+        Button {
+            guard let url = URL(string: link.url) else { return }
+            NSWorkspace.shared.open(url)
+        } label: {
+            Label(title, systemImage: "arrow.up.forward.square")
+                .font(.caption2.weight(.medium))
+                .labelStyle(.titleAndIcon)
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .help(helpText)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    /// Names the destination, not a verdict. Only the GitHub case says "changed",
+    /// because only there does the link land on release notes.
+    private var title: String {
+        switch link.kind {
+        case .githubReleases: return "What changed"
+        case .repository: return "Repo"
+        case .homepage: return "Homepage"
+        }
+    }
+
+    private var helpText: String {
+        var s: String
+        switch link.kind {
+        case .githubReleases:
+            s = "Opens \(name)'s releases on GitHub — the maintainers' own notes. StackPulse hasn't read them; it only knows where the package says its repository is."
+        case .repository:
+            s = "Opens \(name)'s repository, as published in its registry metadata. StackPulse doesn't know where this host publishes release notes."
+        case .homepage:
+            s = "Opens \(name)'s homepage, as published in its registry metadata. The package lists no repository."
+        }
+        s += "\n\(link.url)"
+        if let checkedAt {
+            s += "\nRegistry checked \(Format.relative(checkedAt))."
+        }
+        return s
+    }
+
+    private var accessibilityText: String {
+        switch link.kind {
+        case .githubReleases: return "What changed in \(name): open its releases on GitHub"
+        case .repository: return "Open \(name)'s repository"
+        case .homepage: return "Open \(name)'s homepage"
+        }
+    }
+}
+
 // MARK: - Dependency row
 
 /// A dense per-dependency line: a leading status dot (never color-only — always
@@ -1017,6 +1158,23 @@ private struct DepRow: View {
     private var status: DepStatus { resolved.status }
 
     var body: some View {
+        HStack(spacing: 8) {
+            rowContent
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(accessibilityText)
+
+            // Outside the combined element on purpose: `children: .combine`
+            // flattens its subtree, which would leave this button unreachable to
+            // VoiceOver. `Resolved` only carries a link for a major/deprecated row
+            // whose registry named a real destination, so this stays absent on the
+            // ordinary row — it's an affordance, not a column.
+            if checking, let link = resolved.changeLink {
+                ChangeLinkButton(link: link, name: resolved.dep.name, checkedAt: resolved.checkedAt)
+            }
+        }
+    }
+
+    private var rowContent: some View {
         HStack(spacing: 8) {
             StatusDot(color: checking ? status.color : .secondary, size: 7)
 
@@ -1044,8 +1202,6 @@ private struct DepRow: View {
                 }
             }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityText)
     }
 
     private var versionText: some View {

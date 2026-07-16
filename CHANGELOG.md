@@ -18,6 +18,35 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Swift test target + breaking-change routes (app 0.31.0)
+
+**`swift test` used to say "no tests found."** Every Swift check was a `_selftest*`
+function in the shipping binary, run by hand — and one of them (`--selftest-live`)
+had **never worked**, deadlocking on every invocation, which is a large part of
+why a 70-hour live-limits failure went undiagnosed. Both rounds of bugs this
+session lived in Swift. It was the weakest part of the project.
+
+No package refactor was needed: SwiftPM tests the executable target directly under
+Swift 6. **23 tests** over the logic that actually broke — the live-limits
+staleness rule (the 70-hour case verbatim), per-reading age (an 18.5h reading is
+stale *even though* its reset is days away — the exact trap that let a stale
+weekly % pass as current), the usage-payload parser, and change-link resolution.
+
+**Mutation-checked**, because a test that cannot fail is decoration: reintroducing
+the original per-value scale bug fails exactly the two tests that name it
+(`0.45 → 45.0`, `0.82 → 82.0`) and nothing else. `make test-all` runs both suites.
+
+**Breaking-change analysis** (Phase 4's last unbuilt item). "major behind" was a
+semver *label*, not analysis — it says a number changed, not what breaks. A
+major/deprecated row now offers a real route to the package's own release notes,
+resolved from the `repository`/`homepage` fields already fetched from the registry.
+
+It links; it does **not** claim what breaks. `github.com/<package-name>` would be a
+fabrication — plausible, often right, and exactly the class of confident guess this
+project keeps undoing. No registry data ⇒ no link, pinned by test. A non-GitHub
+host links only to the repo, because whether that host publishes releases is not
+something we know.
+
 ### Codex's % was stale too; date-aware pricing; a11y (app 0.30.0 / protocol 1.20.0)
 
 **The check found the same staleness bug in Codex.** Its limits come from log
