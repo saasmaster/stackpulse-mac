@@ -5,7 +5,7 @@ contract shared by every StackPulse surface: the Rust core, the macOS app (over
 the C ABI), the `stackpulse` CLI, and — in the future — a Chrome
 native-messaging host and a Windows client.
 
-- **Current version:** `PROTOCOL_VERSION = 1.18.0`. Additive history (older
+- **Current version:** `PROTOCOL_VERSION = 1.19.0`. Additive history (older
   readers keep parsing):
   - **1.3.0** — added a `Gemini` variant to the (open) `ProviderId` enum; the
     engine now lists eleven providers.
@@ -60,6 +60,14 @@ native-messaging host and a Windows client.
     `remove_command` (never for the main worktree) for the client to gate. The
     client passes a `worktrees_dir` so the copies land outside the user's project
     folders and can't be mistaken for new projects.
+  - **1.19.0** — one additive field: `TokenTotals.cache_creation_1h_tokens`, how
+    many of `cache_creation_tokens` were **1-hour** cache writes. It is a
+    **SUBSET**, never an addition — `grand_total` must not sum the two, and an
+    older reader that ignores it still sees the correct total. Anthropic bills a
+    5-minute write at 1.25× input and a 1-hour write at **2×**; Claude's logs
+    distinguish them but this type carried only the sum, so every write was priced
+    as 5-minute and costs **understated** (86% of writes were 1-hour on a real
+    machine). Absent (pre-1.19.0 core) ⇒ 0, which prices exactly as before.
   - **1.18.0** — Schema canaries: `SchemaCanary` / `CanaryStatus` (open enum) /
     `UnpricedModel` types + the `UsageSnapshot.canaries` list; plus one additive
     field, `Checkpoint.files_unknown`. The core reads local logs whose format it

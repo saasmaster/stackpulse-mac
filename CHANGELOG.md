@@ -18,6 +18,36 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Live limits opt-in + cache-write TTL pricing (app 0.27.0 / protocol 1.19.0)
+
+**Live limits now default to OFF.** It is the one feature that reads a secret —
+your Claude OAuth token, sent to Anthropic — and an app that calls itself offline
+by default must not start doing that on its own. Existing installs that were
+actually using it **inherit ON** (a live-limits cache on disk proves the fetch ran
+and succeeded here), so nobody loses a feature silently; the answer is persisted
+once and the stored value wins thereafter. Both paths were verified end-to-end on
+a real machine: key-absent + cache present → ON; simulated fresh install → OFF.
+
+**Cache writes are now priced by TTL** (protocol 1.19.0:
+`TokenTotals.cache_creation_1h_tokens`). Anthropic bills a 5-minute cache write at
+1.25× input and a **1-hour** write at 2×. Claude's logs distinguish them; this
+type carried only the sum, so every write was priced as 5-minute and costs
+**understated**. The app's own numbers say **84.4%** of real cache writes are
+1-hour. Claude's 30-day estimate: $13,180.64 → **$14,909.91** (+$1,729.27). Codex
+is provably unchanged ($172.09) — it has no TTL concept and leaves the field 0.
+
+The new field is a **SUBSET** of `cache_creation_tokens`, never an addition:
+`grand_total` must not sum the two, and an older reader that ignores it still sees
+the correct total. Pinned by a contract test, because double-counting it would
+inflate 84% of the write volume. An impossible split (more 1-hour writes than
+writes) is clamped rather than underflowing.
+
+With this, the last *known-wrong* cost number is fixed. What remains inaccurate is
+now stated in `pricing.rs`: the OpenAI/Codex cards are unverified, Sonnet 5's
+introductory rate silently expires 2026-08-31, and data-residency / fast-mode
+multipliers aren't modelled (nothing local says which a turn used, so applying
+them would be a guess).
+
 ### Phase 4/6 wave + the pricing correction (app 0.26.0 / protocol 1.18.0)
 
 **Your Claude spend estimate was 2.75× too high.** `rates_for` matched model

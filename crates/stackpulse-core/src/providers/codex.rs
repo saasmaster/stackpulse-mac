@@ -270,6 +270,9 @@ fn scan_file(file: &PathBuf, now_unix: i64, state: &mut ScanState) {
                         cache_creation_tokens: 0,
                         cache_read_tokens: cached,
                         reasoning_tokens: reasoning,
+                        // Codex has no cache-write TTL concept: 0 prices
+                        // identically to before this field existed.
+                        cache_creation_1h_tokens: 0,
                     },
                 });
             }

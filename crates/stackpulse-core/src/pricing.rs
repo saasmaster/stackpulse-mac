@@ -14,26 +14,28 @@
 //! Providers normalize their raw counts into a single "exclusive input"
 //! convention before pricing (see `providers/*`):
 //! - `input_tokens`          → fresh, uncached prompt tokens (billed at input rate)
-//! - `cache_creation_tokens` → tokens written to cache (billed at write rate)
+//! - `cache_creation_tokens` → tokens written to cache (billed at a write rate)
+//! - `cache_creation_1h_tokens` → the 1-hour-TTL SUBSET of the writes above
 //! - `cache_read_tokens`     → tokens served from cache (billed at read rate)
 //! - `output_tokens`         → completion tokens (billed at output rate)
 //! - `reasoning_tokens`      → reasoning tokens (billed at output rate)
 //!
+//! Cache writes are priced by TTL: `cache_creation_tokens` minus
+//! `cache_creation_1h_tokens` at the 5-minute rate (1.25× input), the rest at the
+//! 1-hour rate (2× input). Pricing everything as 5-minute understated real cost —
+//! 86% of writes on a real machine are 1-hour.
+//!
 //! ## Known inaccuracies (stated, not hidden)
 //!
-//! 1. **Cache writes are priced at the 5-minute rate.** Anthropic bills a 5-minute
-//!    cache write at 1.25× input and a **1-hour** write at 2× input. Claude's logs
-//!    do distinguish them (`cache_creation.ephemeral_5m/1h_input_tokens`), but
-//!    [`TokenTotals`] carries a single `cache_creation_tokens`, so the split is
-//!    lost before it reaches this module and every write is priced as 5-minute.
-//!    On a real machine 86% of cache writes were 1-hour, so this **understates**.
-//!    Fixing it means carrying the split through the protocol and the adapters.
-//! 2. **OpenAI rates are unverified.** The Claude rates below were read off
+//! 1. **OpenAI rates are unverified.** The Claude rates below were read off
 //!    Anthropic's published price list; the GPT/Codex cards were not, and are
 //!    inherited from an earlier revision.
-//! 3. **Sonnet 5 is on introductory pricing** through [`SONNET_5_INTRO_ENDS`],
+//! 2. **Sonnet 5 is on introductory pricing** through [`SONNET_5_INTRO_ENDS`],
 //!    after which it rises to the standard Sonnet rate. `rates_for` has no clock,
 //!    so on that date this table silently becomes wrong for Sonnet 5 until updated.
+//! 3. **Data-residency and fast-mode multipliers are not modelled** (`inference_geo:
+//!    "us"` is 1.1×; fast mode has its own card). Nothing local says which a turn
+//!    used, so applying either would be a guess.
 
 use stackpulse_protocol::TokenTotals;
 
@@ -50,18 +52,27 @@ pub const PRICING_AS_OF: &str = "2026-07-16";
 pub struct ModelRates {
     pub input: f64,
     pub output: f64,
-    /// Cache-write rate (Claude prompt caching, ~1.25× input for 5-minute TTL).
+    /// Cache-write rate for the **5-minute** TTL (1.25× input).
     pub cache_write: f64,
+    /// Cache-write rate for the **1-hour** TTL (2× input). Providers without the
+    /// concept set this equal to `cache_write`, so their totals are unaffected.
+    pub cache_write_1h: f64,
     /// Cache-read rate (large discount).
     pub cache_read: f64,
 }
 
 impl ModelRates {
     /// Cost in USD for the given normalized token totals.
+    ///
+    /// Cache writes are split by TTL: a 1-hour write costs 2× input against a
+    /// 5-minute write's 1.25×, so pricing them all as 5-minute understated every
+    /// total — by 86% of the write volume on a real machine.
     pub fn cost(&self, t: &TokenTotals) -> f64 {
         let per = 1_000_000.0;
+        let (write_1h, write_5m) = t.cache_write_split();
         (t.input_tokens as f64 * self.input
-            + t.cache_creation_tokens as f64 * self.cache_write
+            + write_5m as f64 * self.cache_write
+            + write_1h as f64 * self.cache_write_1h
             + t.cache_read_tokens as f64 * self.cache_read
             + (t.output_tokens + t.reasoning_tokens) as f64 * self.output)
             / per
@@ -77,6 +88,7 @@ const FABLE: ModelRates = ModelRates {
     input: 10.0,
     output: 50.0,
     cache_write: 12.50,
+    cache_write_1h: 20.0,
     cache_read: 1.00,
 };
 /// Opus 4.5 through 4.8.
@@ -84,6 +96,7 @@ const OPUS: ModelRates = ModelRates {
     input: 5.0,
     output: 25.0,
     cache_write: 6.25,
+    cache_write_1h: 10.0,
     cache_read: 0.50,
 };
 /// Opus 4 and 4.1 — 3× the current Opus rate, and the reason model VERSION has
@@ -92,6 +105,7 @@ const OPUS_LEGACY: ModelRates = ModelRates {
     input: 15.0,
     output: 75.0,
     cache_write: 18.75,
+    cache_write_1h: 30.0,
     cache_read: 1.50,
 };
 /// Sonnet 5 introductory pricing, in effect through [`SONNET_5_INTRO_ENDS`].
@@ -99,6 +113,7 @@ const SONNET_5_INTRO: ModelRates = ModelRates {
     input: 2.0,
     output: 10.0,
     cache_write: 2.50,
+    cache_write_1h: 4.0,
     cache_read: 0.20,
 };
 /// Sonnet 4, 4.5, 4.6 — and Sonnet 5 once the introductory period ends.
@@ -106,6 +121,7 @@ const SONNET: ModelRates = ModelRates {
     input: 3.0,
     output: 15.0,
     cache_write: 3.75,
+    cache_write_1h: 6.0,
     cache_read: 0.30,
 };
 /// Haiku 4.5.
@@ -113,6 +129,7 @@ const HAIKU: ModelRates = ModelRates {
     input: 1.0,
     output: 5.0,
     cache_write: 1.25,
+    cache_write_1h: 2.0,
     cache_read: 0.10,
 };
 /// Haiku 3.5.
@@ -120,6 +137,7 @@ const HAIKU_35: ModelRates = ModelRates {
     input: 0.80,
     output: 4.0,
     cache_write: 1.00,
+    cache_write_1h: 1.60,
     cache_read: 0.08,
 };
 
@@ -133,12 +151,14 @@ const GPT5: ModelRates = ModelRates {
     input: 1.25,
     output: 10.0,
     cache_write: 1.25,
+    cache_write_1h: 1.25,
     cache_read: 0.125,
 };
 const GPT41: ModelRates = ModelRates {
     input: 2.0,
     output: 8.0,
     cache_write: 2.0,
+    cache_write_1h: 2.0,
     cache_read: 0.50,
 };
 
@@ -295,6 +315,71 @@ mod tests {
         assert!(rates_for("claude-haiku-9-9").is_none());
         // ...and the real one that showed up in local logs with no version at all.
         assert!(rates_for("<synthetic>").is_none());
+    }
+
+    /// A 1-hour cache write bills at 2× input; a 5-minute one at 1.25×. Pricing
+    /// every write as 5-minute understated real cost — 86% of writes on a real
+    /// machine are 1-hour.
+    #[test]
+    fn one_hour_cache_writes_cost_more_than_five_minute_ones() {
+        let rates = rates_for("claude-opus-4-8").unwrap();
+        let all_5m = TokenTotals {
+            cache_creation_tokens: 1_000_000,
+            ..Default::default()
+        };
+        let all_1h = TokenTotals {
+            cache_creation_tokens: 1_000_000,
+            cache_creation_1h_tokens: 1_000_000,
+            ..Default::default()
+        };
+        assert_eq!(rates.cost(&all_5m), 6.25); // published 5-min write
+        assert_eq!(rates.cost(&all_1h), 10.0); // published 1-hour write
+        assert!(rates.cost(&all_1h) > rates.cost(&all_5m));
+    }
+
+    /// The field is a SUBSET of `cache_creation_tokens`, so a mixed record must
+    /// price each half once — never double-count, never lose a token.
+    #[test]
+    fn a_mixed_record_prices_each_half_exactly_once() {
+        let rates = rates_for("claude-opus-4-8").unwrap();
+        let mixed = TokenTotals {
+            cache_creation_tokens: 1_000_000,
+            cache_creation_1h_tokens: 800_000, // 80% 1-hour, like real logs
+            ..Default::default()
+        };
+        // 0.8M @ $10 + 0.2M @ $6.25 = 8.00 + 1.25
+        assert_eq!(rates.cost(&mixed), 9.25);
+        // The subset must not inflate the token total.
+        assert_eq!(mixed.grand_total(), 1_000_000);
+    }
+
+    /// A malformed record claiming more 1-hour writes than writes must not
+    /// underflow or invent cost. Degrade, never panic.
+    #[test]
+    fn an_impossible_split_is_clamped() {
+        let rates = rates_for("claude-opus-4-8").unwrap();
+        let bogus = TokenTotals {
+            cache_creation_tokens: 100,
+            cache_creation_1h_tokens: 999_999,
+            ..Default::default()
+        };
+        let (one_hour, five_min) = bogus.cache_write_split();
+        assert_eq!((one_hour, five_min), (100, 0));
+        assert_eq!(rates.cost(&bogus), 100.0 * 10.0 / 1_000_000.0);
+    }
+
+    /// Codex never sets the field, so its costs must be byte-identical to before
+    /// 1.19.0 existed.
+    #[test]
+    fn a_provider_without_the_ttl_concept_prices_unchanged() {
+        let rates = rates_for("gpt-5-codex").unwrap();
+        let t = TokenTotals {
+            input_tokens: 1_000_000,
+            output_tokens: 1_000_000,
+            cache_read_tokens: 1_000_000,
+            ..Default::default()
+        };
+        assert_eq!(rates.cost(&t), 1.25 + 10.0 + 0.125);
     }
 
     /// A date stamp is not a minor version: `claude-opus-4-20250514` is Opus 4

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 18,
+    minor: 19,
     patch: 0,
 };
 
@@ -171,12 +171,28 @@ pub enum Provenance {
 pub struct TokenTotals {
     pub input_tokens: u64,
     pub output_tokens: u64,
-    /// Tokens written into the prompt cache (billed at a write rate).
+    /// Tokens written into the prompt cache (billed at a write rate). Includes
+    /// both TTLs — see [`TokenTotals::cache_creation_1h_tokens`].
     pub cache_creation_tokens: u64,
     /// Tokens served from the prompt cache (billed at a large discount).
     pub cache_read_tokens: u64,
     /// Reasoning tokens where the provider reports them separately (Codex).
     pub reasoning_tokens: u64,
+    /// Of `cache_creation_tokens`, how many were **1-hour** writes (since 1.19.0).
+    ///
+    /// A **SUBSET**, not an addition: it is already counted in
+    /// `cache_creation_tokens`, so totals must never sum the two. Modelled this
+    /// way on purpose — an older reader that ignores this field still sees the
+    /// correct total, and `grand_total` needs no change.
+    ///
+    /// Anthropic bills a 5-minute cache write at 1.25× input and a 1-hour write
+    /// at **2×**. Claude's logs distinguish them
+    /// (`cache_creation.ephemeral_5m/1h_input_tokens`), but this type used to
+    /// carry only the sum, so everything was priced as 5-minute. On a real machine
+    /// 86% of writes were 1-hour, so costs quietly **understated**. Providers with
+    /// no such concept (Codex) leave this 0, which prices exactly as before.
+    #[serde(default)]
+    pub cache_creation_1h_tokens: u64,
 }
 
 impl TokenTotals {
@@ -186,15 +202,32 @@ impl TokenTotals {
         self.cache_creation_tokens += other.cache_creation_tokens;
         self.cache_read_tokens += other.cache_read_tokens;
         self.reasoning_tokens += other.reasoning_tokens;
+        self.cache_creation_1h_tokens += other.cache_creation_1h_tokens;
     }
 
     /// Grand total of all token categories.
+    ///
+    /// Deliberately excludes `cache_creation_1h_tokens`: it is a subset of
+    /// `cache_creation_tokens`, so adding it would double-count every 1-hour
+    /// write — 86% of them on a real machine.
     pub fn grand_total(&self) -> u64 {
         self.input_tokens
             + self.output_tokens
             + self.cache_creation_tokens
             + self.cache_read_tokens
             + self.reasoning_tokens
+    }
+
+    /// The 1-hour and 5-minute halves of `cache_creation_tokens`, in that order.
+    ///
+    /// Clamped: a malformed record claiming more 1-hour writes than total writes
+    /// must not underflow (`u64`) or invent tokens. Callers get a pair that always
+    /// sums back to `cache_creation_tokens`.
+    pub fn cache_write_split(&self) -> (u64, u64) {
+        let one_hour = self
+            .cache_creation_1h_tokens
+            .min(self.cache_creation_tokens);
+        (one_hour, self.cache_creation_tokens - one_hour)
     }
 
     /// Cache hit rate over cache-eligible input: read / (read + creation).

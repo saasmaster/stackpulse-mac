@@ -224,12 +224,41 @@ final class SnapshotStore: ObservableObject {
     /// Coalesces overlapping balance fetches, per provider.
     private var fetchingBalances: Set<String> = []
 
-    /// Loads the persisted preference, defaulting to **on** when never set.
+    /// Loads the persisted preference. A fresh install defaults to **off**.
+    ///
+    /// This is the one feature that reads a secret: it fetches the user's Claude
+    /// OAuth token from the Keychain and sends it to Anthropic. An app that claims
+    /// to be offline by default must not start doing that on its own — so absent
+    /// means off, and enabling it is a deliberate act.
+    ///
+    /// Installs before 0.27.0 defaulted to **on**, and silently switching the
+    /// feature off under someone who was relying on it would be its own quiet lie.
+    /// A live-limits cache on disk proves the fetch actually ran and succeeded on
+    /// this machine, so that install inherits `on`. The answer is persisted either
+    /// way, so this only ever decides once — after that the stored value wins and
+    /// the file is irrelevant.
     private static func loadLiveLimitsPref() -> Bool {
         let defaults = UserDefaults.standard
-        return defaults.object(forKey: liveLimitsKey) == nil
-            ? true
-            : defaults.bool(forKey: liveLimitsKey)
+        if let explicit = defaults.object(forKey: liveLimitsKey) as? Bool {
+            return explicit
+        }
+        let inherited = FileManager.default.fileExists(atPath: liveLimitsCachePath())
+        defaults.set(inherited, forKey: liveLimitsKey)
+        return inherited
+    }
+
+    /// Path of the live-limits cache, resolved without an instance. Mirrors
+    /// `liveLimitsCacheURL`, which can't be used here because the preference is
+    /// read while the store is still being initialized.
+    private static func liveLimitsCachePath() -> String {
+        let base = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        return base
+            .appendingPathComponent("StackPulse", isDirectory: true)
+            .appendingPathComponent("live_limits_cache.json")
+            .path
     }
 
     // MARK: Notifications (proactive alerts)

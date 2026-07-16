@@ -260,6 +260,52 @@ fn unknown_enum_values_fall_back_instead_of_failing() {
     assert_eq!(src, CommandSource::Other);
 }
 
+/// `TokenTotals::cache_creation_1h_tokens` is additive (since 1.19.0) AND a
+/// subset of `cache_creation_tokens`. Both halves matter to a consumer: absent
+/// must decode, and the field must never be added to a total.
+#[test]
+fn cache_creation_1h_is_additive_and_a_subset() {
+    let old: TokenTotals = serde_json::from_value(json!({
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "cache_creation_tokens": 100,
+        "cache_read_tokens": 50,
+        "reasoning_tokens": 0
+    }))
+    .expect("a pre-1.19.0 TokenTotals must still decode");
+    assert_eq!(
+        old.cache_creation_1h_tokens, 0,
+        "absent ⇒ all writes read as 5-minute"
+    );
+    assert_eq!(old.grand_total(), 180);
+
+    let new: TokenTotals = serde_json::from_value(json!({
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "cache_creation_tokens": 100,
+        "cache_read_tokens": 50,
+        "reasoning_tokens": 0,
+        "cache_creation_1h_tokens": 80
+    }))
+    .unwrap();
+    // THE trap: 1h tokens are already inside cache_creation_tokens. A total that
+    // sums them double-counts 86% of real cache writes.
+    assert_eq!(
+        new.grand_total(),
+        180,
+        "the subset must not inflate the total"
+    );
+    assert_eq!(new.cache_write_split(), (80, 20));
+
+    // An impossible split is clamped rather than underflowing a u64.
+    let bogus = TokenTotals {
+        cache_creation_tokens: 10,
+        cache_creation_1h_tokens: 999,
+        ..Default::default()
+    };
+    assert_eq!(bogus.cache_write_split(), (10, 0));
+}
+
 /// `Checkpoint::files_unknown` is additive (since 1.18.0) and must default to the
 /// pre-1.18.0 reading — `files: []` meaning "captured nothing", not "git failed".
 #[test]

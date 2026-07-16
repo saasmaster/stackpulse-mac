@@ -60,6 +60,20 @@ struct Usage {
     cache_creation_input_tokens: u64,
     #[serde(default)]
     cache_read_input_tokens: u64,
+    /// Per-TTL breakdown of `cache_creation_input_tokens`, when the log carries
+    /// it. Absent on older lines, which is why the flat total above stays the
+    /// source of truth for the write count.
+    #[serde(default)]
+    cache_creation: Option<CacheCreation>,
+}
+
+/// The TTL split of a turn's cache writes. A 1-hour write bills at 2× input
+/// against a 5-minute write's 1.25×, so this is the difference between a right
+/// and a wrong cost — 86% of real writes on this machine are 1-hour.
+#[derive(Deserialize)]
+struct CacheCreation {
+    #[serde(default)]
+    ephemeral_1h_input_tokens: u64,
 }
 
 impl ClaudeProvider {
@@ -266,6 +280,14 @@ fn scan_file(
                 cache_creation_tokens: usage.cache_creation_input_tokens,
                 cache_read_tokens: usage.cache_read_input_tokens,
                 reasoning_tokens: 0,
+                // A SUBSET of cache_creation_tokens, clamped: a line whose
+                // breakdown disagrees with its own total must not price more
+                // 1-hour writes than there were writes.
+                cache_creation_1h_tokens: usage
+                    .cache_creation
+                    .map(|c| c.ephemeral_1h_input_tokens)
+                    .unwrap_or(0)
+                    .min(usage.cache_creation_input_tokens),
             },
         });
     }

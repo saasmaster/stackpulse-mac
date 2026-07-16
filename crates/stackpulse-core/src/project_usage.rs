@@ -204,12 +204,24 @@ struct ClaudeMessage {
     usage: Option<ClaudeUsage>,
 }
 
+/// The per-TTL split of a turn's cache writes (1-hour writes bill at 2× input
+/// vs 5-minute's 1.25×). Mirrors `providers::claude`'s reader: this module
+/// deliberately re-reads the same lines, so it must apply the same conventions
+/// or a project's cost would disagree with the provider total it rolls into.
+#[derive(Deserialize)]
+struct ClaudeCacheCreation {
+    #[serde(default)]
+    ephemeral_1h_input_tokens: u64,
+}
+
 #[derive(Deserialize)]
 struct ClaudeUsage {
     #[serde(default)]
     input_tokens: u64,
     #[serde(default)]
     output_tokens: u64,
+    #[serde(default)]
+    cache_creation: Option<ClaudeCacheCreation>,
     #[serde(default)]
     cache_creation_input_tokens: u64,
     #[serde(default)]
@@ -297,6 +309,12 @@ fn scan_claude_file(file: &Path, out: &mut Vec<Attributed>, seen: &mut HashSet<(
                     cache_creation_tokens: usage.cache_creation_input_tokens,
                     cache_read_tokens: usage.cache_read_input_tokens,
                     reasoning_tokens: 0,
+                    // Subset, clamped — see providers::claude.
+                    cache_creation_1h_tokens: usage
+                        .cache_creation
+                        .map(|c| c.ephemeral_1h_input_tokens)
+                        .unwrap_or(0)
+                        .min(usage.cache_creation_input_tokens),
                 },
             },
             ts_unix,
@@ -425,6 +443,9 @@ fn scan_codex_file(file: &Path, out: &mut Vec<Attributed>, seen: &mut HashSet<(S
                             cache_creation_tokens: 0,
                             cache_read_tokens: cached,
                             reasoning_tokens: reasoning,
+                            // Codex has no cache-write TTL concept: 0 prices
+                            // identically to before this field existed.
+                            cache_creation_1h_tokens: 0,
                         },
                     },
                     ts_unix,
