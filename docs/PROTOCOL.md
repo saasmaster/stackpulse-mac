@@ -113,6 +113,14 @@ Internally tagged by **`op`** (`#[serde(tag = "op", rename_all = "snake_case")]`
 | `get_projects` *(1.4.0)* | Discover projects + commands under approved roots. | `roots` (array of absolute paths), `max_depth` (optional int) |
 | `record_history` *(1.6.0)* | Fold today's usage into the durable store, then return history. | `data_dir` (writable abs path), `days` (optional int) |
 | `get_history` *(1.6.0)* | Read accumulated history without recording. | `data_dir`, `days` (optional int) |
+| `get_stack_health` *(1.9.0)* | Dependency/stack inventory for projects under the approved roots. | `roots`, `max_depth` (optional int), `check_updates` (bool) |
+| `get_services` *(1.9.0)* | Detect locally-running dev servers by listening TCP port. | `roots` |
+| `get_radar` *(1.11.0)* | Repository Radar: explainable, project-grounded recommendations. | `roots`, `max_depth` (optional int) |
+| `get_project_usage` *(1.13.0)* | Attribute local spend to the project each session ran in. | — |
+| `create_checkpoint` *(1.14.0)* | Non-destructive snapshot of uncommitted work (`git stash create` + a ref). | `project_path`, `label` (optional) |
+| `list_checkpoints` *(1.14.0)* | List a project's checkpoints, newest first. | `project_path` |
+| `list_worktrees` *(1.15.0)* | List the repository's worktrees. | `project_path` |
+| `create_worktree` *(1.15.0)* | Create an isolated worktree on a new branch (additive). | `project_path`, `worktrees_dir`, `name` |
 
 Examples:
 
@@ -147,6 +155,12 @@ Internally tagged by **`kind`** (`#[serde(tag = "kind", rename_all = "snake_case
 | `usage_snapshot` | the fields of `UsageSnapshot`, flattened next to `kind` |
 | `projects` *(1.4.0)* | `projects`: array of `Project` |
 | `history` *(1.6.0)* | `points`: array of `HistoryPoint` (date asc) |
+| `stack_health` *(1.9.0)* | `projects`: array of `ProjectStack` |
+| `services` *(1.9.0)* | `services`: array of `RunningService` |
+| `radar` *(1.11.0)* | the fields of `RadarReport`, flattened next to `kind` |
+| `project_usage` *(1.13.0)* | `projects`: array of `ProjectUsage` |
+| `checkpoints` *(1.14.0)* | `checkpoints`: array of `Checkpoint`, `note` (optional string) |
+| `worktrees` *(1.15.0)* | `worktrees`: array of `Worktree`, `note` (optional string) |
 | `error` | the fields of `CoreError` (`code`, `message`), flattened next to `kind` |
 
 Because `usage_snapshot` and `error` are newtype variants that wrap a struct,

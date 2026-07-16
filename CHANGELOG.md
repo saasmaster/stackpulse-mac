@@ -18,6 +18,30 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Protocol contract tests (app 0.22.1)
+
+Phase 6 groundwork. `stackpulse-protocol` is the one thing a future Windows client
+and the Chrome native-messaging host both compile against — and nothing pinned the
+actual bytes on the wire. A rename or a dropped `#[serde(default)]` would still
+compile, and this app (which serializes *and* deserializes with the same code)
+would never notice; only the downstream consumer would break.
+
+- **11 contract tests** now encode what `docs/PROTOCOL.md` promises: every `op` and
+  `kind` tag string is pinned, newtype responses must stay *flattened* next to
+  `kind` (nesting would break every Swift decoder at once), unknown enum values must
+  fall back to their catch-all, unknown keys must be ignored, additive fields must
+  stay optional, and enums must stay `snake_case`.
+- They assert on **literal JSON**, not round-trips through our own types — a
+  round-trip passes even if every field were renamed, which is exactly the break
+  worth catching.
+- **The docs are part of the contract:** a test fails if `PROTOCOL_VERSION` and
+  `docs/PROTOCOL.md` drift, or if an op exists in code but is undocumented. That
+  second one immediately caught six ops missing from the doc's tables — now added.
+- **Proven, not assumed:** I mutation-tested the guards — bumping the version
+  without updating the doc, and renaming an op tag — and confirmed each fails with
+  its intended message.
+- Workspace: **177 tests passing**, 0 clippy warnings, fmt clean.
+
 ### Worktrees — isolated agent runs (app 0.22.0 / protocol 1.15.0)
 
 The last substantive Phase-5 capability: give an agent its own copy of the repo so
