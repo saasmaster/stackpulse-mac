@@ -18,6 +18,30 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Advisories can be opened (app 0.32.0)
+
+**The address was in the data and nothing rendered it.** Enrichment carried
+`AdvisoryLite.url` per advisory, and the row showed only an "N advisories" chip —
+no way to reach any of them. Advisories are the highest-severity thing this section
+reports, so it was the worst place in the app to have a dead end. Both the
+per-dependency row and the cross-project digest now open the advisory's own writeup
+on osv.dev.
+
+The link is **grounded, not guessed**: the id comes from OSV's own API response and
+`/vulnerability/<id>` is that host's canonical route for its own ids — verified live
+against real ids (HTTP 200). An advisory with no id yields no advisory at all,
+rather than a link to `osv.dev/vulnerability/` — a page about nothing. That rule is
+mutation-checked.
+
+**Every advisory is reachable, not just the worst.** One advisory gets a button;
+several get a menu. Picking "the worst" would silently drop the others, and the
+severity ranking is StackPulse's interpretation — not a reason to hide OSV's own
+records. An advisory that has no URL still **counts**: the chip must not undercount
+a real vulnerability just because we can't route to its writeup.
+
+StackPulse has not read the advisory and says so. It names the destination and
+makes no claim about severity, applicability, or what it means.
+
 ### Swift test target + breaking-change routes (app 0.31.0)
 
 **`swift test` used to say "no tests found."** Every Swift check was a `_selftest*`

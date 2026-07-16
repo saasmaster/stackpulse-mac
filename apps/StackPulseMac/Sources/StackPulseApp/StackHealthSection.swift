@@ -101,6 +101,35 @@ private enum AdvisoryLevel: Int, Comparable {
     }
 }
 
+// MARK: - Advisory link (a route to the writeup, never a summary of it)
+
+/// One advisory reduced to what a row needs to OPEN it.
+///
+/// Exists because the address was already in the data and nothing rendered it: the
+/// enrichment carried `AdvisoryLite.url` and the UI showed only "N advisories".
+/// Advisories are the highest-severity thing this section reports and were the one
+/// row with no route to the underlying writeup.
+///
+/// Constructed ONLY from an advisory that actually has a URL. Nothing here is
+/// derived from a package name, a version, or a guess — the id comes from OSV's own
+/// API response and `osv.dev/vulnerability/<id>` is that host's canonical route for
+/// its own ids (verified live: real ids return HTTP 200).
+private struct AdvisoryLink: Identifiable, Equatable {
+    let id: String
+    let level: AdvisoryLevel
+    let url: String
+
+    /// `nil` when the advisory carries no URL — no address, no link. The core never
+    /// populates advisories at all (it does no network), so in practice these come
+    /// only from enrichment.
+    init?(id: String, severity: String, url: String?) {
+        guard let url, !url.isEmpty, URL(string: url) != nil else { return nil }
+        self.id = id
+        self.level = AdvisoryLevel(severity)
+        self.url = url
+    }
+}
+
 // MARK: - Resolved (per-dependency view model, enrichment ∪ core)
 
 /// One dependency reduced to what a row needs, preferring live enrichment and
@@ -124,6 +153,14 @@ private struct Resolved: Identifiable {
     let changeLink: StackHealthClient.ChangeLink?
     /// When the registry answered for this dep. `nil` = it never did.
     let checkedAt: Date?
+    /// Each advisory that has a real URL, worst first.
+    ///
+    /// Carries the advisories themselves rather than a count, because a count is
+    /// where the old dead end was: the data had the writeup's address all along and
+    /// the row rendered "3 advisories" with no way to reach any of them.
+    /// Deliberately NOT "the worst one" — picking one silently drops the others,
+    /// and severity ranking is our interpretation, not a reason to hide OSV's.
+    let advisoryLinks: [AdvisoryLink]
 
     var id: String { dep.id }
 
@@ -133,7 +170,8 @@ private struct Resolved: Identifiable {
         statusRaw: String,
         advisoryCount: Int,
         worstAdvisory: AdvisoryLevel?,
-        enrichment: StackHealthClient.DependencyEnrichment? = nil
+        enrichment: StackHealthClient.DependencyEnrichment? = nil,
+        advisoryLinks: [AdvisoryLink] = []
     ) {
         let status = DepStatus(statusRaw)
         self.dep = dep
@@ -141,6 +179,12 @@ private struct Resolved: Identifiable {
         self.status = status
         self.advisoryCount = advisoryCount
         self.worstAdvisory = worstAdvisory
+        // Worst first, then by id so equal severities can't reshuffle between
+        // renders. NOT truncated: `advisoryCount` and this list must agree, or the
+        // chip would count something the row won't open.
+        self.advisoryLinks = advisoryLinks.sorted {
+            $0.level != $1.level ? $0.level > $1.level : $0.id < $1.id
+        }
         if advisoryCount > 0 {
             self.actionRank = 0
         } else {
@@ -258,7 +302,13 @@ private func resolve(
             dep: dep, latest: e.latest,
             statusRaw: projectStatusRaw(dep, latest: e.latest),
             advisoryCount: e.advisories.count, worstAdvisory: worst,
-            enrichment: e
+            enrichment: e,
+            // `compactMap`: an advisory with no URL contributes no link. It still
+            // counts — the chip must not undercount a real vulnerability just
+            // because we can't route to its writeup.
+            advisoryLinks: e.advisories.compactMap {
+                AdvisoryLink(id: $0.id, severity: $0.severity, url: $0.url)
+            }
         )
     }
     if checking {
@@ -268,7 +318,13 @@ private func resolve(
         let worst = dep.advisories.map { AdvisoryLevel($0.severity) }.max()
         return Resolved(
             dep: dep, latest: dep.latest, statusRaw: dep.status,
-            advisoryCount: dep.advisories.count, worstAdvisory: worst
+            advisoryCount: dep.advisories.count, worstAdvisory: worst,
+            // The core leaves `url` nil (it does no network), so this yields
+            // nothing today — written to the data rather than to that assumption,
+            // so a core that ever does supply one is routed, not ignored.
+            advisoryLinks: dep.advisories.compactMap {
+                AdvisoryLink(id: $0.id, severity: $0.severity, url: $0.url)
+            }
         )
     }
     // Update-checking off → installed inventory only.
@@ -348,6 +404,10 @@ private struct DigestGroup: Identifiable {
     let changeLink: StackHealthClient.ChangeLink?
     /// When the registry answered for this dep. `nil` = it never did.
     let checkedAt: Date?
+    /// Routes to each advisory's own writeup, worst first. Like `advisoryCount`,
+    /// ASSIGNED from the single enrichment record — never accumulated across the
+    /// projects that share it.
+    let advisoryLinks: [AdvisoryLink]
 }
 
 /// Per-dependency accumulator for the fold below.
@@ -360,6 +420,7 @@ private struct DigestAccum {
     var actionVersions: Set<String> = []
     var advisoryCount = 0
     var worst: AdvisoryLevel?
+    var advisoryLinks: [AdvisoryLink] = []
     var hasDeprecated = false
     var changeLink: StackHealthClient.ChangeLink?
     /// Set once per dep id: a `nil` link is a real answer ("this package publishes
@@ -424,6 +485,9 @@ private struct StackDigest {
                     // "eight" — a count nobody could stand behind.
                     a.advisoryCount = e.advisories.count
                     a.worst = e.advisories.map { AdvisoryLevel($0.severity) }.max()
+                    a.advisoryLinks = e.advisories.compactMap {
+                        AdvisoryLink(id: $0.id, severity: $0.severity, url: $0.url)
+                    }
                 }
                 if status == .majorBehind || status == .deprecated {
                     a.actionProjects.append(proj.name)
@@ -451,7 +515,8 @@ private struct StackDigest {
                     projects: a.allProjects.sorted(), versions: a.allVersions.sorted(),
                     advisoryCount: a.advisoryCount, worstAdvisory: a.worst,
                     deprecated: a.hasDeprecated, versionsAgree: agree,
-                    changeLink: a.changeLink, checkedAt: a.checkedAt
+                    changeLink: a.changeLink, checkedAt: a.checkedAt,
+                    advisoryLinks: a.advisoryLinks
                 ))
             }
             if !a.actionProjects.isEmpty {
@@ -460,7 +525,11 @@ private struct StackDigest {
                     projects: a.actionProjects.sorted(), versions: a.actionVersions.sorted(),
                     advisoryCount: 0, worstAdvisory: nil,
                     deprecated: a.hasDeprecated, versionsAgree: agree,
-                    changeLink: a.changeLink, checkedAt: a.checkedAt
+                    changeLink: a.changeLink, checkedAt: a.checkedAt,
+                    // An update row is about being behind, not about a
+                    // vulnerability — its advisory count is 0, so it carries no
+                    // advisory links either. The two must never disagree.
+                    advisoryLinks: []
                 ))
             }
         }
@@ -802,6 +871,22 @@ private struct StackDigestCard: View {
     }
 
     private func advisoryRow(_ g: DigestGroup) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            advisoryRowContent(g)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(advisoryAccessibilityText(g))
+
+            // Outside the combined element: `children: .combine` flattens its
+            // subtree and would leave this unreachable to VoiceOver. Absent unless
+            // OSV actually gave a URL — the highest-severity row was the one with
+            // no route to its own writeup.
+            if !g.advisoryLinks.isEmpty {
+                AdvisoryLinkButton(links: g.advisoryLinks, name: g.name, checkedAt: g.checkedAt)
+            }
+        }
+    }
+
+    private func advisoryRowContent(_ g: DigestGroup) -> some View {
         let level = g.worstAdvisory ?? .unknown
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
@@ -835,8 +920,6 @@ private struct StackDigestCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(advisoryAccessibilityText(g))
     }
 
     private func updateRow(_ g: DigestGroup) -> some View {
@@ -1088,6 +1171,62 @@ private struct StackProjectCard: View {
 ///
 /// Opening is always a deliberate click. This is the section's only outward-facing
 /// action, and nothing here ever fires on its own.
+/// Opens an advisory's own writeup. One button for a single advisory; a menu when
+/// there are several, so none is hidden behind a "worst".
+///
+/// Names the destination and nothing else. StackPulse has not read the advisory and
+/// must not imply it has — no severity prose, no "this affects you", no summary.
+/// The severity already shown on the chip is OSV's, not ours.
+private struct AdvisoryLinkButton: View {
+    let links: [AdvisoryLink]
+    let name: String
+    /// When the registry/OSV answered. `nil` → say nothing about time rather than
+    /// imply a freshness we can't back.
+    let checkedAt: Date?
+
+    var body: some View {
+        if links.count == 1, let only = links[0] as AdvisoryLink? {
+            Button { open(only) } label: {
+                Label(only.id, systemImage: "arrow.up.forward.square")
+                    .font(.caption2.weight(.medium))
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help(help(only))
+            .accessibilityLabel("Open advisory \(only.id) for \(name) on osv.dev")
+        } else if links.count > 1 {
+            Menu {
+                ForEach(links) { link in
+                    Button(link.id) { open(link) }
+                }
+            } label: {
+                Label("\(links.count) advisories", systemImage: "arrow.up.forward.square")
+                    .font(.caption2.weight(.medium))
+                    .labelStyle(.titleAndIcon)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Open any of \(name)'s \(links.count) advisories on osv.dev\(timeSuffix).")
+            .accessibilityLabel("Open one of \(links.count) advisories for \(name) on osv.dev")
+        }
+    }
+
+    private func open(_ link: AdvisoryLink) {
+        guard let url = URL(string: link.url) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func help(_ link: AdvisoryLink) -> String {
+        "Open \(link.id) on osv.dev\(timeSuffix). StackPulse hasn't read the advisory — this opens the writeup."
+    }
+
+    private var timeSuffix: String {
+        guard let checkedAt else { return "" }
+        return " (checked \(Format.relative(checkedAt)))"
+    }
+}
+
 private struct ChangeLinkButton: View {
     let link: StackHealthClient.ChangeLink
     let name: String
@@ -1164,10 +1303,19 @@ private struct DepRow: View {
                 .accessibilityLabel(accessibilityText)
 
             // Outside the combined element on purpose: `children: .combine`
-            // flattens its subtree, which would leave this button unreachable to
-            // VoiceOver. `Resolved` only carries a link for a major/deprecated row
-            // whose registry named a real destination, so this stays absent on the
-            // ordinary row — it's an affordance, not a column.
+            // flattens its subtree, which would leave these buttons unreachable to
+            // VoiceOver. Both stay absent on an ordinary row — affordances, not
+            // columns: `Resolved` carries an advisory link only where OSV gave a
+            // real URL, and a change link only for a major/deprecated row whose
+            // registry named a real destination.
+            //
+            // Advisories first: they are the higher-severity thing on the row, and
+            // they were the one case with no route to the writeup at all.
+            if checking, !resolved.advisoryLinks.isEmpty {
+                AdvisoryLinkButton(links: resolved.advisoryLinks,
+                                   name: resolved.dep.name,
+                                   checkedAt: resolved.checkedAt)
+            }
             if checking, let link = resolved.changeLink {
                 ChangeLinkButton(link: link, name: resolved.dep.name, checkedAt: resolved.checkedAt)
             }
