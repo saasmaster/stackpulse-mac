@@ -675,6 +675,57 @@ final class SnapshotStore: ObservableObject {
         return out
     }
 
+    // MARK: Worktrees (protocol ≥ 1.15.0)
+
+    /// Worktrees per project path, loaded on demand.
+    @Published private(set) var worktrees: [String: [Worktree]] = [:]
+    /// An honest per-project note from the last worktree op.
+    @Published private(set) var worktreeNotes: [String: String] = [:]
+    /// Project paths with a worktree op in flight.
+    @Published private(set) var worktreeBusy: Set<String> = []
+
+    /// Where StackPulse puts the worktrees it creates:
+    /// `~/Library/Application Support/StackPulse/worktrees`.
+    ///
+    /// Deliberately **outside** the user's project folders — a worktree dropped
+    /// next to a repo would be picked up by the project scan and show up as a
+    /// bogus new project in Projects and the Launcher.
+    var worktreesDir: String {
+        let dir = URL(fileURLWithPath: historyDataDir).appendingPathComponent("worktrees", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.path
+    }
+
+    /// Load a project's worktrees off the main actor. Coalesced per project.
+    func loadWorktrees(for projectPath: String) {
+        guard !worktreeBusy.contains(projectPath) else { return }
+        worktreeBusy.insert(projectPath)
+        Task.detached(priority: .utility) {
+            let result = CoreBridge.listWorktrees(projectPath: projectPath)
+            await MainActor.run { self.applyWorktrees(result, for: projectPath) }
+        }
+    }
+
+    /// Create an isolated worktree for a project (additive; never touches the main
+    /// working tree) off the main actor.
+    func createWorktree(for projectPath: String, name: String) {
+        guard !worktreeBusy.contains(projectPath) else { return }
+        worktreeBusy.insert(projectPath)
+        let dir = worktreesDir
+        Task.detached(priority: .utility) {
+            let result = CoreBridge.createWorktree(
+                projectPath: projectPath, worktreesDir: dir, name: name)
+            await MainActor.run { self.applyWorktrees(result, for: projectPath) }
+        }
+    }
+
+    private func applyWorktrees(_ result: CoreBridge.WorktreeResult?, for path: String) {
+        worktreeBusy.remove(path)
+        guard let result else { return }
+        worktrees[path] = result.worktrees
+        worktreeNotes[path] = result.note
+    }
+
     // MARK: Checkpoints (protocol ≥ 1.14.0)
 
     /// Checkpoints per project path (newest first), loaded on demand.

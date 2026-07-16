@@ -1013,7 +1013,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// `HEAD` is what git prints for a detached HEAD, and it's what Claude's logs
     /// record in practice — it is not a branch, so it must never reach the UI.
     #[test]

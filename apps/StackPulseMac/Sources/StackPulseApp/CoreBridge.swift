@@ -141,6 +141,47 @@ enum CoreBridge {
         return (try? JSONDecoder().decode(Response.self, from: data))?.services ?? []
     }
 
+    // MARK: Worktrees (protocol ≥ 1.15.0)
+
+    /// The result of a worktree op: the repo's worktrees and an honest note when
+    /// nothing could be created/listed.
+    struct WorktreeResult: Decodable {
+        let worktrees: [Worktree]
+        let note: String?
+    }
+
+    /// List the repository's worktrees. Shells out to git; call off the main actor.
+    static func listWorktrees(projectPath: String) -> WorktreeResult? {
+        struct Request: Encodable {
+            let op = "list_worktrees"
+            let project_path: String
+        }
+        guard let data = try? JSONEncoder().encode(Request(project_path: projectPath)),
+              let json = String(data: data, encoding: .utf8)
+        else { return nil }
+        return decodeWorktrees(handle(json))
+    }
+
+    /// Create an isolated worktree under `worktreesDir` on a new branch.
+    static func createWorktree(projectPath: String, worktreesDir: String, name: String) -> WorktreeResult? {
+        struct Request: Encodable {
+            let op = "create_worktree"
+            let project_path: String
+            let worktrees_dir: String
+            let name: String
+        }
+        guard let data = try? JSONEncoder().encode(
+                Request(project_path: projectPath, worktrees_dir: worktreesDir, name: name)),
+              let json = String(data: data, encoding: .utf8)
+        else { return nil }
+        return decodeWorktrees(handle(json))
+    }
+
+    private static func decodeWorktrees(_ json: String) -> WorktreeResult? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(WorktreeResult.self, from: data)
+    }
+
     // MARK: Checkpoints (protocol ≥ 1.14.0)
 
     /// The result of a checkpoint op: the project's checkpoints (newest first) and

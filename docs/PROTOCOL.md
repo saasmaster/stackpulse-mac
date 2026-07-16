@@ -5,7 +5,7 @@ contract shared by every StackPulse surface: the Rust core, the macOS app (over
 the C ABI), the `stackpulse` CLI, and — in the future — a Chrome
 native-messaging host and a Windows client.
 
-- **Current version:** `PROTOCOL_VERSION = 1.14.0`. Additive history (older
+- **Current version:** `PROTOCOL_VERSION = 1.15.0`. Additive history (older
   readers keep parsing):
   - **1.3.0** — added a `Gemini` variant to the (open) `ProviderId` enum; the
     engine now lists eleven providers.
@@ -52,6 +52,14 @@ native-messaging host and a Windows client.
     working tree, the index, or HEAD) and keeps it alive under
     `refs/stackpulse/checkpoints/*`. The core never restores; it only reports
     `restore_command` for the client to gate behind a confirmation.
+  - **1.15.0** — Worktrees: `Worktree` type + the `list_worktrees` /
+    `create_worktree` ops and the `worktrees` response (with an honest `note`).
+    Creating is **additive** — `git worktree add` adds a directory and a branch and
+    leaves the existing working tree, index, and HEAD untouched — so an agent can
+    run in an isolated copy. The core never removes a worktree; it only reports
+    `remove_command` (never for the main worktree) for the client to gate. The
+    client passes a `worktrees_dir` so the copies land outside the user's project
+    folders and can't be mistaken for new projects.
   - **1.1.0** — `ProviderAnalytics` / `DailyUsage` types and the optional
     `ProviderUsage.analytics` field.
   - **1.2.0** — `Alert` / `AlertSeverity` / `AlertKind` types and the

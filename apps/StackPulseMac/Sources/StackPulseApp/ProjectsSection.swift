@@ -374,6 +374,8 @@ struct ProjectCard: View {
     /// Checkpoints are collapsed too, which also means the panel's git lookup only
     /// runs when you actually open it — never for 20 cards during a scroll.
     @State private var showCheckpoints = false
+    /// Same for worktrees.
+    @State private var showWorktrees = false
 
     /// Only git repositories can be checkpointed.
     private var isGitRepo: Bool {
@@ -451,6 +453,25 @@ struct ProjectCard: View {
                 .help("Snapshot your uncommitted work before letting an agent loose — capturing never touches your files")
                 if showCheckpoints {
                     CheckpointsPanel(project: project)
+                }
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { showWorktrees.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: showWorktrees ? "chevron.down" : "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                        Label("Worktrees", systemImage: "arrow.triangle.branch")
+                            .font(.caption.weight(.medium))
+                            .labelStyle(.titleAndIcon)
+                        Spacer()
+                    }
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Give an agent an isolated copy of this repo on its own branch — your main checkout is never touched")
+                if showWorktrees {
+                    WorktreesPanel(project: project)
                 }
             }
         }

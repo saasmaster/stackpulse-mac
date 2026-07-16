@@ -29,6 +29,7 @@ pub mod radar;
 pub mod scope_guard;
 pub mod services;
 pub mod stack_health;
+pub mod worktrees;
 
 pub use engine::{core_version, Engine};
 

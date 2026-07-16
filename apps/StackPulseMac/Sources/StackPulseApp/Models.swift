@@ -625,6 +625,44 @@ struct RunningService: Codable, Sendable, Identifiable {
     var id: String { "\(pid)\u{1}\(port)" }
 }
 
+// MARK: - Worktrees (protocol ≥ 1.15.0)
+
+/// A git worktree — a second working directory for the same repo on its own
+/// branch, so an agent can work without touching your main checkout. Creating one
+/// is additive; `remove_command` is reported by the core but never run by it
+/// (removal deletes a directory, so the UI gates it).
+struct Worktree: Codable, Sendable, Identifiable {
+    let path: String
+    let branch: String?
+    let head: String?
+    let is_main: Bool
+    let is_locked: Bool
+    let is_stackpulse: Bool
+    let remove_command: String?
+
+    var id: String { path }
+
+    private enum CodingKeys: String, CodingKey {
+        case path, branch, head, is_main, is_locked, is_stackpulse, remove_command
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        head = try c.decodeIfPresent(String.self, forKey: .head)
+        is_main = (try? c.decode(Bool.self, forKey: .is_main)) ?? false
+        is_locked = (try? c.decode(Bool.self, forKey: .is_locked)) ?? false
+        is_stackpulse = (try? c.decode(Bool.self, forKey: .is_stackpulse)) ?? false
+        remove_command = try c.decodeIfPresent(String.self, forKey: .remove_command)
+    }
+
+    /// Last path component — a friendly label.
+    var name: String { (path as NSString).lastPathComponent }
+    /// Short SHA for display.
+    var shortHead: String { String((head ?? "").prefix(7)) }
+}
+
 // MARK: - Checkpoints (protocol ≥ 1.14.0)
 
 /// A non-destructive snapshot of a project's uncommitted work (`git stash create`

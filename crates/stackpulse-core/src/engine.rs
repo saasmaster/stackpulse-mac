@@ -105,6 +105,19 @@ impl Engine {
                 let (checkpoints, note) = crate::checkpoints::list(&project_path);
                 CoreResponse::Checkpoints { checkpoints, note }
             }
+            CoreRequest::ListWorktrees { project_path } => {
+                let (worktrees, note) = crate::worktrees::list(&project_path);
+                CoreResponse::Worktrees { worktrees, note }
+            }
+            CoreRequest::CreateWorktree {
+                project_path,
+                worktrees_dir,
+                name,
+            } => {
+                let (worktrees, note) =
+                    crate::worktrees::create(&project_path, &worktrees_dir, &name);
+                CoreResponse::Worktrees { worktrees, note }
+            }
         }
     }
 

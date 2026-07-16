@@ -18,6 +18,33 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Worktrees — isolated agent runs (app 0.22.0 / protocol 1.15.0)
+
+The last substantive Phase-5 capability: give an agent its own copy of the repo so
+your main checkout is never in the blast radius.
+
+- **New isolated copy.** Every git project in Projects gets a **Worktrees** panel:
+  name it, and StackPulse runs `git worktree add` to create a second working
+  directory on its own `stackpulse/<name>` branch. Then Open in Terminal and point
+  an agent at it. Creating is **additive** — it adds a directory and a branch and
+  leaves your working tree, index, HEAD, and current branch untouched (verified
+  byte-for-byte, with modified/staged/untracked work in flight).
+- **Removing is gated, and the core refuses to own it.** Removal deletes a
+  directory, so the core only *reports* the command; the app runs it visibly in
+  Terminal behind a confirmation that names the path and warns uncommitted work in
+  it is gone. The **main checkout can never be removed** (no command is offered).
+- **Copies live outside your projects.** They're created under
+  `~/Library/Application Support/StackPulse/worktrees`, not next to your repos —
+  otherwise the project scan would surface each one as a bogus new project in
+  Projects and the Launcher.
+- **Names are sanitized before they touch a path or a git ref** — `"../../evil
+  name!"` becomes the branch `stackpulse/evil-name` in a directory safely inside
+  the worktrees folder, and is additionally gated through `git check-ref-format`.
+  An existing name is refused with an honest note rather than clobbering anything.
+- **149 core tests** (18 new, incl. the main-tree-untouched safety test and name
+  sanitization), clippy/fmt clean. Also fixed a duplicated `#[test]` attribute I'd
+  introduced in the previous change.
+
 ### Fix: missions showed a meaningless "HEAD" branch (app 0.21.1)
 
 - **Every mission claimed it was on a branch called `HEAD`.** Claude's session logs

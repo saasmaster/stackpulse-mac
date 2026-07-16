@@ -345,6 +345,25 @@ is breaking for downstream consumers, and the action they should take.
 
 ---
 
+### 2026-07-16 — Worktrees (protocol 1.15.0)
+
+- **Surface:** protocol + core
+- **Versions:** protocol **1.15.0** / core **0.1.0** / manifest *(not yet defined)*
+- **Breaking for downstream:** no (purely additive)
+- **Change:** `Worktree` type + the `list_worktrees` / `create_worktree` ops and the
+  `worktrees` response. Creating is **additive**: `git worktree add` adds a
+  directory and a branch and leaves the existing working tree, index, and HEAD
+  untouched, so an agent can be given an isolated copy. The core **never removes**
+  a worktree — it reports `remove_command` (`None` for the main worktree) and the
+  client gates it behind a confirmation. `create_worktree` takes a client-provided
+  `worktrees_dir` so copies land outside the user's project folders (otherwise a
+  project scan would surface them as bogus new projects). The `name` is sanitized
+  by the core before it reaches a path or a git ref.
+- **Downstream action:** target protocol **1.15.0**. Both ops are optional. Supply a
+  writable `worktrees_dir` outside any scanned root, and gate `remove_command`.
+
+---
+
 ## Pending / anticipated (not yet shipped)
 
 These are flagged so downstream repos can plan. They are **not** implemented and

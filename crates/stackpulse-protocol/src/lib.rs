@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 14,
+    minor: 15,
     patch: 0,
 };
 
@@ -922,6 +922,19 @@ pub enum CoreRequest {
     },
     /// List a project's StackPulse checkpoints, newest first (since 1.14.0).
     ListCheckpoints { project_path: String },
+    /// List the repository's worktrees (since 1.15.0). Read-only.
+    ListWorktrees { project_path: String },
+    /// Create an isolated worktree on a new branch (since 1.15.0). Additive:
+    /// `git worktree add` adds a directory and a branch and leaves the existing
+    /// working tree, index, and HEAD untouched. `worktrees_dir` is a
+    /// client-provided writable directory to create it under, kept out of the
+    /// user's project folders so it can't be mistaken for a new project.
+    CreateWorktree {
+        project_path: String,
+        worktrees_dir: String,
+        /// Short name for the branch/directory; sanitized by the core.
+        name: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1066,6 +1079,44 @@ pub struct Checkpoint {
     pub restore_command: String,
 }
 
+// ---------------------------------------------------------------------------
+// Worktrees — isolated agent runs (since 1.15.0)
+// ---------------------------------------------------------------------------
+
+/// A git worktree: a second working directory for the same repository, checked
+/// out on its own branch.
+///
+/// The point is isolation — let an agent work in its own copy so your main
+/// checkout is never touched. Creating one is **additive**: `git worktree add`
+/// makes a new directory and a new branch, and changes nothing about the existing
+/// working tree, index, or HEAD.
+///
+/// Removing one deletes a directory, so the core never does it: it only reports
+/// [`Worktree::remove_command`] for the client to gate behind a confirmation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Worktree {
+    /// Absolute path of the working directory.
+    pub path: String,
+    /// Branch checked out there, or `None` when detached.
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// Commit currently checked out.
+    #[serde(default)]
+    pub head: Option<String>,
+    /// True for the repository's primary working tree (never removable).
+    pub is_main: bool,
+    /// True when git has the worktree locked.
+    #[serde(default)]
+    pub is_locked: bool,
+    /// True when StackPulse created it (lives in StackPulse's own directory).
+    #[serde(default)]
+    pub is_stackpulse: bool,
+    /// The exact command that would remove it. Reported, never run. `None` for
+    /// the main worktree, which must not be removed.
+    #[serde(default)]
+    pub remove_command: Option<String>,
+}
+
 /// The core's reply. `request_echo` lets async clients correlate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1093,6 +1144,13 @@ pub enum CoreResponse {
     Radar(RadarReport),
     ProjectUsage {
         projects: Vec<ProjectUsage>,
+    },
+    Worktrees {
+        worktrees: Vec<Worktree>,
+        /// An honest note when nothing could be created/listed (not a repo, the
+        /// name collides, git refused, …).
+        #[serde(default)]
+        note: Option<String>,
     },
     Checkpoints {
         checkpoints: Vec<Checkpoint>,
