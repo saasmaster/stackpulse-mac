@@ -584,6 +584,97 @@ final class SnapshotStore: ObservableObject {
         }
     }
 
+    // MARK: Spend budget (guardrail)
+
+    // Budgets are evaluated here rather than in the core on purpose: a budget is a
+    // user preference and the check is "total vs threshold", not the hard shared
+    // parsing/pricing logic the core exists to own. It also keeps `Alert.provider`
+    // honest — a budget spans providers, so the core would have to invent one.
+    // Same client-synthesis pattern as `liveLimitAlerts`.
+
+    /// Optional daily spend guardrail, USD. `nil` = no budget.
+    @Published var dailyBudgetUSD: Double? = SnapshotStore.loadBudget(SnapshotStore.dailyBudgetKey) {
+        didSet { persistBudget() }
+    }
+    /// Optional 30-day spend guardrail, USD. `nil` = no budget.
+    @Published var monthlyBudgetUSD: Double? = SnapshotStore.loadBudget(SnapshotStore.monthlyBudgetKey) {
+        didSet { persistBudget() }
+    }
+    /// Percent of a budget that raises a warning; 100% always raises a critical.
+    @Published var budgetWarnPercent: Double = SnapshotStore.loadBudget(SnapshotStore.budgetWarnKey) ?? 80 {
+        didSet { persistBudget() }
+    }
+
+    private static let dailyBudgetKey = "stackpulse.budget.daily"
+    private static let monthlyBudgetKey = "stackpulse.budget.monthly"
+    private static let budgetWarnKey = "stackpulse.budget.warnPercent"
+
+    /// A stored budget, or `nil` when unset (absent ⇒ no budget, not zero).
+    private static func loadBudget(_ key: String) -> Double? {
+        UserDefaults.standard.object(forKey: key) as? Double
+    }
+
+    private func persistBudget() {
+        let d = UserDefaults.standard
+        // Removing on nil keeps "unset" distinct from "set to 0".
+        if let dailyBudgetUSD { d.set(dailyBudgetUSD, forKey: Self.dailyBudgetKey) }
+        else { d.removeObject(forKey: Self.dailyBudgetKey) }
+        if let monthlyBudgetUSD { d.set(monthlyBudgetUSD, forKey: Self.monthlyBudgetKey) }
+        else { d.removeObject(forKey: Self.monthlyBudgetKey) }
+        d.set(budgetWarnPercent, forKey: Self.budgetWarnKey)
+    }
+
+    /// How far today's estimated spend has eaten the daily budget (0–1+), or `nil`
+    /// when no daily budget is set.
+    var dailyBudgetFraction: Double? { fraction(spent: snapshot?.totalTodayCost, of: dailyBudgetUSD) }
+    /// Same for the 30-day budget.
+    var monthlyBudgetFraction: Double? { fraction(spent: snapshot?.total30Cost, of: monthlyBudgetUSD) }
+
+    private func fraction(spent: Double?, of budget: Double?) -> Double? {
+        guard let budget, budget > 0 else { return nil }
+        return (spent ?? 0) / budget
+    }
+
+    /// Needs-attention alerts synthesized from the spend guardrails. Ids are stable
+    /// per window so the notification gate dedups them like any core alert, and
+    /// `created_at` uses the snapshot's own generation time (no per-render `Date()`).
+    ///
+    /// Deliberately honest: these are **local estimates**, and StackPulse can only
+    /// warn — it does not control your agents and cannot stop a run.
+    private var budgetAlerts: [Alert] {
+        guard let snap = snapshot else { return [] }
+        var out: [Alert] = []
+
+        func evaluate(window: String, label: String, spent: Double?, budget: Double?) {
+            guard let budget, budget > 0 else { return }
+            let spent = spent ?? 0
+            let pct = spent / budget * 100
+            let severity: String
+            if pct >= 100 { severity = "critical" }
+            else if pct >= budgetWarnPercent { severity = "warning" }
+            else { return }
+            let rounded = Int(pct.rounded())
+            out.append(Alert(
+                id: "budget:\(window)",
+                provider: "all",
+                severity: severity,
+                kind: "spend_anomaly",
+                title: pct >= 100
+                    ? "\(label) budget exceeded — \(Format.usd(spent)) of \(Format.usd(budget))"
+                    : "\(label) budget at \(rounded)% — \(Format.usd(spent)) of \(Format.usd(budget))",
+                detail: "Estimated \(label.lowercased()) spend across all providers is \(Format.usd(spent)) "
+                    + "against your \(Format.usd(budget)) budget (\(rounded)%). "
+                    + "This is a local list-price estimate, not a bill — and StackPulse only warns; "
+                    + "it can't stop a running agent.",
+                created_at_unix: snap.generated_at_unix
+            ))
+        }
+
+        evaluate(window: "daily", label: "Daily", spent: snap.totalTodayCost, budget: dailyBudgetUSD)
+        evaluate(window: "monthly", label: "30-day", spent: snap.total30Cost, budget: monthlyBudgetUSD)
+        return out
+    }
+
     // MARK: Checkpoints (protocol ≥ 1.14.0)
 
     /// Checkpoints per project path (newest first), loaded on demand.
@@ -1055,7 +1146,7 @@ final class SnapshotStore: ObservableObject {
     /// alerts. Core alerts keep their most-severe-first order; synthesized ones
     /// follow. Drives every needs-attention surface and the notification gate.
     var allAlerts: [Alert] {
-        (snapshot?.alerts ?? []) + liveLimitAlerts + demoAlerts
+        (snapshot?.alerts ?? []) + liveLimitAlerts + budgetAlerts + demoAlerts
     }
 
     /// Needs-attention alerts derived from Claude's live limits. The core is

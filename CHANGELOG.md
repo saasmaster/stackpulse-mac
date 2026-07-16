@@ -18,6 +18,27 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Spend budgets — Phase 5 guardrails (app 0.20.0)
+
+- **Set a budget, get warned before it hurts.** Settings → **Spend budget** takes a
+  **daily** and/or **30-day** limit in USD (leave empty for none) and a warn
+  threshold (default 80%; 100% always raises a critical). Crossing one raises a
+  real **needs-attention alert** — so it flows into the toolbar bell, the sidebar,
+  and native notifications like any other alert, with no new plumbing.
+- **Home shows the meter.** Once a budget is set, Home shows today's / 30-day spend
+  against it with a percentage — no budget, no nag.
+- **Honest about what it is and isn't.** The figures are local list-price
+  estimates, not a bill; and StackPulse **only warns — it can't stop a running
+  agent** (it doesn't control your tools). The UI says exactly that rather than
+  implying a hard stop.
+- Empty ≠ zero: an empty budget field means "no budget", not "$0 — everything is
+  over budget", and half-typed numbers only commit on Return/blur so a stray
+  keystroke can't fire an alert.
+- Evaluated client-side alongside the existing synthesized live-limit alerts,
+  rather than in the core: a budget is a user preference and the check is
+  "total vs threshold" — not the shared parsing/pricing logic the core owns — and
+  it keeps `Alert.provider` honest (a budget spans providers). Swift-only.
+
 ### Checkpoints — Phase 5 safe automation (app 0.19.0 / protocol 1.14.0)
 
 Makes "let an agent loose on my repo" a reversible decision — without the safety

@@ -16,9 +16,56 @@ struct HomeSection: View {
                 if !store.activeMissions.isEmpty || !store.activeAlerts.isEmpty {
                     liveStrip
                 }
+                budgetStrip
                 OverviewDashboard(snapshot: snapshot)
             }
         }
+    }
+
+    /// Spend-budget meters, shown only once a budget is actually set (no budget →
+    /// no nag). Each pairs the bar with the spent/limit figures and a percent, so
+    /// the colour is never the only signal.
+    @ViewBuilder private var budgetStrip: some View {
+        let daily = store.dailyBudgetFraction
+        let monthly = store.monthlyBudgetFraction
+        if daily != nil || monthly != nil {
+            HStack(alignment: .top, spacing: 14) {
+                if let f = daily {
+                    budgetMeter("Today", spent: store.snapshot?.totalTodayCost,
+                                budget: store.dailyBudgetUSD, fraction: f)
+                }
+                if let f = monthly {
+                    budgetMeter("30 days", spent: store.snapshot?.total30Cost,
+                                budget: store.monthlyBudgetUSD, fraction: f)
+                }
+            }
+        }
+    }
+
+    private func budgetMeter(_ label: String, spent: Double?, budget: Double?,
+                             fraction: Double) -> some View {
+        let pct = Int((fraction * 100).rounded())
+        let tint: Color = fraction >= 1 ? .red : (fraction * 100 >= store.budgetWarnPercent ? .orange : .green)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("\(label.uppercased()) BUDGET")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(Format.usd(spent)) of \(Format.usd(budget))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Text("· \(pct)%")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(tint)
+            }
+            // Cap the bar at full; the percent text carries any overshoot.
+            MeterBar(fraction: min(fraction, 1), tint: tint, glowsWhenHigh: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(padding: 12)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label) budget: \(pct) percent of \(Format.usd(budget)) estimated spent")
     }
 
     /// A two-column "right now" strip: active AI sessions (→ Missions) and

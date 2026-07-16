@@ -11,7 +11,7 @@ struct SettingsSection: View {
     @AppStorage("onboarding.completed") private var onboardingCompleted = false
 
     /// The macOS app's own version (distinct from the Rust core version).
-    private let appVersion = "0.19.0"
+    private let appVersion = "0.20.0"
 
     var body: some View {
         SectionScaffold(section: .settings) { snapshot in
@@ -22,6 +22,7 @@ struct SettingsSection: View {
                 refreshCard(snapshot)
                 notificationsCard
                 sidebarCard
+                budgetCard
                 liveLimitsCard
                 powerCard
                 ProviderConnectionsCard()
@@ -37,6 +38,47 @@ struct SettingsSection: View {
                 costCard(snapshot)
                 accessibilityCard
             }
+        }
+    }
+
+    /// Spend guardrails. Deliberately plain about what this is and isn't: the
+    /// numbers are local list-price estimates, and StackPulse only warns — it does
+    /// not control your agents and cannot stop a run.
+    private var budgetCard: some View {
+        SettingsCard(title: "Spend budget", systemImage: "dollarsign.circle") {
+            Text("Get a needs-attention alert when your estimated spend approaches a limit you set. Leave a field empty for no budget.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 14) {
+                BudgetField(label: "Daily", value: $store.dailyBudgetUSD)
+                BudgetField(label: "30-day", value: $store.monthlyBudgetUSD)
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 8) {
+                Text("Warn at")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Slider(value: $store.budgetWarnPercent, in: 50...95, step: 5)
+                    .frame(maxWidth: 200)
+                Text("\(Int(store.budgetWarnPercent))%")
+                    .font(.caption.monospacedDigit().weight(.medium))
+                    .frame(width: 34, alignment: .leading)
+                Text("· 100% always raises a critical alert")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.top, 2)
+
+            Label("These are local estimates, not a bill — and StackPulse can only warn you; it can't stop a running agent.",
+                  systemImage: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .labelStyle(.titleAndIcon)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
         }
     }
 
@@ -638,6 +680,55 @@ private struct ProviderConnectionRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .labelStyle(.titleAndIcon)
+        }
+    }
+}
+
+// MARK: - Budget field
+
+/// A USD budget entry. An **empty** field means "no budget" — distinct from `0`,
+/// which would mean "every cent is over budget". Commits on Return/blur so a
+/// half-typed number never briefly reads as a tiny budget and fires an alert.
+private struct BudgetField: View {
+    let label: String
+    @Binding var value: Double?
+
+    @State private var text: String = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label.uppercased())
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                Text("$").foregroundStyle(.secondary)
+                TextField("none", text: $text)
+                    .textFieldStyle(.plain)
+                    .frame(width: 72)
+                    .focused($focused)
+                    .onSubmit(commit)
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .liquidGlass(cornerRadius: 8, prominence: .low, padding: 0)
+        }
+        .onAppear { text = value.map { String(format: "%g", $0) } ?? "" }
+        .onChange(of: focused) { if !focused { commit() } }
+        .accessibilityLabel("\(label) spend budget in dollars, empty for none")
+    }
+
+    private func commit() {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty {
+            value = nil
+        } else if let parsed = Double(trimmed), parsed > 0 {
+            value = parsed
+            text = String(format: "%g", parsed)
+        } else {
+            // Reject garbage (and 0) by snapping back to the last good value.
+            text = value.map { String(format: "%g", $0) } ?? ""
         }
     }
 }
