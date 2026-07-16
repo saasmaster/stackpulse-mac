@@ -210,13 +210,19 @@ struct OverviewProviderCard: View {
                          tint: SPStatus.limitColor(limit.used_percent),
                          glowsWhenHigh: true)
                 // Claude's limits can be a cached value the fetch could not
-                // refresh. Unlabelled, a 3-day-old 82% reads exactly like a live
-                // 82% — this card showed no age at all while the popover did.
+                // refresh. Unlabelled, a stale 82% reads exactly like a live 82% —
+                // this card showed no age at all while the popover did.
                 if provider.provider == "claude" {
-                    LiveLimitsAgeNote(capturedAt: store.liveLimitsCapturedAt,
-                                      isStale: store.liveLimitsAreStale)
+                    LiveLimitsStatusNote(capturedAt: store.liveLimitsCapturedAt,
+                                         isStale: store.liveLimitsAreStale,
+                                         error: store.liveLimitsError)
                 }
             }
+        } else if provider.provider == "claude", let err = store.liveLimitsError {
+            // "No live limits reported" blamed Claude for our own failure to
+            // fetch. When we know the reason, give it — it's the difference
+            // between a dead card and one telling you exactly what to do.
+            LiveLimitsStatusNote(capturedAt: nil, isStale: false, error: err)
         } else {
             HStack(spacing: 5) {
                 Image(systemName: "gauge.open.with.lines.needle.33percent")

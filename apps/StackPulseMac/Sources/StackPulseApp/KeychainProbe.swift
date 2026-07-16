@@ -9,12 +9,14 @@ import Security
 /// the provider status. This is the platform boundary working as designed
 /// (ADR-0005): the core stays portable; the Swift layer adds the native detail.
 ///
-/// **The service name is not a constant.** Claude Code writes per-workspace items
-/// (`Claude Code-credentials-<hash>`), so this matches by PREFIX and takes the
-/// most recently written. This doc used to name `Claude Code-credentials` as *the*
-/// service; that item still exists as a stale leftover, and reading it fed a
-/// days-old token to the usage API — the fetch failed silently for 70 hours while
-/// a cached "82%" kept rendering as if live.
+/// The login lives under the **unsuffixed** `Claude Code-credentials`. Do not be
+/// tempted by the `Claude Code-credentials-<hash>` siblings: there are hundreds,
+/// they are rewritten far more often, and they hold per-server **MCP OAuth** state
+/// rather than a login — chasing them by prefix breaks live limits with a
+/// `parseFailed`. The unsuffixed item's modification date only moves when a
+/// *terminal* Claude Code session refreshes the token; a Desktop-only session
+/// never renews it, so a lagging date means the token is going stale, which is a
+/// signal to report — not to route around.
 ///
 /// Presence detection requests attributes only, never secret data, so it does not
 /// trigger the interactive "allow access" prompt. Only the opt-in live-limits read
@@ -37,57 +39,39 @@ struct ClaudeCredentials: Sendable {
 }
 
 enum KeychainProbe {
-    /// Prefixes of the Keychain service names Claude Code is known to use.
+    /// The Keychain services holding Claude Code's **login**, in priority order.
     ///
-    /// PREFIXES, not exact names, and that distinction is the whole point. Claude
-    /// Code moved to per-workspace items — `Claude Code-credentials-dc50ab7e` and
-    /// hundreds of siblings — while leaving the unsuffixed `Claude Code-credentials`
-    /// behind as a stale leftover. Matching the exact legacy name kept finding that
-    /// leftover, reading a token last written days earlier, and failing the fetch
-    /// forever. Observed live: the legacy item sat 3 days old while the real one had
-    /// been rewritten minutes before.
-    private static let claudeServicePrefixes = [
+    /// EXACT names, and deliberately so. `Claude Code-credentials-<hash>` items
+    /// also exist — 234 of them on one real machine, rewritten constantly — and
+    /// they are tempting because they look newer. **They are not logins.** They
+    /// hold per-server MCP OAuth state (`{"mcpOAuth": {"plugin:…": {…}}}`) with no
+    /// `claudeAiOauth` and no top-level `accessToken`. Matching them by prefix and
+    /// taking the most recently written makes the read `parseFailed` and breaks
+    /// live limits outright — verified by inspecting the real items.
+    ///
+    /// The login lives in the unsuffixed item. Its modification date lags (Claude
+    /// Code only rewrites it when a *terminal* session refreshes the token), and
+    /// that lag is a real signal — not a reason to go looking for a "fresher" item.
+    private static let claudeServices = [
         "Claude Code-credentials",
         "Claude Code-local-oauth",
         "Claude Code-custom-oauth",
     ]
 
     static func claudeCredentialsPresent() -> Bool {
-        !claudeServiceNames().isEmpty
+        claudeServices.contains { serviceExists($0) }
     }
 
-    /// Every Claude credential service on this machine, **most recently written
-    /// first** — so the freshest token is tried first and a stale sibling can never
-    /// shadow it.
-    ///
-    /// Keychain has no prefix query, so this enumerates generic-password
-    /// **attributes** and filters. `kSecReturnData: false` — no secret is requested
-    /// here, which is also why it never prompts. Items that aren't ours are matched
-    /// against the prefixes and dropped immediately; nothing about them is read,
-    /// retained, or logged.
-    private static func claudeServiceNames() -> [String] {
+    /// Presence only — `kSecReturnData: false`, so it never requests the secret and
+    /// never triggers the interactive "allow access" prompt.
+    private static func serviceExists(_ service: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecReturnAttributes as String: true,
-            kSecReturnData as String: false,     // metadata only; never the secret
-            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecAttrService as String: service,
+            kSecReturnData as String: false,
+            kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let items = result as? [[String: Any]]
-        else { return [] }
-
-        return items
-            .compactMap { item -> (String, Date)? in
-                guard let service = item[kSecAttrService as String] as? String,
-                      claudeServicePrefixes.contains(where: { service.hasPrefix($0) })
-                else { return nil }
-                // No modification date ⇒ sort it oldest rather than guess it's new.
-                let modified = item[kSecAttrModificationDate as String] as? Date ?? .distantPast
-                return (service, modified)
-            }
-            .sorted { $0.1 > $1.1 }
-            .map(\.0)
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
 
@@ -126,12 +110,7 @@ enum KeychainProbe {
         // second (direct) read, so the user is never double-prompted.
         var pendingGrant = false
         var parseFail = false
-        // Newest first, and only a few: this machine has 234 distinct Claude
-        // credential services. Each read spawns `security` and can sit on an
-        // "allow access" prompt, so walking them all would take minutes and could
-        // prompt over and over. The freshest item is the live login by
-        // construction; the extras only cover it being unreadable or foreign.
-        for service in claudeServiceNames().prefix(maxCredentialReadAttempts) {
+        for service in claudeServices {
             switch readViaSecurityCLI(service: service) {
             case .data(let d):
                 if let creds = parseCredentialsJSON(d) { return .ok(creds) }
@@ -146,11 +125,6 @@ enum KeychainProbe {
         if parseFail { return .parseFailed }
         return .notFound
     }
-
-    /// How many credential items to try, newest first. See the loop above: this is
-    /// a bound on prompts and process spawns, not on correctness — item 1 is the
-    /// live login unless it is unreadable.
-    private static let maxCredentialReadAttempts = 3
 
     private enum SecurityRead {
         case data(Data)

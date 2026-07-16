@@ -28,11 +28,13 @@ enum StackPulseMain {
             let balances = ProviderBalanceClient._selftest()
             let notify = NotificationManager._selftest()
             let stack = StackHealthClient._selftest()
+            let stale = SnapshotStore._selftestStaleness()
             print("anthropic-usage parser: \(live ? "PASS" : "FAIL")")
             print("provider-balance parser: \(balances ? "PASS" : "FAIL")")
             print("notification-gate logic: \(notify ? "PASS" : "FAIL")")
             print("stack-health semver logic: \(stack ? "PASS" : "FAIL")")
-            exit(live && balances && notify && stack ? 0 : 1)
+            print("live-limits staleness policy: \(stale ? "PASS" : "FAIL")")
+            exit(live && balances && notify && stack && stale ? 0 : 1)
         }
         // Hidden diagnostic: exercise the live-limits path (Keychain read + fetch)
         // and print the outcome — the credential *state* and the limit
@@ -40,7 +42,12 @@ enum StackPulseMain {
         // access-denied Keychain from a code bug.
         if args.contains("--selftest-live") {
             let sem = DispatchSemaphore(value: 0)
-            Task {
+            // `Task.detached`, NOT `Task`: this runs in a main-actor context, so a
+            // plain `Task` inherits the main actor and can never start while
+            // `sem.wait()` below is blocking that same thread. This diagnostic
+            // deadlocked on every invocation — printing nothing, forever — which is
+            // precisely why a 70-hour live-limits failure went undiagnosed.
+            Task.detached {
                 switch KeychainProbe.readClaudeCredentialsResult() {
                 case .notFound: print("creds: notFound")
                 case .accessDenied: print("creds: accessDenied (Keychain read blocked)")
@@ -54,7 +61,11 @@ enum StackPulseMain {
                 }
                 sem.signal()
             }
-            sem.wait()
+            // Bounded: a Keychain prompt can sit unanswered, and a diagnostic that
+            // hangs forever is the thing being fixed here.
+            if sem.wait(timeout: .now() + 60) == .timedOut {
+                print("timed out after 60s — a Keychain prompt is probably unanswered")
+            }
             return
         }
         // Hidden diagnostic: prove the notification pipeline end-to-end. Requests

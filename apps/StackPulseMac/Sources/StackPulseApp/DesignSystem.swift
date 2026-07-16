@@ -404,32 +404,44 @@ struct ProviderBalanceLabel: View {
     }
 }
 
-/// "as of …" for Claude's live limits when the shown percentage is NOT live.
+/// The honest state of Claude's live limits: either "as of …" for a value we're
+/// still willing to stand behind, or the reason there is no number.
 ///
-/// A live limit is the one number in this app the user acts on immediately, and a
-/// cached one looks exactly like a fresh one. This label is the whole difference
-/// between "you're at 82%" and "you were at 82%, three days ago".
+/// A live limit is the one number in this app a user acts on immediately, and a
+/// cached one looks exactly like a fresh one. This is the whole difference between
+/// "you're at 82%" and "you were at 82%, and we haven't been able to check since".
 ///
-/// It exists as a shared component because it didn't used to be one: the popover
-/// labelled the age, Home and Overview rendered the same cached percentage with
-/// nothing at all — so the surface the user actually opens was the one that
-/// implied a stale number was current. Render this beside every live-limit
-/// readout; it draws nothing when the value is fresh.
-struct LiveLimitsAgeNote: View {
+/// Shared because it wasn't: the popover labelled the age and surfaced the error,
+/// while Home and Overview — the surface actually opened — rendered the same
+/// cached percentage with neither. Render this beside every live-limit readout.
+/// It draws nothing when the value is fresh and correct.
+struct LiveLimitsStatusNote: View {
     let capturedAt: Date?
     let isStale: Bool
+    /// Why there is no live value, when there isn't one.
+    let error: String?
 
     var body: some View {
-        if isStale, let capturedAt {
-            HStack(spacing: 4) {
-                Image(systemName: "clock.arrow.circlepath").imageScale(.small)
-                Text("as of \(Format.relative(capturedAt)) — not live right now")
-            }
-            .font(.system(size: 9))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityLabel("These limit percentages are from \(Format.relative(capturedAt)) and are not live.")
+        if let error {
+            row("exclamationmark.triangle", error, tint: .orange)
+        } else if isStale, let capturedAt {
+            row("clock.arrow.circlepath",
+                "as of \(Format.relative(capturedAt)) — not live right now",
+                tint: .secondary)
         }
+    }
+
+    private func row(_ symbol: String, _ text: String, tint: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Image(systemName: symbol).imageScale(.small)
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.system(size: 9))
+        .foregroundStyle(tint)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(text)
     }
 }
 

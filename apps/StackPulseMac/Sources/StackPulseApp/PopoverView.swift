@@ -454,8 +454,9 @@ struct ProviderCard: View {
             // than implying they're live. Shared with Home/Overview, which used to
             // render the same cached number with no age at all.
             if provider.provider == "claude" {
-                LiveLimitsAgeNote(capturedAt: store.liveLimitsCapturedAt,
-                                  isStale: store.liveLimitsAreStale)
+                LiveLimitsStatusNote(capturedAt: store.liveLimitsCapturedAt,
+                                     isStale: store.liveLimitsAreStale,
+                                     error: store.liveLimitsError)
             }
         }
     }

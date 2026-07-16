@@ -80,8 +80,15 @@ enum AnthropicUsageClient {
     static func fetchClaudeLimits(claudeVersion: String?) async -> Outcome {
         switch KeychainProbe.readClaudeCredentialsResult() {
         case .notFound:
-            // No local login → nothing to show, and nothing worth alarming about.
-            return .empty
+            // This is only reached when the user has explicitly enabled live
+            // limits, so "no login found" is a reason they need — not something to
+            // pass over in silence. Returning `.empty` (error `nil`) meant the card
+            // simply showed nothing, or worse, kept showing a cached number with no
+            // hint that it could no longer be refreshed.
+            return Outcome(
+                limits: [],
+                error: "No Claude Code login found — run `claude` in Terminal once to sign in."
+            )
         case .accessDenied:
             return Outcome(
                 limits: [],

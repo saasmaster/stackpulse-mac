@@ -147,17 +147,23 @@ final class SnapshotStore: ObservableObject {
     /// Minimum time between actual network fetches — the cached value is reused in
     /// between, so frequent refreshes never rate-limit the provider.
     private let liveLimitsRefetchInterval: TimeInterval = 8 * 60
-    /// Keep showing the last-known limits (clearly labeled "as of …") for up to
-    /// this long when a fresh fetch can't be had. Generous because Claude's
-    /// dominant window is weekly (slow-moving) and a stale-but-labeled % beats a
-    /// blank card that reads as "signed out".
-    private let liveLimitsStaleAfter: TimeInterval = 3 * 24 * 60 * 60
-
-    /// How long a *failing* fetch stays unreported. Shorter than
-    /// `liveLimitsStaleAfter` on purpose: how long we'll SHOW a cached number and
-    /// how long we'll stay SILENT about not being able to refresh it are different
-    /// questions, and conflating them hid a 70-hour failure behind a stale "82%".
-    private let liveLimitsErrorGrace: TimeInterval = 60 * 60
+    /// How long a cached limit may still be shown when a fresh fetch can't be had,
+    /// and how long a failing fetch stays unreported. **One bound for both**, and
+    /// deliberately short.
+    ///
+    /// This was 3 DAYS, on the theory that a stale-but-labeled % beats a blank card
+    /// reading as "signed out". That reasoning does not survive contact with the
+    /// failure it caused: a fetch broke and the app displayed **82% for 70 hours**
+    /// after that window had already reset. Worse, the check for "has this window
+    /// reset?" reads the cached `resets_at` — which is itself part of the stale
+    /// snapshot. Stale data cannot adjudicate its own freshness, so age is the only
+    /// honest guard.
+    ///
+    /// A live limit is the number in this app a user acts on immediately. If we
+    /// cannot refresh it, the answer is "we don't know" — never a number we can't
+    /// stand behind. An hour still absorbs a rate-limit, a closed laptop, or a
+    /// flaky network across ~7 refetch attempts.
+    private let liveLimitsStaleAfter: TimeInterval = 60 * 60
 
     /// When the currently-shown live limits were actually captured (last
     /// successful fetch), or nil when there are none. Drives the "as of …" label.
@@ -1079,23 +1085,56 @@ final class SnapshotStore: ObservableObject {
     }
 
     /// Whether the cached live limits are present and recent enough to display.
-    ///
-    /// Displaying is a lower bar than staying silent: a stale value is fine to show
-    /// **because ``LiveLimitsAgeNote`` states its age**, but it is never a reason to
-    /// hide why it's stale. See `liveLimitsFailureIsStillTransient`.
     private var cachedLiveLimitsUsable: Bool {
-        guard !lastGoodLiveLimits.isEmpty, let at = lastGoodLiveLimitsAt else { return false }
-        return Date().timeIntervalSince(at) < liveLimitsStaleAfter
+        guard !lastGoodLiveLimits.isEmpty else { return false }
+        return SnapshotStore.cachedLimitsAreTrustworthy(
+            capturedAt: lastGoodLiveLimitsAt, now: Date(), staleAfter: liveLimitsStaleAfter)
     }
 
-    /// Whether a failed fetch is still young enough to be worth ignoring.
-    ///
-    /// The refetch interval is 8 minutes, so this grace covers several consecutive
-    /// failures — enough to ride out a rate-limit or a closed laptop — without ever
-    /// letting a persistent problem hide behind a cached number.
+    /// Whether a failed fetch is still young enough to be worth ignoring — the same
+    /// bound that governs showing the cached value, because they are the same
+    /// question: are we still willing to stand behind the last number we got?
     private var liveLimitsFailureIsStillTransient: Bool {
-        guard let at = lastGoodLiveLimitsAt else { return false }
-        return Date().timeIntervalSince(at) < liveLimitsErrorGrace
+        SnapshotStore.cachedLimitsAreTrustworthy(
+            capturedAt: lastGoodLiveLimitsAt, now: Date(), staleAfter: liveLimitsStaleAfter)
+    }
+
+    /// The staleness policy for a cached live-limit value, as a pure function so it
+    /// can be proven rather than reasoned about.
+    ///
+    /// This is the rule that failed in the field: the app showed **82% for 70
+    /// hours** after that window had reset. Never captured ⇒ never trustworthy —
+    /// `nil` must not read as "fresh".
+    static func cachedLimitsAreTrustworthy(capturedAt: Date?, now: Date,
+                                           staleAfter: TimeInterval) -> Bool {
+        guard let capturedAt else { return false }
+        return now.timeIntervalSince(capturedAt) < staleAfter
+    }
+
+    /// Headless proof of the staleness policy above. Pure — no store, no network,
+    /// no Keychain. Run by `--selftest-parsers`.
+    static func _selftestStaleness() -> Bool {
+        let now = Date()
+        let hour: TimeInterval = 60 * 60
+
+        // THE regression: the exact failure Jorge hit. A 70-hour-old percentage
+        // must never be shown, no matter what its own cached `resets_at` claims —
+        // that reset time is part of the same stale snapshot.
+        guard !cachedLimitsAreTrustworthy(capturedAt: now.addingTimeInterval(-70 * hour),
+                                          now: now, staleAfter: hour) else { return false }
+        // A value we've never captured is not fresh by default.
+        guard !cachedLimitsAreTrustworthy(capturedAt: nil, now: now, staleAfter: hour)
+        else { return false }
+        // A momentary blip still rides on the last good value (refetch is 8 min).
+        guard cachedLimitsAreTrustworthy(capturedAt: now.addingTimeInterval(-5 * 60),
+                                         now: now, staleAfter: hour) else { return false }
+        // Just inside / just outside the bound.
+        guard cachedLimitsAreTrustworthy(capturedAt: now.addingTimeInterval(-59 * 60),
+                                         now: now, staleAfter: hour),
+              !cachedLimitsAreTrustworthy(capturedAt: now.addingTimeInterval(-61 * 60),
+                                          now: now, staleAfter: hour)
+        else { return false }
+        return true
     }
 
     /// The cached limits that are still meaningful, dropping any whose **own reset
