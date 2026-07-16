@@ -18,6 +18,22 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Fix: launching Terminal froze the app for ~20 seconds (app 0.22.2)
+
+- **The bug you hit.** Every "Launch", "Run in Terminal", "Restore" and worktree
+  action drove Terminal via `NSAppleScript.executeAndReturnError` — which is fully
+  synchronous — **on the main thread**. So the UI was blocked while Terminal cold-
+  launched and the Apple Event round-tripped, and (on first use) for as long as the
+  macOS Automation permission dialog sat on screen. That's the slowness and the
+  glitching.
+- **Measured, not guessed:** the old path blocked the calling thread for
+  **20,677 ms**. The fix dispatches the AppleScript to a dedicated **serial**
+  background queue (serial because `NSAppleScript` is not thread-safe), and the
+  call now returns in **0.0 ms** — Terminal still opens exactly as before, the UI
+  just never waits for it.
+- `runInTerminal` no longer returns a `Bool`; it can't know synchronously anymore,
+  and every call site already discarded it.
+
 ### Protocol contract tests (app 0.22.1)
 
 Phase 6 groundwork. `stackpulse-protocol` is the one thing a future Windows client

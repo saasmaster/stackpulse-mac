@@ -8,7 +8,10 @@ import AppKit
 /// sees exactly what runs and can stop it. Nothing is ever executed in-process,
 /// and non-read-only commands are gated behind a confirmation dialog upstream.
 ///
-/// All methods touch AppKit and are `@MainActor`.
+/// Called from the main actor, but never *blocks* it: driving Terminal over
+/// AppleScript is slow (measured >20s cold, and it stalls for as long as the
+/// first-run Automation prompt is up), so that work is dispatched off-thread —
+/// see ``runInTerminal``.
 @MainActor
 enum CommandRunner {
     /// Copy a command string to the general pasteboard.
@@ -21,9 +24,18 @@ enum CommandRunner {
     /// Open Terminal.app, `cd` to `cwd`, and run `command` in a visible window.
     /// Uses AppleScript's `do script`, which spawns a real interactive shell the
     /// user can watch and interrupt. First use prompts for Automation permission
-    /// (expected macOS behavior). Returns `false` if Terminal couldn't be driven.
-    @discardableResult
-    static func runInTerminal(command: String, cwd: String) -> Bool {
+    /// (expected macOS behavior).
+    ///
+    /// **Returns immediately.** `NSAppleScript.executeAndReturnError` is fully
+    /// synchronous and slow: it waits for Terminal to launch (seconds when cold),
+    /// waits for the Apple Event round-trip, and on first use blocks for as long
+    /// as the macOS Automation permission dialog is on screen. Running that on the
+    /// main thread froze the whole UI every time you launched something — so it's
+    /// dispatched to a background queue instead.
+    ///
+    /// That queue is **serial** deliberately: `NSAppleScript` is not thread-safe,
+    /// so every execution is funnelled through one thread rather than racing.
+    static func runInTerminal(command: String, cwd: String) {
         // Build the shell line first (single-quote the path), then embed the whole
         // line as an AppleScript string literal (escaping backslashes + quotes).
         let shellLine = "cd \(shellSingleQuoted(cwd)) && \(command)"
@@ -33,11 +45,18 @@ enum CommandRunner {
             do script \(appleScriptLiteral(shellLine))
         end tell
         """
-        guard let script = NSAppleScript(source: source) else { return false }
-        var error: NSDictionary?
-        script.executeAndReturnError(&error)
-        return error == nil
+        appleScriptQueue.async {
+            guard let script = NSAppleScript(source: source) else { return }
+            var error: NSDictionary?
+            script.executeAndReturnError(&error)
+            // Nothing surfaces the failure today (every call site discarded the
+            // old return value), and the user sees Terminal either open or not.
+        }
     }
+
+    /// Serializes all AppleScript execution off the main thread. One queue, because
+    /// `NSAppleScript` must not be driven from several threads at once.
+    private static let appleScriptQueue = DispatchQueue(label: "com.stackpulse.applescript")
 
     // MARK: Quoting
 
