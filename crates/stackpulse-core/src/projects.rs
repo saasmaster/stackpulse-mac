@@ -378,17 +378,61 @@ fn detect_package_manager(names: &HashSet<&str>) -> Option<String> {
 /// Best-effort branch + origin URL from a `.git` directory. Never fetches; reads
 /// only `HEAD` and `config`. A `.git` *file* (worktree/submodule pointer) yields
 /// no branch/remote here.
-fn git_info(dir: &Path) -> (Option<String>, Option<String>) {
-    let gitdir = dir.join(".git");
-    if !gitdir.is_dir() {
-        return (None, None);
+/// The real git directory for `dir`.
+///
+/// `.git` is usually a directory, but for a **linked worktree or a submodule it is
+/// a file** containing `gitdir: <path>`. Treating that as "not a repo" made us
+/// report a repository that *has* a remote as having none — and the radar then
+/// advised adding a remote the user already has. StackPulse creates linked
+/// worktrees itself, so this was self-inflicted.
+///
+/// Resolved by reading files only — no `git` execution, per this module's contract.
+fn resolve_git_dir(dir: &Path) -> Option<PathBuf> {
+    let dot_git = dir.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git);
     }
+    let content = fs::read_to_string(&dot_git).ok()?;
+    let pointer = content.trim().strip_prefix("gitdir:")?.trim();
+    let path = PathBuf::from(pointer);
+    // The pointer may be relative to the project directory.
+    Some(if path.is_absolute() {
+        path
+    } else {
+        dir.join(path)
+    })
+}
+
+/// The git dir that actually holds `config`.
+///
+/// A linked worktree's own gitdir has its own HEAD but **no config** — remotes are
+/// shared with the main repository, which `commondir` points at. Without this hop
+/// a worktree looks remote-less.
+fn git_common_dir(gitdir: &Path) -> PathBuf {
+    match fs::read_to_string(gitdir.join("commondir")) {
+        Ok(rel) => {
+            let rel = rel.trim();
+            let p = PathBuf::from(rel);
+            if p.is_absolute() {
+                p
+            } else {
+                gitdir.join(p)
+            }
+        }
+        Err(_) => gitdir.to_path_buf(),
+    }
+}
+
+fn git_info(dir: &Path) -> (Option<String>, Option<String>) {
+    let Some(gitdir) = resolve_git_dir(dir) else {
+        return (None, None);
+    };
     let branch = fs::read_to_string(gitdir.join("HEAD")).ok().and_then(|s| {
         s.trim()
             .strip_prefix("ref: refs/heads/")
             .map(str::to_string)
     });
-    let remote = fs::read_to_string(gitdir.join("config"))
+    let remote = fs::read_to_string(git_common_dir(&gitdir).join("config"))
         .ok()
         .and_then(|c| parse_origin_url(&c));
     (branch, remote)

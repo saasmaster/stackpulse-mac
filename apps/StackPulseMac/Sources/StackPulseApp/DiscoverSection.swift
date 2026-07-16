@@ -38,7 +38,11 @@ struct DiscoverSection: View {
                 loadingOrPrompt
             }
         }
-        .onAppear { store.rescanRadar() }
+        // Guarded like every sibling section: the radar walks all approved roots
+        // and shells out to git per project, and this view is an Advisor tab — so
+        // an unguarded onAppear re-ran the whole scan every time you switched tabs
+        // back to a report that was already on screen.
+        .onAppear { if store.radar == nil { store.rescanRadar() } }
     }
 
     // MARK: Toolbar

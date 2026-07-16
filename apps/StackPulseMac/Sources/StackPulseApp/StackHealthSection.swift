@@ -132,8 +132,11 @@ struct StackHealthSection: View {
     @EnvironmentObject var store: SnapshotStore
 
     /// Network enrichment keyed by `Dependency.id`, filled off the main actor.
-    @State private var enrichment: [String: StackHealthClient.DependencyEnrichment] = [:]
-    @State private var enriching = false
+    /// Enrichment lives on the store, not here: this view is an Advisor tab and is
+    /// destroyed on every tab switch, which previously threw the whole download
+    /// away and re-fetched it.
+    private var enrichment: [String: StackHealthClient.DependencyEnrichment] { store.stackEnrichment }
+    private var enriching: Bool { store.isEnrichingStack }
     /// Projects whose "up to date" rows are expanded.
     @State private var expandedProjects: Set<String> = []
 
@@ -155,37 +158,20 @@ struct StackHealthSection: View {
         }
         .onAppear {
             if store.stackHealth.isEmpty, !store.approvedRoots.isEmpty { store.rescanStackHealth() }
-            runEnrichment()
+            store.enrichStack()
         }
         // A fresh scan invalidates enrichment — clear and re-fetch.
         .onChange(of: store.stackUpdatedAt) { _, _ in
-            enrichment = [:]
-            runEnrichment()
+            store.enrichStack(force: true)
         }
         // Toggling update-checking on kicks a fetch; off clears any live data.
         .onChange(of: store.stackCheckUpdates) { _, isOn in
-            if isOn { runEnrichment() } else { enrichment = [:] }
+            if isOn { store.enrichStack() } else { store.clearStackEnrichment() }
         }
     }
 
     // MARK: Enrichment
 
-    /// Fetches latest versions + advisories for every dependency and folds the
-    /// result into `@State`. Gated on the update-check toggle; a no-op while a
-    /// fetch is already in flight or there's nothing to check. `enrich(...)` runs
-    /// off the main actor (its statics are nonisolated), so the `await` suspends
-    /// this main-actor `Task` off-main and resumes here to publish the result.
-    private func runEnrichment() {
-        guard store.stackCheckUpdates, !enriching else { return }
-        let deps = store.stackHealth.flatMap(\.dependencies)
-        guard !deps.isEmpty else { return }
-        enriching = true
-        Task {
-            let result = await StackHealthClient.enrich(deps)
-            self.enrichment = result
-            self.enriching = false
-        }
-    }
 
     // MARK: Toolbar
 

@@ -33,6 +33,9 @@ final class CaptureSession: ObservableObject, Identifiable, @unchecked Sendable 
     private let lock = NSLock()
     private var buffer = ""
     private var didFinish = false
+    /// Set the instant the user asks to stop, guarded by `lock` so it is visible
+    /// to whichever thread reaches `finish` first. See `stop()`.
+    private var stopRequested = false
 
     /// Displayed line cap (memory bound); the persisted tail is smaller.
     private static let maxLines = 2000
@@ -101,12 +104,18 @@ final class CaptureSession: ObservableObject, Identifiable, @unchecked Sendable 
     /// Ask the process to stop (SIGTERM). Idempotent.
     func stop() {
         guard let proc = process, proc.isRunning else { return }
-        proc.terminate()
-        // terminationHandler will fire; mark intent so it records as `stopped`.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, !self.didFinish else { return }
-            self.finish(exit: self.exitCode ?? -1, stopped: true)
-        }
+        // Record the intent SYNCHRONOUSLY, before terminating.
+        //
+        // Previously this hopped to main and *then* called `finish` (another hop),
+        // while the SIGTERM reap called `finish` from `terminationHandler` after a
+        // single hop. Whichever landed first won — so a run the user deliberately
+        // cancelled could be persisted as `.failed (exit 15)`, and the Missions
+        // card would then report "Test failed" about work that was simply stopped.
+        // A flag set here can't lose that race, whoever finishes first.
+        lock.lock()
+        stopRequested = true
+        lock.unlock()
+        proc.terminate() // terminationHandler → finish(), which honours the flag
     }
 
     // MARK: Output
@@ -136,6 +145,10 @@ final class CaptureSession: ObservableObject, Identifiable, @unchecked Sendable 
     }
 
     private func finish(exit code: Int32, stopped: Bool) {
+        // A user-requested stop wins regardless of which callback got here first.
+        lock.lock()
+        let wasStopped = stopped || stopRequested
+        lock.unlock()
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.didFinish else { return }
             self.didFinish = true
@@ -150,7 +163,7 @@ final class CaptureSession: ObservableObject, Identifiable, @unchecked Sendable 
             self.process?.standardOutput.map { ($0 as? Pipe)?.fileHandleForReading.readabilityHandler = nil }
             self.exitCode = code
             self.finishedAtUnix = Date().timeIntervalSince1970
-            self.status = stopped ? .stopped : (code == 0 ? .passed : .failed)
+            self.status = wasStopped ? .stopped : (code == 0 ? .passed : .failed)
             self.onUpdate?(self.run)
         }
     }

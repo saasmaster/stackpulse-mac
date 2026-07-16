@@ -111,11 +111,10 @@ fn rule_generated_not_ignored(projects: &[Project]) -> Option<Recommendation> {
     let mut affected_names = Vec::new();
     let mut evidence = Vec::new();
     for p in projects.iter().filter(|p| is_git(p)) {
-        let ignore = read_to_string(&Path::new(&p.path).join(".gitignore")).unwrap_or_default();
         let leaked: Vec<&str> = GENERATED_DIRS
             .iter()
             .copied()
-            .filter(|d| dir_exists(&p.path, d) && !gitignore_covers(&ignore, d))
+            .filter(|d| dir_exists(&p.path, d) && !git_ignores(&p.path, d))
             .collect();
         if !leaked.is_empty() {
             affected_names.push(p.name.clone());
@@ -391,17 +390,36 @@ fn dir_exists(root: &str, name: &str) -> bool {
     Path::new(root).join(name).is_dir()
 }
 
-fn read_to_string(path: &Path) -> Option<String> {
-    std::fs::read_to_string(path).ok()
-}
-
 /// Whether a `.gitignore` body plausibly covers `dir` (bare name, `dir/`, or
 /// `/dir` — a conservative substring/line match, not a full gitignore parser).
-fn gitignore_covers(ignore: &str, dir: &str) -> bool {
-    ignore.lines().map(str::trim).any(|line| {
-        let line = line.trim_start_matches('/').trim_end_matches('/');
-        line == dir
-    })
+/// Whether git itself ignores `dir` inside `project_path`.
+///
+/// We used to read `.gitignore` and compare each line to the directory name. That
+/// only recognised bare `node_modules` / `/target/` forms and missed the mainstream
+/// glob spellings — `**/node_modules`, `dist/**` — so the radar told people with a
+/// perfectly configured repo that their build folders "aren't covered by
+/// .gitignore". Reimplementing gitignore semantics (globs, negation, precedence,
+/// nested and global ignore files) is a losing game, so ask the authority.
+///
+/// `check-ignore` exits 0 when the path IS ignored, 1 when it isn't. Any other
+/// failure (no git, not a repo) returns `false`, which at worst re-raises a
+/// recommendation rather than inventing one.
+///
+/// The trailing slash matters. Asked about bare `dist`, git answers "not ignored"
+/// for the very common `dist/**` pattern — that pattern covers the folder's
+/// *contents*, not the name. But git tracks files, not directories, so `dist/**`
+/// does keep the whole folder out of the repo, and flagging it would be wrong.
+/// Asking about `dist/` is the real question ("is this directory kept out?") and
+/// is answered correctly for `dist`, `/dist`, `dist/`, and `dist/**` alike.
+fn git_ignores(project_path: &str, dir: &str) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_path)
+        .args(["check-ignore", "-q", "--"])
+        .arg(format!("{dir}/"))
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// Whether the working tree at `path` has uncommitted changes. Local `git` only;
@@ -502,10 +520,39 @@ mod tests {
     }
 
     #[test]
-    fn gitignore_covers_various_forms() {
-        assert!(gitignore_covers("node_modules\ndist\n", "node_modules"));
-        assert!(gitignore_covers("/target/\n", "target"));
-        assert!(!gitignore_covers("# comment\nbuild-output\n", "build"));
+    fn git_ignores_understands_glob_forms_a_line_match_missed() {
+        // A real repo, because the whole point is that git decides, not us.
+        let dir = std::env::temp_dir().join(format!("sp-radar-gi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("node_modules")).unwrap();
+        std::fs::create_dir_all(dir.join("build")).unwrap();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .output()
+                .expect("git");
+        };
+        run(&["init", "-q", "."]);
+        // Both glob spellings the old line-comparison could not see. `dist/**`
+        // ignores the folder's contents rather than its name — git tracks files,
+        // not directories, so it genuinely keeps `dist` out of the repo.
+        std::fs::create_dir_all(dir.join("dist")).unwrap();
+        std::fs::write(dir.join(".gitignore"), "**/node_modules\ndist/**\n").unwrap();
+
+        let p = dir.to_string_lossy().to_string();
+        assert!(
+            git_ignores(&p, "node_modules"),
+            "`**/node_modules` is ignored by git; claiming otherwise is a false report"
+        );
+        assert!(
+            git_ignores(&p, "dist"),
+            "`dist/**` keeps the whole folder out of the repo; flagging it is a false report"
+        );
+        assert!(!git_ignores(&p, "build"), "build is genuinely not ignored");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

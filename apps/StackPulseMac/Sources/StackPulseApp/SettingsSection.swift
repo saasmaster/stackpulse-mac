@@ -11,7 +11,7 @@ struct SettingsSection: View {
     @AppStorage("onboarding.completed") private var onboardingCompleted = false
 
     /// The macOS app's own version (distinct from the Rust core version).
-    private let appVersion = "0.23.0"
+    private let appVersion = "0.24.0"
 
     var body: some View {
         SectionScaffold(section: .settings) { snapshot in

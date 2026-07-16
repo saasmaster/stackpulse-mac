@@ -675,6 +675,39 @@ final class SnapshotStore: ObservableObject {
         return out
     }
 
+    // MARK: Stack Health enrichment (network: latest versions + advisories)
+
+    /// Latest-version / advisory enrichment, keyed by `Dependency.id`.
+    ///
+    /// Cached on the store rather than in the view's `@State` on purpose: Stack
+    /// Health is an Advisor *tab*, so the view is destroyed and recreated every
+    /// time you switch tabs. With the cache in the view, each visit re-fetched one
+    /// HTTP request per dependency (≈1,000 GETs to npm/crates.io for 25 projects,
+    /// eight at a time) for data it had just downloaded.
+    @Published private(set) var stackEnrichment: [String: StackHealthClient.DependencyEnrichment] = [:]
+    @Published private(set) var isEnrichingStack = false
+
+    /// Fetch latest versions + advisories for the current stack, unless we already
+    /// have them or a fetch is in flight. `force` re-fetches after a fresh scan.
+    func enrichStack(force: Bool = false) {
+        guard stackCheckUpdates, !isEnrichingStack else { return }
+        if force { stackEnrichment = [:] }
+        guard stackEnrichment.isEmpty else { return } // already have it
+        let deps = stackHealth.flatMap(\.dependencies)
+        guard !deps.isEmpty else { return }
+        isEnrichingStack = true
+        Task {
+            let result = await StackHealthClient.enrich(deps)
+            self.stackEnrichment = result
+            self.isEnrichingStack = false
+        }
+    }
+
+    /// Drop enrichment (update-checking turned off, or the scan changed).
+    func clearStackEnrichment() {
+        stackEnrichment = [:]
+    }
+
     // MARK: Worktrees (protocol ≥ 1.15.0)
 
     /// Worktrees per project path, loaded on demand.
@@ -1249,7 +1282,14 @@ final class SnapshotStore: ObservableObject {
             else { return nil }
             var detail = "Your Claude \(limit.label) usage is \(pct)% consumed."
             if let reset = limit.resets_at_unix {
-                detail += " Resets \(Format.relative(Date(timeIntervalSince1970: TimeInterval(reset))))."
+                // `Format.relative` is a PAST-tense formatter ("3h ago"); a reset is
+                // in the future, so it collapsed to "just now" for every reset —
+                // telling the user their limit resets imminently when it might be
+                // days out, in the alert *and* in the macOS notification body.
+                // `resetCountdown` is the forward-looking one.
+                if let countdown = Format.resetCountdown(reset) {
+                    detail += " It \(countdown)."
+                }
             }
             return Alert(
                 id: "live:claude:\(limit.label)",
@@ -1300,7 +1340,14 @@ final class SnapshotStore: ObservableObject {
     /// while notifications are disabled, so re-enabling never fires a backlog.
     private func evaluateNotifications() {
         let eligible = activeAlerts.filter { $0.severityKind >= notifyMinSeverity }
-        let currentIDs = Set(eligible.map(\.id))
+        // Key on severity as well as id. Alert ids are deliberately stable across a
+        // severity change (`budget:daily`, `live:claude:weekly`, `claude:usage:5h`
+        // all keep one id at warning and at critical) so they dedup properly — but
+        // that also meant an *escalation* looked like an already-notified alert and
+        // stayed silent. You'd be warned at 85% of budget and never told you blew
+        // it; warned at 80% of the weekly limit and never told you hit 96%. The
+        // escalation is the notification that actually matters.
+        let currentIDs = Set(eligible.map(notificationKey))
         let result = NotificationGate.transition(
             current: currentIDs, alreadyNotified: notifiedAlertIDs, seeded: notificationsSeeded
         )
@@ -1312,9 +1359,17 @@ final class SnapshotStore: ObservableObject {
         // already marked notified above, so they still surface in-app and won't
         // re-fire once quiet hours end.
         if quietHoursEnabled, isQuietNow() { return }
-        for alert in eligible where result.toNotify.contains(alert.id) {
+        for alert in eligible where result.toNotify.contains(notificationKey(alert)) {
             notifications.deliver(alert)
         }
+    }
+
+    /// The dedup key for the notification gate: the alert's identity **plus** its
+    /// severity, so a warning→critical escalation reads as new rather than as the
+    /// same already-notified alert. (Re-crossing the *same* threshold still dedups,
+    /// which is the behaviour the id alone was there to give.)
+    private func notificationKey(_ alert: Alert) -> String {
+        "\(alert.id)#\(alert.severity)"
     }
 
     /// Whether the current local hour falls inside the configured quiet-hours

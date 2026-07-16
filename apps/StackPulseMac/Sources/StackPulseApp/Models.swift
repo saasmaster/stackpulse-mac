@@ -787,8 +787,15 @@ struct RadarReport: Codable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         generated_at_unix = try c.decodeIfPresent(Int64.self, forKey: .generated_at_unix)
-        projects_scanned = (try? c.decode(Int.self, forKey: .projects_scanned)) ?? 0
-        recommendations = ((try? c.decodeIfPresent([Recommendation].self, forKey: .recommendations)) ?? nil) ?? []
+        // These two are REQUIRED on purpose. When every field had a default, this
+        // decoder could not fail — so a core *error* response
+        // (`{"kind":"error","code":"permission_denied",…}`) decoded into a
+        // perfectly valid empty report, and Discover rendered a green
+        // "scanned 0 projects and found no obvious gaps — all clear" for a scan
+        // that never happened. Failing here makes the bridge return nil and the
+        // view keep its loading state, which is the truth.
+        projects_scanned = try c.decode(Int.self, forKey: .projects_scanned)
+        recommendations = try c.decode([Recommendation].self, forKey: .recommendations)
     }
 
     var generatedAt: Date? {

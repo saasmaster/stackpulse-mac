@@ -135,7 +135,12 @@ private struct ConsoleLog: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
+                // LAZY on purpose. A live run appends to `lines` many times a
+                // second, and each append re-evaluates this body — with a plain
+                // VStack that rebuilt and re-laid-out every one of up to 2,000
+                // selectable Text views each time, so the console stuttered
+                // precisely while output was streaming (i.e. always).
+                LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                         Text(line.isEmpty ? " " : line)
                             .font(.system(size: 11, design: .monospaced))
@@ -153,6 +158,7 @@ private struct ConsoleLog: View {
             }
         }
     }
+
 
     private var bottomAnchor: String { "console-bottom" }
 }

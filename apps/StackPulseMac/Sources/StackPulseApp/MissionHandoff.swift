@@ -43,8 +43,14 @@ enum MissionEvidence {
 
     /// Whether the run happened after the mission's work started — evidence from
     /// *before* the session began says nothing about what the agent just did.
+    ///
+    /// An unknown start time returns `false`, not `true`. `started_at_unix` is
+    /// genuinely optional on the wire, and defaulting the unknown case to "yes"
+    /// turned "we don't know when this session began" into "this run post-dates
+    /// it" — rendering a green *verified* tick from evidence we can't place. This
+    /// module's whole rule is that absence of evidence is reported as absence.
     static func isAfterSessionStart(_ run: CommandRun, _ mission: Mission) -> Bool {
-        guard let started = mission.started_at_unix else { return true }
+        guard let started = mission.started_at_unix else { return false }
         return run.startedAtUnix >= Double(started)
     }
 }
