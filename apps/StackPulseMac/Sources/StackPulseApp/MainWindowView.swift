@@ -29,6 +29,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     case discover
     case stackHealth
     case services
+    case canaries
     case integrations
     case settings
 
@@ -57,6 +58,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .projects: return "Projects"
         case .discover: return "Discover"
         case .stackHealth: return "Stack Health"
+        case .canaries: return "Data Checks"
         case .services: return "Services"
         case .integrations: return "Integrations"
         case .settings: return "Settings"
@@ -79,6 +81,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .projects: return "folder"
         case .discover: return "sparkle.magnifyingglass"
         case .stackHealth: return "shield.lefthalf.filled"
+        case .canaries: return "checkmark.shield"
         case .services: return "server.rack"
         case .integrations: return "puzzlepiece.extension"
         case .settings: return "gearshape"
@@ -102,6 +105,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .projects: return "Your code and what's running — remembered commands, live dev servers, and one-tap web preview."
         case .discover: return "Project-aware, explainable recommendations drawn from your own local projects — what to add, fix, or safely leave alone."
         case .stackHealth: return "Is each project's stack current, compatible, and secure — outdated dependencies, breaking updates, and advisories."
+        case .canaries: return "Whether the numbers above can be trusted — what StackPulse read from your logs but could not fully understand."
         case .services: return "Dev servers and services running right now — their ports, which project they belong to, and quick actions."
         case .integrations: return "Detection, health, and the capability matrix for each provider."
         case .settings: return "Versions, refresh cadence, cost methodology, and accessibility."
@@ -365,6 +369,7 @@ struct MainWindowView: View {
         case .projectUsage: ProjectUsageSection()
         case .discover: DiscoverSection()
         case .stackHealth: StackHealthSection()
+        case .canaries: CanarySection(section: .canaries)
         case .services: ServicesSection()
         case .integrations: IntegrationsSection()
         case .settings: SettingsSection()

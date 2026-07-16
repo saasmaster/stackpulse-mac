@@ -7,7 +7,7 @@ import SwiftUI
 /// is showing (so the nav shrinks without moving any logic).
 struct UsageHubSection: View {
     enum Tab: String, CaseIterable, Hashable {
-        case breakdown, byProject, trends, report
+        case breakdown, byProject, trends, report, checks
 
         var label: String {
             switch self {
@@ -15,6 +15,7 @@ struct UsageHubSection: View {
             case .byProject: return "By Project"
             case .trends: return "Trends"
             case .report: return "Report"
+            case .checks: return "Data Checks"
             }
         }
         var icon: String {
@@ -23,6 +24,7 @@ struct UsageHubSection: View {
             case .byProject: return "folder"
             case .trends: return "chart.xyaxis.line"
             case .report: return "doc.text"
+            case .checks: return "checkmark.shield"
             }
         }
     }
@@ -43,6 +45,7 @@ struct UsageHubSection: View {
             case .byProject: ProjectUsageSection()
             case .trends: TrendsSection()
             case .report: ReportsSection()
+            case .checks: CanarySection(section: .canaries)
             }
         }
     }

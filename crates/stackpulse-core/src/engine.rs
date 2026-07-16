@@ -172,6 +172,12 @@ impl Engine {
         let missions = crate::missions::discover(now);
         let alerts = crate::alerts::derive_alerts(&provider_usages, now);
         let insights = crate::insights::derive(&provider_usages, &missions, now);
+        // Derived from the scan just performed, not a re-read of the same logs:
+        // the canary describes THIS snapshot (one that lagged would vouch for
+        // numbers that aren't on screen), and `provider_usages` already carries
+        // the unpriced-model signal, so re-reading gigabytes to recompute it cost
+        // ~45% of the snapshot for data we were holding.
+        let canaries = crate::canary::check(&provider_usages, now);
 
         UsageSnapshot {
             protocol_version: PROTOCOL_VERSION,
@@ -179,6 +185,7 @@ impl Engine {
             generated_at_unix: now,
             bucket_date_utc: utc_date(now).iso(),
             providers: provider_usages,
+            canaries,
             alerts,
             missions,
             insights,

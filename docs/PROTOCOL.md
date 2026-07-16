@@ -5,7 +5,7 @@ contract shared by every StackPulse surface: the Rust core, the macOS app (over
 the C ABI), the `stackpulse` CLI, and — in the future — a Chrome
 native-messaging host and a Windows client.
 
-- **Current version:** `PROTOCOL_VERSION = 1.17.0`. Additive history (older
+- **Current version:** `PROTOCOL_VERSION = 1.18.0`. Additive history (older
   readers keep parsing):
   - **1.3.0** — added a `Gemini` variant to the (open) `ProviderId` enum; the
     engine now lists eleven providers.
@@ -60,6 +60,15 @@ native-messaging host and a Windows client.
     `remove_command` (never for the main worktree) for the client to gate. The
     client passes a `worktrees_dir` so the copies land outside the user's project
     folders and can't be mistaken for new projects.
+  - **1.18.0** — Schema canaries: `SchemaCanary` / `CanaryStatus` (open enum) /
+    `UnpricedModel` types + the `UsageSnapshot.canaries` list; plus one additive
+    field, `Checkpoint.files_unknown`. The core reads local logs whose format it
+    does not control, so drift is silent: a model the pricing table has never
+    heard of has its tokens counted at **zero cost**, quietly understating every
+    total. The canary reports what was found but not understood, rather than
+    presenting a confidently wrong number. `Checkpoint.files_unknown` separates
+    "the snapshot captured no files" from "git wouldn't say" — `files: []` meant
+    both. Both default to the pre-1.18.0 reading when absent.
   - **1.17.0** — one additive field: `ScopeFlag.match_count`, how many files a
     scope flag actually matched. `files` is capped at 8, so its length is a floor,
     not a total — and with no count on the wire the UI showed the sample as the

@@ -14,6 +14,7 @@
 //! [`handle_request_json`] (string-in / string-out, used by the FFI and CLI).
 
 pub mod alerts;
+pub mod canary;
 pub mod checkpoints;
 pub mod datetime;
 pub mod engine;

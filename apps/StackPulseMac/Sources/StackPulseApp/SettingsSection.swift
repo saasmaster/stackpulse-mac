@@ -11,7 +11,17 @@ struct SettingsSection: View {
     @AppStorage("onboarding.completed") private var onboardingCompleted = false
 
     /// The macOS app's own version (distinct from the Rust core version).
-    private let appVersion = "0.25.0"
+    ///
+    /// Read from the bundle rather than hardcoded. When this was its own literal,
+    /// it drifted from `Info.plist` — Settings said 0.25.0 while macOS (Get Info,
+    /// the About panel, crash reports) said **0.1.0**, because the release rule
+    /// only ever bumped the one a human looks at. One source of truth now; the
+    /// fallback only applies when running the binary outside the .app bundle
+    /// (e.g. `--selftest-parsers`), where there is no Info.plist to read.
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? "unknown (not running from the app bundle)"
+    }
 
     var body: some View {
         SectionScaffold(section: .settings) { snapshot in
@@ -26,6 +36,7 @@ struct SettingsSection: View {
                 liveLimitsCard
                 powerCard
                 ProviderConnectionsCard()
+                SecurityPrivacyCard()
 
                 // Tools
                 commandCenterCard
@@ -681,6 +692,384 @@ private struct ProviderConnectionRow: View {
                 .foregroundStyle(.secondary)
                 .labelStyle(.titleAndIcon)
         }
+    }
+}
+
+// MARK: - Security & privacy
+
+/// One outbound network path StackPulse can open, with the state that decides
+/// whether it is currently open at all.
+private struct NetPath: Identifiable {
+    let id: String
+    let title: String
+    /// Where the traffic actually goes. Only rendered when `isOn`.
+    let destination: String
+    let detail: String
+    let isOn: Bool
+}
+
+/// Diagnostics for the app's trust boundary: what it can touch, what it actually
+/// sends, and where.
+///
+/// Every "live" row reads the SAME state its feature reads, so the panel cannot
+/// drift into reassurance the code doesn't back. A hardcoded "offline" here would
+/// be worse than showing nothing — this card is only worth its space if a reader
+/// can trust it against the running app. Claims that are compiled-in rather than
+/// toggled live in ``policyGroup``, labeled as policy so they are never mistaken
+/// for a reading.
+///
+/// No secret is rendered — presence/absence only, not even truncated. The token
+/// and key boundaries are documented on `AnthropicUsageClient` / `APIKeyStore`;
+/// this card reports on them and must never widen them.
+private struct SecurityPrivacyCard: View {
+    @EnvironmentObject var store: SnapshotStore
+
+    var body: some View {
+        SettingsCard(title: "Security & privacy", systemImage: "lock.shield") {
+            Text("What StackPulse can reach, what it actually sends, and where — read from this Mac's live settings, not a fixed list.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            postureRow
+            networkGroup
+            credentialsGroup
+            foldersGroup
+            policyGroup
+        }
+    }
+
+    // MARK: Posture
+
+    private var postureRow: some View {
+        HStack(spacing: 8) {
+            if enabledPaths.isEmpty {
+                Chip(text: "Offline — no outbound path is enabled",
+                     systemImage: "wifi.slash", tint: .green)
+            } else {
+                Chip(text: "\(enabledPaths.count) outbound path\(enabledPaths.count == 1 ? "" : "s") enabled",
+                     systemImage: "antenna.radiowaves.left.and.right", tint: .orange)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    // MARK: Network
+
+    private var networkGroup: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider().opacity(0.35)
+            groupHeader("Network", systemImage: "network")
+            Text("These are the only three outbound paths in the app. Each is opt-in and each is shown below as it is actually configured right now.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(networkPaths) { pathRow($0) }
+        }
+    }
+
+    private func pathRow(_ path: NetPath) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(path.title)
+                    .font(.callout.weight(.medium))
+                Chip(text: path.isOn ? "On" : "Off",
+                     systemImage: path.isOn ? "arrow.up.forward" : "slash.circle",
+                     tint: path.isOn ? .orange : .secondary)
+                Spacer(minLength: 0)
+            }
+            // The destination is named only when traffic can actually flow — an
+            // endpoint listed beside an "Off" row reads as if it were in use.
+            if path.isOn {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Text(path.destination)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Text(path.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 1)
+    }
+
+    private var networkPaths: [NetPath] { [liveLimitsPath, byokPath, stackHealthPath] }
+
+    private var enabledPaths: [NetPath] { networkPaths.filter(\.isOn) }
+
+    /// Claude live limits. The destination is read from the client's own constant
+    /// rather than retyped, so the row cannot name an endpoint the code doesn't use.
+    private var liveLimitsPath: NetPath {
+        NetPath(
+            id: "live-limits",
+            title: "Claude live limits",
+            destination: AnthropicUsageClient.endpoint.absoluteString,
+            detail: store.liveLimitsEnabled
+                // "attempt", not "contacted": the store stamps this after every
+                // try, including one that found no login and sent nothing.
+                ? "On — StackPulse contacts Anthropic with your own Claude Code token to read your session and weekly limits. It is sent to that one endpoint and nowhere else. Fetched \(cadenceSentence), throttled and cached in between. Last attempt \(Format.relative(store.liveLimitsUpdatedAt))."
+                : "Off — no token is read and no request is made.",
+            isOn: store.liveLimitsEnabled
+        )
+    }
+
+    /// BYOK balances. Only a provider with BOTH a saved key and a real balance
+    /// endpoint is ever contacted; a key saved for a provider without one sits in
+    /// the Keychain and goes nowhere, which is worth saying rather than implying.
+    private var byokPath: NetPath {
+        let contacted = byokContacted
+        let stored = byokStoredOnly
+        return NetPath(
+            id: "byok",
+            title: "Provider credit balances (BYOK)",
+            destination: byokDestination,
+            detail: contacted.isEmpty
+                ? (stored.isEmpty
+                   ? "Off — no API keys saved, so no provider is contacted."
+                   : "Off — \(stored.count) key\(stored.count == 1 ? "" : "s") saved, but \(stored.count == 1 ? "that provider has" : "those providers have") no balance endpoint yet, so nothing is sent.")
+                : "On — each key is sent only to its own provider's API, to read that account's credit balance. Last checked \(Format.relative(latestBalanceCheck)).",
+            isOn: !contacted.isEmpty
+        )
+    }
+
+    /// Stack Health enrichment. Reported as enabled whenever the toggle is on,
+    /// even with no folders to scan: erring toward over-reporting network is the
+    /// only safe direction for this card.
+    private var stackHealthPath: NetPath {
+        NetPath(
+            id: "stack-health",
+            title: "Stack Health update checks",
+            destination: "registry.npmjs.org · crates.io · api.osv.dev",
+            detail: store.stackCheckUpdates
+                ? (store.approvedRoots.isEmpty
+                   ? "On, but idle — no approved folders, so there are no dependencies to look up."
+                   : "On — sends only dependency names and versions already on disk, to look up latest releases and security advisories. No credentials are attached.")
+                : "Off — Stack Health shows the core's local, offline inventory only.",
+            isOn: store.stackCheckUpdates
+        )
+    }
+
+    private var byokContacted: [APIKeyProviderInfo] {
+        APIKeyProviders.all.filter { store.apiKeyProviderIDs.contains($0.id) && $0.hasLiveBalance }
+    }
+
+    private var byokStoredOnly: [APIKeyProviderInfo] {
+        APIKeyProviders.all.filter { store.apiKeyProviderIDs.contains($0.id) && !$0.hasLiveBalance }
+    }
+
+    /// Names each contacted provider. LiteLLM's destination is the user's own
+    /// host, so it is shown verbatim from the stored (non-secret) base URL.
+    private var byokDestination: String {
+        let names = byokContacted.map { info -> String in
+            if info.needsBaseURL, let base = store.baseURL(for: info.id), !base.isEmpty {
+                return "\(info.displayName) (\(base))"
+            }
+            return "\(info.displayName)'s API"
+        }
+        return names.isEmpty ? "—" : names.joined(separator: " · ")
+    }
+
+    private var latestBalanceCheck: Date? {
+        byokContacted.compactMap { store.balanceUpdatedAt[$0.id] }.max()
+    }
+
+    private var cadenceSentence: String {
+        store.refreshMode == .manual
+            ? "only when you refresh manually"
+            : "on your \(store.refreshMode.label) refresh"
+    }
+
+    // MARK: Credentials
+
+    private var credentialsGroup: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider().opacity(0.35)
+            groupHeader("Credentials", systemImage: "key.horizontal")
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("Claude Code login")
+                        .font(.callout.weight(.medium))
+                    Chip(text: claudeLoginPresent ? "Detected" : "Not found",
+                         systemImage: claudeLoginPresent ? "checkmark.seal.fill" : "circle.dashed",
+                         tint: claudeLoginPresent ? .green : .secondary)
+                    Spacer(minLength: 0)
+                }
+                Text(claudeLoginPresent
+                     ? "Found by a presence-only Keychain query — it asks whether an item exists and requests no secret data, so it never prompts and cannot return your token."
+                     : "The last scan found no Claude Code Keychain item. Detection is presence-only; no secret is requested.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("Claude OAuth token read")
+                        .font(.callout.weight(.medium))
+                    Chip(text: store.liveLimitsEnabled ? "Enabled" : "Never",
+                         systemImage: store.liveLimitsEnabled ? "exclamationmark.shield" : "lock.fill",
+                         tint: store.liveLimitsEnabled ? .orange : .green)
+                    Spacer(minLength: 0)
+                }
+                Text(store.liveLimitsEnabled
+                     ? "This is the one place StackPulse reads a secret instead of checking for one. Your Claude Code token is read on demand, sent to the live-limits endpoint above, and dropped — never stored, never logged, never rewritten, and never shown here or anywhere else in the app."
+                     : "Live limits are off, so the token is never read — only the presence check above runs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // The client's own user-facing note — it already covers "access
+                // denied", "expired", and "rejected", and by contract carries no
+                // token or response body.
+                if store.liveLimitsEnabled, let note = store.liveLimitsError {
+                    Label(note, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .labelStyle(.titleAndIcon)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("BYOK API keys")
+                        .font(.callout.weight(.medium))
+                    Chip(text: store.apiKeyProviderIDs.isEmpty
+                            ? "None saved"
+                            : "\(store.apiKeyProviderIDs.count) saved",
+                         systemImage: "key.fill",
+                         tint: store.apiKeyProviderIDs.isEmpty ? .secondary : .blue)
+                    Spacer(minLength: 0)
+                }
+                Text("Kept in StackPulse's own Keychain service (\(APIKeyStore.service)), never another app's — so reading one raises no access prompt. A key is loaded only for its own balance request and is never rendered back, not even truncated.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !byokConnectedNames.isEmpty {
+                    Text(byokConnectedNames)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// Presence-only result the refresh path already computed off the main actor.
+    /// Deliberately NOT probed here: the token-reading probe can block for seconds
+    /// and prompt, so this card only ever reads a value someone else established.
+    private var claudeLoginPresent: Bool { store.keychainAuthed.contains("claude") }
+
+    private var byokConnectedNames: String {
+        APIKeyProviders.all
+            .filter { store.apiKeyProviderIDs.contains($0.id) }
+            .map(\.displayName)
+            .joined(separator: " · ")
+    }
+
+    // MARK: Folders
+
+    private var foldersGroup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider().opacity(0.35)
+            groupHeader("Approved folders", systemImage: "folder.badge.person.crop")
+
+            if store.approvedRoots.isEmpty {
+                Text("None approved — project scanning is off. StackPulse reads only your AI tools' own session logs under their config directories.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Project scanning reads inside \(store.approvedRoots.count == 1 ? "this root" : "these \(store.approvedRoots.count) roots") and nowhere else. Remove one in Projects to revoke it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(store.approvedRoots, id: \.self) { root in
+                    HStack(spacing: 5) {
+                        Image(systemName: "folder")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Text(root)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Built-in policy (compiled in, not a live reading)
+
+    private var policyGroup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider().opacity(0.35)
+            HStack(spacing: 6) {
+                groupHeader("Built-in policy", systemImage: "text.book.closed")
+                Chip(text: "Not a live reading", tint: .secondary)
+                Spacer(minLength: 0)
+            }
+            Text("These hold regardless of every setting above — they're compiled in, not toggled.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            policyRow(
+                "The Rust core never touches the network",
+                "Every scan, parse, and cost estimate runs offline, in-process. The core has no HTTP client compiled into it at all (ADR-0005) — the paths above belong to the macOS app, never to the engine reading your logs."
+            )
+            policyRow("Nothing runs silently", confirmationPolicyText)
+            policyRow(
+                "Destructive git is reported, never run",
+                "For checkpoints and worktrees the core only ever reports a restore or remove command as text for you to see. It never executes one — running it stays your explicit, confirmed choice."
+            )
+        }
+    }
+
+    private func policyRow(_ title: String, _ body: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label(title, systemImage: "checkmark.shield")
+                .font(.caption.weight(.medium))
+                .labelStyle(.titleAndIcon)
+            Text(body)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 18)
+        }
+    }
+
+    /// Derived by asking the real gate — the same `CommandSafety` predicate the run
+    /// path calls — which classes it lets through. Hand-writing this sentence would
+    /// let it claim a stricter policy than the code enforces.
+    private var confirmationPolicyText: String {
+        let classes = Self.safetyClasses
+        let ungated = classes.filter { !CommandSafety.requiresConfirmation($0) }
+            .map { CommandSafety.label($0) }
+        let gated = classes.filter { CommandSafety.requiresConfirmation($0) }
+            .map { CommandSafety.label($0) }
+        return "Discovered commands are classified before they can run. \(ungated.joined(separator: ", ")) commands run without a prompt; \(gated.joined(separator: ", ")) commands are gated behind an explicit confirmation showing the exact command and its working directory. StackPulse never runs a command you didn't press a button for."
+    }
+
+    /// The safety classes `CommandSafety` distinguishes, in escalating order.
+    private static let safetyClasses = [
+        "read_only", "local_dev", "modifies_files", "installs_deps",
+        "changes_database", "network", "destructive",
+    ]
+
+    private func groupHeader(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
     }
 }
 

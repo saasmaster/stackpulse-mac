@@ -396,6 +396,111 @@ struct Mission: Codable, Sendable, Identifiable {
     }
 }
 
+// MARK: - Schema canaries (protocol ≥ 1.18.0)
+
+/// A model observed in real local logs that the core's pricing table can't price.
+///
+/// Its tokens **are** counted; its cost is omitted entirely, because the core
+/// refuses to guess a rate it doesn't know. That silence is the point of
+/// reporting it: a new model family can quietly vanish from every cost estimate
+/// in the app while still inflating the token totals next to it.
+///
+/// Never render a dollar figure for one — not even `$0`. "$0" reads as "this was
+/// free"; the truth is "we have no idea what this cost". The honest statement is
+/// *counted in token totals, excluded from cost estimates*.
+struct UnpricedModel: Codable, Sendable, Identifiable {
+    /// The model id exactly as the logs record it.
+    let model: String
+    /// How many usage records named it, in the window scanned.
+    let records: UInt64
+    /// Tokens attributed to it — counted, but contributing zero cost.
+    let tokens: TokenTotals
+
+    var id: String { model }
+}
+
+/// One provider's check that the local data we read still looks like something
+/// this core version actually understands (protocol ≥ 1.18.0).
+///
+/// `provider` and `status` are decoded as plain `String`s — the same open-enum
+/// posture as ``ProviderUsage``/``Mission`` — and interpreted in the view layer
+/// (see `CanaryState`), so a status a newer core invents **displays as unknown**
+/// rather than breaking decoding or, far worse, being coerced into `ok`.
+struct SchemaCanary: Codable, Sendable, Identifiable {
+    let provider: String
+    /// `ok | drifted | no_data | unknown` on the wire. Interpreted, never trusted
+    /// as a raw label. Note `no_data` is explicitly **not** `ok`: it means there
+    /// was nothing to verify, which is not the same as having verified something.
+    let status: String
+    let checked_at_unix: Int64
+    /// Plain-language statement of what was observed, in the user's terms — the
+    /// core guarantees it is safe to show verbatim (never a path or a stack trace).
+    let detail: String
+    /// Log files considered in this check.
+    let files_seen: UInt64
+    /// Usage records successfully parsed out of them.
+    let records_parsed: UInt64
+    /// Models found whose cost can't be estimated, worst (most tokens) first.
+    let unpriced_models: [UnpricedModel]
+
+    var id: String { provider }
+
+    /// When the core ran this check.
+    var checkedAt: Date { Date(timeIntervalSince1970: TimeInterval(checked_at_unix)) }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider, status, checked_at_unix, detail
+        case files_seen, records_parsed, unpriced_models
+    }
+
+    init(
+        provider: String,
+        status: String,
+        checked_at_unix: Int64,
+        detail: String,
+        files_seen: UInt64 = 0,
+        records_parsed: UInt64 = 0,
+        unpriced_models: [UnpricedModel] = []
+    ) {
+        self.provider = provider
+        self.status = status
+        self.checked_at_unix = checked_at_unix
+        self.detail = detail
+        self.files_seen = files_seen
+        self.records_parsed = records_parsed
+        self.unpriced_models = unpriced_models
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Every field below is REQUIRED, deliberately — each is non-optional in the
+        // core's own struct, so a payload missing one is not a canary, it's
+        // something else wearing the shape of one.
+        //
+        // Do NOT "harden" this by giving them defaults. ``RadarReport`` at the
+        // bottom of this file documents what that costs: when every field had a
+        // default, the decoder could not fail, so a core *error* response decoded
+        // into a perfectly valid empty result and the UI rendered a confident green
+        // "all clear" for a scan that never ran.
+        //
+        // A canary is the worst possible place to repeat that. Its entire job is to
+        // say "these numbers are incomplete". A defaulted `status` would let an
+        // unreadable canary claim `ok` — the exact lie this type exists to prevent.
+        // Throwing here instead means the snapshot reports no canaries at all, and
+        // "nothing was checked" is a state the UI names out loud rather than
+        // dressing up as reassurance.
+        provider = try c.decode(String.self, forKey: .provider)
+        status = try c.decode(String.self, forKey: .status)
+        checked_at_unix = try c.decode(Int64.self, forKey: .checked_at_unix)
+        detail = try c.decode(String.self, forKey: .detail)
+        files_seen = try c.decode(UInt64.self, forKey: .files_seen)
+        records_parsed = try c.decode(UInt64.self, forKey: .records_parsed)
+        // The one genuinely additive field (`#[serde(default)]` in the core):
+        // absent ⇒ no unpriced models, which is a real and common answer.
+        unpriced_models = ((try? c.decodeIfPresent([UnpricedModel].self, forKey: .unpriced_models)) ?? nil) ?? []
+    }
+}
+
 struct UsageSnapshot: Codable, Sendable {
     let protocol_version: SPVersion
     let core_version: String
@@ -412,10 +517,20 @@ struct UsageSnapshot: Codable, Sendable {
     /// Derived insights (efficiency/cost/idle observations), most-useful first
     /// (protocol ≥ 1.8.0). Defaults to `[]` when an older core omits the key.
     let insights: [Insight]
+    /// Per-provider checks that what we read still matches what we understand,
+    /// worst status first (protocol ≥ 1.18.0).
+    ///
+    /// Read this before trusting the totals above: a `drifted` canary means the
+    /// numbers in this very snapshot are knowably incomplete. Defaults to `[]`
+    /// when an older core omits the key — and `[]` means **"nothing was
+    /// checked"**, never "everything checked out". The two are not the same
+    /// claim, and only one of them is ours to make.
+    let canaries: [SchemaCanary]
 
     private enum CodingKeys: String, CodingKey {
         case protocol_version, core_version, generated_at_unix
         case bucket_date_utc, providers, pricing_note, alerts, missions, insights
+        case canaries
     }
 
     init(from decoder: Decoder) throws {
@@ -430,6 +545,10 @@ struct UsageSnapshot: Codable, Sendable {
         alerts = ((try? c.decodeIfPresent([Alert].self, forKey: .alerts)) ?? nil) ?? []
         missions = ((try? c.decodeIfPresent([Mission].self, forKey: .missions)) ?? nil) ?? []
         insights = ((try? c.decodeIfPresent([Insight].self, forKey: .insights)) ?? nil) ?? []
+        // Absent (pre-1.18.0 core) ⇒ this core runs no schema checks. That is a
+        // real, honest answer and the UI says so; it is NOT an all-clear, and
+        // nothing downstream may read it as one.
+        canaries = ((try? c.decodeIfPresent([SchemaCanary].self, forKey: .canaries)) ?? nil) ?? []
     }
 
     /// Explicit memberwise initializer. The custom `init(from:)` above suppresses
@@ -444,7 +563,8 @@ struct UsageSnapshot: Codable, Sendable {
         pricing_note: String,
         alerts: [Alert],
         missions: [Mission],
-        insights: [Insight]
+        insights: [Insight],
+        canaries: [SchemaCanary]
     ) {
         self.protocol_version = protocol_version
         self.core_version = core_version
@@ -455,11 +575,18 @@ struct UsageSnapshot: Codable, Sendable {
         self.alerts = alerts
         self.missions = missions
         self.insights = insights
+        self.canaries = canaries
     }
 
     /// Returns a copy with `providers` replaced (everything else preserved).
     /// Lets the store rebuild the published snapshot with merged live limits
     /// without re-scanning the core or fighting the custom decoder.
+    ///
+    /// Note `canaries` is carried across explicitly, like every other field. The
+    /// memberwise init above deliberately gives it no default: this rebuild runs
+    /// on every live-limits and BYOK-balance merge, so a forgotten field here
+    /// would silently erase the snapshot's own "these numbers are incomplete"
+    /// disclosure moments after it arrived. A compile error is the cheaper bug.
     func copy(providers newProviders: [ProviderUsage]) -> UsageSnapshot {
         UsageSnapshot(
             protocol_version: protocol_version,
@@ -470,7 +597,8 @@ struct UsageSnapshot: Codable, Sendable {
             pricing_note: pricing_note,
             alerts: alerts,
             missions: missions,
-            insights: insights
+            insights: insights,
+            canaries: canaries
         )
     }
 }
@@ -694,11 +822,24 @@ struct Checkpoint: Codable, Sendable, Identifiable {
     let project_path: String
     let branch: String?
     let created_at_unix: Int64
+    /// Files whose uncommitted state the snapshot captured.
+    ///
+    /// Empty means "no files" ONLY when ``files_unknown`` is false — prefer
+    /// ``filesAreKnownEmpty`` over `files.isEmpty` at any call site that renders
+    /// a claim about what was captured.
     let files: [String]
+    /// True when git wouldn't tell us what the snapshot captured (protocol ≥
+    /// 1.18.0). Defaults to `false`, which is the pre-1.18.0 reading.
+    ///
+    /// Without this, `files: []` meant both "this snapshot touched nothing" and
+    /// "git failed and we have no idea" — absence of evidence rendered as a
+    /// confident empty answer.
+    let files_unknown: Bool
     let restore_command: String
 
     private enum CodingKeys: String, CodingKey {
-        case id, ref_name, label, project_path, branch, created_at_unix, files, restore_command
+        case id, ref_name, label, project_path, branch, created_at_unix
+        case files, files_unknown, restore_command
     }
 
     init(from decoder: Decoder) throws {
@@ -710,12 +851,24 @@ struct Checkpoint: Codable, Sendable, Identifiable {
         branch = try c.decodeIfPresent(String.self, forKey: .branch)
         created_at_unix = (try? c.decode(Int64.self, forKey: .created_at_unix)) ?? 0
         files = ((try? c.decodeIfPresent([String].self, forKey: .files)) ?? nil) ?? []
+        // Additive since 1.18.0; absent ⇒ false, i.e. "the list is trustworthy",
+        // which is exactly how every pre-1.18.0 snapshot was already being read.
+        files_unknown = (try? c.decode(Bool.self, forKey: .files_unknown)) ?? false
         restore_command = (try? c.decode(String.self, forKey: .restore_command)) ?? ""
     }
 
     var createdAt: Date { Date(timeIntervalSince1970: TimeInterval(created_at_unix)) }
     /// Short SHA for display.
     var shortID: String { String(id.prefix(7)) }
+
+    /// True only when the core positively reported that this snapshot captured no
+    /// files — i.e. an empty list we can actually stand behind.
+    ///
+    /// Use this instead of `files.isEmpty` anywhere the UI states what a
+    /// checkpoint holds: `files.isEmpty && files_unknown` is "we don't know", and
+    /// showing that as "no files" tells the user their checkpoint is empty when it
+    /// may hold all of their uncommitted work.
+    var filesAreKnownEmpty: Bool { files.isEmpty && !files_unknown }
 }
 
 // MARK: - Project usage (protocol ≥ 1.13.0)

@@ -1412,6 +1412,53 @@ final class SnapshotStore: ObservableObject {
         snapshot?.insights ?? []
     }
 
+    // MARK: Schema canaries (protocol ≥ 1.18.0)
+
+    /// Every per-provider schema check this snapshot reports, worst status first
+    /// as the core ordered them.
+    ///
+    /// Empty until a core new enough (protocol ≥ 1.18.0) emits them — and empty
+    /// means **"nothing was checked"**, never "everything checked out". The
+    /// canary surfaces state that difference out loud rather than defaulting to
+    /// reassurance.
+    ///
+    /// A plain passthrough of the snapshot's own array, exactly like ``insights``
+    /// and ``missions``: Swift arrays are copy-on-write, so this hands back the
+    /// existing buffer instead of building a fresh one per access. That keeps it
+    /// safe to read from a view body or an `onChange`/`task(id:)` path — the
+    /// scalar helpers below exist so those paths never have to diff an array at
+    /// all. (Deliberately *not* the `allAlerts` shape, which concatenates and so
+    /// allocates on every read.)
+    var canaries: [SchemaCanary] { snapshot?.canaries ?? [] }
+
+    /// How many providers reported drift — i.e. how many are feeding knowably
+    /// incomplete numbers into the totals shown everywhere else in the app.
+    ///
+    /// Counted lazily (no intermediate array) so badge/`onChange` reads stay cheap.
+    var driftedCanaryCount: Int {
+        canaries.lazy.filter { $0.canaryState == .drifted }.count
+    }
+
+    /// How many distinct models were found in the logs that the pricing table
+    /// can't price. Their tokens are counted; their cost is absent from every
+    /// estimate. Summed without building an intermediate array.
+    var unpricedModelCount: Int {
+        canaries.reduce(0) { $0 + $1.unpriced_models.count }
+    }
+
+    /// True when at least one check found something this app can't fully account
+    /// for: drift, or a status this version doesn't recognize.
+    ///
+    /// Deliberately does **not** count `no_data` — "there was nothing to verify"
+    /// is not a problem to escalate. Just as deliberately, a `false` here is not
+    /// an all-clear either: it is also `false` when every canary is `no_data`,
+    /// and when the core reported no canaries at all. Callers that want to make a
+    /// positive claim must look at the canaries themselves (see `CanaryVerdict`
+    /// in CanarySection.swift), never at the absence of a concern.
+    var canariesNeedAttention: Bool {
+        canaries.contains { $0.canaryState == .drifted || $0.canaryState == .unknown }
+    }
+
     /// Reads `STACKPULSE_DEMO_MISSIONS` once; returns a small representative set of
     /// missions (one per status) for previewing, or `[]` when the var is unset.
     private static func loadDemoMissions() -> [Mission] {

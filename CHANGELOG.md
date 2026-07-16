@@ -18,6 +18,59 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Phase 4/6 wave + the pricing correction (app 0.26.0 / protocol 1.18.0)
+
+**Your Claude spend estimate was 2.75× too high.** `rates_for` matched model
+families by substring, so *anything* containing `opus` got the Opus rate card —
+which still held Opus **4.1**'s prices. Opus 4.8 costs $5/$25 per MTok; it was
+being billed at $15/$75. On this machine that turned a real ~$13,181 30-day
+estimate into **$36,207**, and nothing disclosed it, because a wrong rate looks
+exactly like a right one — it produces no note, no error, no signal at all.
+
+Rates are now read from Anthropic's published price list and **pinned by tests**
+(nothing previously asserted a rate card matched reality — the tests only checked
+`is_some()`). `rates_for` parses the model VERSION instead of the family name, and
+an unrecognized version of a known family is now **unpriced rather than given a
+sibling's price**: "we don't know" is a fact a canary can report; a confidently
+wrong number is not. Also added Fable 5 / Mythos 5 (real rates), Opus 4/4.1 as a
+distinct legacy card, Sonnet 5's introductory rate, and Haiku 3.5.
+
+**Schema canaries** (protocol 1.18.0: `SchemaCanary` / `CanaryStatus` /
+`UnpricedModel` + `UsageSnapshot.canaries`, new Usage → **Data Checks** tab). The
+app reads logs whose format it does not control, so drift is silent. The canary
+says "your numbers are incomplete, here's exactly how" instead of quietly
+understating. `no_data` is never rendered as `ok` — nothing to verify is not a
+pass.
+
+**Known inaccuracies are now stated in `pricing.rs` rather than hidden:** cache
+writes are priced at the 5-minute rate though 86% of real writes are 1-hour
+(bills at 2× input — so this *understates*); the OpenAI/Codex rate cards are
+unverified; Sonnet 5's introductory rate silently expires 2026-08-31.
+
+**`Checkpoint.files_unknown`** (1.18.0) — `files: []` meant both "captured
+nothing" and "git wouldn't say". A file list git refused to produce is now
+unknown, not empty.
+
+**Also:** a **Security & Privacy** panel in Settings built from live runtime state
+(every row sourced from a real symbol, no secret ever rendered); a cross-project
+**update-intelligence digest** in Stack Health, which also fixed a real bug —
+enrichment is keyed by `ecosystem+name`, so one shared status verdict was wrong
+for 23.8% of (project, dependency) pairs at different versions; **public docs**
+(README + `docs/USAGE.md`).
+
+**Accessibility:** `GlassButtonStyle` never honored Reduce Transparency, making
+Settings' "glass surfaces fall back to solid fills" **false for all 71 button call
+sites** — fixed. Escape now dismisses the four destructive confirm dialogs (it
+previously had no keyboard exit); Return still deliberately does NOT confirm them.
+The menu-bar popover's five icon-only buttons have accessibility labels.
+
+**Docs that contradicted the code, corrected:** `SECURITY_BOUNDARIES.md` claimed
+"network-free", "executes no external commands", and "never reads secret values"
+— all three false since v0.1.0. The protocol claimed `get_stack_health` may
+contact registries; the core ignores the flag entirely. `Info.plist` reported
+version **0.1.0** while the app was 0.25.0 — Settings now reads the bundle, so the
+two can't drift again.
+
 ### Bug sweep round 3 (app 0.25.0 / protocol 1.17.0)
 
 Same rule as rounds 1–2: nothing was fixed before it was reproduced. Three claims

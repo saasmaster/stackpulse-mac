@@ -260,6 +260,90 @@ fn unknown_enum_values_fall_back_instead_of_failing() {
     assert_eq!(src, CommandSource::Other);
 }
 
+/// `Checkpoint::files_unknown` is additive (since 1.18.0) and must default to the
+/// pre-1.18.0 reading — `files: []` meaning "captured nothing", not "git failed".
+#[test]
+fn checkpoint_files_unknown_is_additive_and_defaults_to_known() {
+    let old: Checkpoint = serde_json::from_value(json!({
+        "id": "abc123",
+        "ref_name": "refs/stackpulse/checkpoints/x",
+        "label": "before refactor",
+        "project_path": "/tmp/p",
+        "created_at_unix": 1_784_000_000,
+        "files": [],
+        "restore_command": "git -C '/tmp/p' stash apply abc123"
+    }))
+    .expect("a pre-1.18.0 Checkpoint must still decode");
+    assert!(
+        !old.files_unknown,
+        "absent ⇒ the old reading, not 'unknown'"
+    );
+
+    let failed: Checkpoint = serde_json::from_value(json!({
+        "id": "abc123",
+        "ref_name": "refs/stackpulse/checkpoints/x",
+        "label": "before refactor",
+        "project_path": "/tmp/p",
+        "created_at_unix": 1_784_000_000,
+        "files": [],
+        "files_unknown": true,
+        "restore_command": "git -C '/tmp/p' stash apply abc123"
+    }))
+    .unwrap();
+    // The whole point: an empty list is no longer self-explanatory.
+    assert!(failed.files.is_empty() && failed.files_unknown);
+}
+
+/// Canaries are additive (since 1.18.0): a pre-1.18.0 snapshot has no `canaries`
+/// key and must still decode to an empty list.
+#[test]
+fn canaries_are_additive_and_status_is_an_open_enum() {
+    let s: CanaryStatus = serde_json::from_value(json!("some_future_status")).unwrap();
+    assert_eq!(
+        s,
+        CanaryStatus::Unknown,
+        "open enum: never fail on a new value"
+    );
+
+    assert_eq!(
+        serde_json::to_value(CanaryStatus::Drifted).unwrap(),
+        json!("drifted")
+    );
+    assert_eq!(
+        serde_json::to_value(CanaryStatus::NoData).unwrap(),
+        json!("no_data")
+    );
+
+    let c: SchemaCanary = serde_json::from_value(json!({
+        "provider": "claude",
+        "status": "drifted",
+        "checked_at_unix": 1_784_000_000,
+        "detail": "1 model has no pricing entry.",
+        "files_seen": 12,
+        "records_parsed": 8414
+    }))
+    .expect("unpriced_models is #[serde(default)]");
+    assert!(c.unpriced_models.is_empty());
+
+    let full: SchemaCanary = serde_json::from_value(json!({
+        "provider": "claude",
+        "status": "drifted",
+        "checked_at_unix": 1_784_000_000,
+        "detail": "1 model has no pricing entry.",
+        "files_seen": 12,
+        "records_parsed": 8414,
+        "unpriced_models": [
+            { "model": "claude-fable-5", "records": 8414,
+              "tokens": { "input_tokens": 1, "output_tokens": 2,
+                          "cache_creation_tokens": 3, "cache_read_tokens": 4,
+                          "reasoning_tokens": 0 } }
+        ]
+    }))
+    .unwrap();
+    assert_eq!(full.unpriced_models[0].model, "claude-fable-5");
+    assert_eq!(full.unpriced_models[0].tokens.grand_total(), 10);
+}
+
 /// `ScopeFlag::match_count` is additive (since 1.17.0): a pre-1.17.0 payload has
 /// no such key and must still decode. It defaults to 0, which means "unknown" —
 /// clients fall back to `files.len()` and must never show 0 as a real count.

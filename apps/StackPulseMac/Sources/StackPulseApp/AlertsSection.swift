@@ -305,8 +305,16 @@ struct GlassConfirmDialog: View {
                     Spacer()
                     Button("Cancel", action: onCancel)
                         .buttonStyle(.glass)
+                        // Escape must dismiss. Without this the only ways out of
+                        // this dialog were the mouse — and it fronts four
+                        // destructive confirms (restore a checkpoint, remove a
+                        // worktree, stop a service, acknowledge all alerts).
+                        .keyboardShortcut(.cancelAction)
                     Button(confirmTitle, action: onConfirm)
                         .buttonStyle(.glass(tint: confirmTint, prominent: true))
+                        // Deliberately NOT `.defaultAction`: Return must never fire
+                        // a destructive action just because the dialog appeared.
+                        // Same reasoning as CommandConfirmDialog.
                 }
                 .padding(.top, 2)
             }

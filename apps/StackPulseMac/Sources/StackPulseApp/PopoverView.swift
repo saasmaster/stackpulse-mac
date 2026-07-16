@@ -49,6 +49,7 @@ struct PopoverView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Toggle edge sidebar (⌥⌘S)")
+                .accessibilityLabel("Toggle edge sidebar")
             }
             if onOpenSettings != nil {
                 Button(action: { onOpenSettings?() }) {
@@ -56,6 +57,7 @@ struct PopoverView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Open Settings (⌘,)")
+                .accessibilityLabel("Open Settings")
             }
             if onOpenMainWindow != nil {
                 Button(action: {
@@ -68,6 +70,7 @@ struct PopoverView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Open StackPulse — dashboard")
+                .accessibilityLabel("Open StackPulse dashboard")
             }
             if onOpenCommandCenter != nil {
                 Button(action: { onOpenCommandCenter?() }) {
@@ -75,6 +78,7 @@ struct PopoverView: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Open Command Center (⌘⇧C)")
+                .accessibilityLabel("Open Command Center")
             }
             Button(action: { store.refresh() }) {
                 Image(systemName: "arrow.clockwise")
@@ -85,6 +89,7 @@ struct PopoverView: View {
             }
             .buttonStyle(.borderless)
             .help("Refresh now")
+            .accessibilityLabel("Refresh now")
             .disabled(store.isLoading)
         }
         .padding(.horizontal, 14)

@@ -203,6 +203,28 @@ private struct ProjectSummary {
 
 // MARK: - Derivations (file-scope: a card folds these in `init`, before `self` exists)
 
+/// The status of ONE dependency IN ONE project.
+///
+/// `StackHealthClient.enrich` keys its map by `ecosystem + name`, so every project
+/// using a dep shares a single `DependencyEnrichment` — and its `status` was
+/// computed from whichever project's installed version the client happened to fold
+/// last. That verdict is wrong for everyone else: 45 of this portfolio's 63
+/// multi-project deps sit at different versions per project (`react` spans
+/// 18.3.1…19.2.7, `tailwindcss` 3.4.19…4.3.2), so the shared verdict would report
+/// the 18.3.1 project as "Up to date" — a confident answer about a dep nobody
+/// compared, the same failure mode as the "0 outdated" header this file already fixed.
+///
+/// `latest` IS a property of the package, not of a project, so it's safe to share.
+/// Re-running the client's own pure comparison against THIS project's installed
+/// version is the identical formula with the correct input: no network, no new
+/// core request, and one extra O(1) parse inside a pass the caller already makes.
+private func projectStatusRaw(_ dep: Dependency, latest: String?) -> String {
+    StackHealthClient.compareStatus(
+        installed: StackHealthClient.installedVersion(dep),
+        latest: latest
+    )
+}
+
 /// Prefers live enrichment; falls back to the core's offline fields while a
 /// fetch is pending; shows inventory-only when update-checking is off.
 private func resolve(
@@ -213,7 +235,8 @@ private func resolve(
     if checking, let e = enrichment[dep.id] {
         let worst = e.advisories.map { AdvisoryLevel($0.severity) }.max()
         return Resolved(
-            dep: dep, latest: e.latest, statusRaw: e.status,
+            dep: dep, latest: e.latest,
+            statusRaw: projectStatusRaw(dep, latest: e.latest),
             advisoryCount: e.advisories.count, worstAdvisory: worst
         )
     }
@@ -270,6 +293,172 @@ private func cardAccent(_ s: ProjectSummary, checking: Bool) -> Color {
     return .secondary
 }
 
+// MARK: - Cross-project digest (one fold across every project)
+
+/// How many rows each digest list shows before collapsing into "+N more". The
+/// digest earns its place by being shorter than the cards it summarises; a feed
+/// long enough to scroll is just the wall of cards again.
+private let digestAdvisoryLimit = 4
+private let digestUpdateLimit = 5
+
+/// One dependency aggregated across every project that uses it — the digest's
+/// unit, and the thing the per-project cards structurally cannot show.
+private struct DigestGroup: Identifiable {
+    let id: String
+    let name: String
+    let latest: String?
+    /// The projects this row is about: everyone using the dep on an advisory row,
+    /// only the projects actually behind on an update row.
+    let projects: [String]
+    /// Distinct installed versions among `projects`.
+    let versions: [String]
+    let advisoryCount: Int
+    let worstAdvisory: AdvisoryLevel?
+    let deprecated: Bool
+    /// Whether every project using this dep runs the SAME version. OSV is queried
+    /// once per dep id, at one version, and an advisory is version-specific — so
+    /// only when this holds does the advisory provably apply to all of `projects`.
+    /// When it's false the row says so instead of naming projects as confirmed.
+    let versionsAgree: Bool
+}
+
+/// Per-dependency accumulator for the fold below.
+private struct DigestAccum {
+    var name: String
+    var latest: String?
+    var allProjects: [String] = []
+    var allVersions: Set<String> = []
+    var actionProjects: [String] = []
+    var actionVersions: Set<String> = []
+    var advisoryCount = 0
+    var worst: AdvisoryLevel?
+    var hasDeprecated = false
+}
+
+/// The whole digest, folded from every project's dependency list in a SINGLE pass.
+///
+/// HONESTY: this reports only what enrichment actually established. A dep with no
+/// `latest` resolves to `.unknown` and lands in `uncheckedDeps` — never in a clean
+/// count — so `advisories.isEmpty && updates.isEmpty` means "nothing found in what
+/// was checked", not "all clear". Every consumer of that state pairs it with
+/// `uncheckedDeps`, because an un-enriched portfolio is entirely `.unknown` and an
+/// empty feed over it would otherwise read as a pass.
+private struct StackDigest {
+    let advisories: [DigestGroup]
+    let updates: [DigestGroup]
+    let totalDeps: Int
+    /// Deps with no known latest version — not checked, and not "fine".
+    let uncheckedDeps: Int
+    let projectCount: Int
+
+    var checkedDeps: Int { totalDeps - uncheckedDeps }
+    /// Nothing has been compared against a registry yet — the feed has no opinion.
+    var nothingChecked: Bool { totalDeps > 0 && uncheckedDeps == totalDeps }
+    var foundNothing: Bool { advisories.isEmpty && updates.isEmpty }
+
+    init(projects: [ProjectStack], enrichment: [String: StackHealthClient.DependencyEnrichment]) {
+        var acc: [String: DigestAccum] = [:]
+        var total = 0
+        var unchecked = 0
+
+        for proj in projects {
+            for dep in proj.dependencies {
+                total += 1
+                let e = enrichment[dep.id]
+                let latest = e?.latest
+                let status = DepStatus(projectStatusRaw(dep, latest: latest))
+                if status == .unknown { unchecked += 1 }
+
+                let version = StackHealthClient.installedVersion(dep) ?? "—"
+                var a = acc[dep.id] ?? DigestAccum(name: dep.name, latest: latest)
+                a.latest = latest
+                a.allProjects.append(proj.name)
+                a.allVersions.insert(version)
+                if let e, !e.advisories.isEmpty {
+                    // ASSIGNED, never summed: enrichment holds ONE advisory record
+                    // per dep id, which every project using that dep reads. Summing
+                    // across projects would multiply the same two advisories into
+                    // "eight" — a count nobody could stand behind.
+                    a.advisoryCount = e.advisories.count
+                    a.worst = e.advisories.map { AdvisoryLevel($0.severity) }.max()
+                }
+                if status == .majorBehind || status == .deprecated {
+                    a.actionProjects.append(proj.name)
+                    a.actionVersions.insert(version)
+                    if status == .deprecated { a.hasDeprecated = true }
+                }
+                acc[dep.id] = a
+            }
+        }
+
+        var advisoryGroups: [DigestGroup] = []
+        var updateGroups: [DigestGroup] = []
+        for (id, a) in acc {
+            let agree = a.allVersions.count == 1
+            if a.advisoryCount > 0 {
+                advisoryGroups.append(DigestGroup(
+                    id: id, name: a.name, latest: a.latest,
+                    projects: a.allProjects.sorted(), versions: a.allVersions.sorted(),
+                    advisoryCount: a.advisoryCount, worstAdvisory: a.worst,
+                    deprecated: a.hasDeprecated, versionsAgree: agree
+                ))
+            }
+            if !a.actionProjects.isEmpty {
+                updateGroups.append(DigestGroup(
+                    id: id, name: a.name, latest: a.latest,
+                    projects: a.actionProjects.sorted(), versions: a.actionVersions.sorted(),
+                    advisoryCount: 0, worstAdvisory: nil,
+                    deprecated: a.hasDeprecated, versionsAgree: agree
+                ))
+            }
+        }
+
+        // Ranked by what deserves action first. Both comparators end on `id` so a
+        // dictionary's arbitrary iteration order can't reorder equal rows between
+        // body evaluations.
+        advisoryGroups.sort { l, r in
+            let ls = l.worstAdvisory ?? .unknown
+            let rs = r.worstAdvisory ?? .unknown
+            if ls != rs { return ls > rs }
+            if l.advisoryCount != r.advisoryCount { return l.advisoryCount > r.advisoryCount }
+            if l.projects.count != r.projects.count { return l.projects.count > r.projects.count }
+            return l.id < r.id
+        }
+        // Breadth first: the digest's whole reason to exist is that one bump can
+        // clear many projects at once. A single-project major sorts last here — its
+        // own card already says so.
+        updateGroups.sort { l, r in
+            if l.deprecated != r.deprecated { return l.deprecated }
+            if l.projects.count != r.projects.count { return l.projects.count > r.projects.count }
+            return l.id < r.id
+        }
+
+        self.advisories = advisoryGroups
+        self.updates = updateGroups
+        self.totalDeps = total
+        self.uncheckedDeps = unchecked
+        self.projectCount = projects.count
+    }
+}
+
+/// Names the projects a row is about — "project-aware" means a row must say WHERE,
+/// not just what. Capped so one ubiquitous dep can't turn a row into a paragraph.
+private func projectList(_ names: [String]) -> String {
+    let shown = names.prefix(3)
+    let rest = names.count - shown.count
+    let joined = shown.joined(separator: ", ")
+    return rest > 0 ? "\(joined) +\(rest)" : joined
+}
+
+/// `installed → latest` for an update row. Projects behind on the same dep aren't
+/// necessarily on the same version, so the left side collapses to a count rather
+/// than picking one project's version to speak for the rest.
+private func versionArrow(_ g: DigestGroup) -> String {
+    let from = g.versions.count == 1 ? (g.versions.first ?? "—") : "\(g.versions.count) versions"
+    guard let latest = g.latest, !latest.isEmpty else { return from }
+    return "\(from) → \(latest)"
+}
+
 // MARK: - Section
 
 struct StackHealthSection: View {
@@ -294,6 +483,19 @@ struct StackHealthSection: View {
                 VStack(alignment: .leading, spacing: 18) {
                     toolbar
                     if !store.stackCheckUpdates { updateCheckOffNote }
+                    // Only with update-checking ON: offline there is nothing to
+                    // rank (the core reports every dep as `unknown`), and
+                    // `updateCheckOffNote` above already says exactly that. A
+                    // digest there could only be an empty feed pretending to be
+                    // a verdict.
+                    if store.stackCheckUpdates {
+                        StackDigestCard(
+                            projects: store.stackHealth,
+                            enrichment: enrichment,
+                            scannedAt: store.stackUpdatedAt,
+                            enriching: enriching
+                        )
+                    }
                     // LAZY on purpose, like `RunConsoleView`'s console log. This
                     // sits in `SectionScaffold`'s ScrollView and renders one tall
                     // card per approved project — a real portfolio scan is ~27
@@ -421,6 +623,268 @@ struct StackHealthSection: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
         .glassCard(padding: 24)
+    }
+}
+
+// MARK: - Cross-project digest card
+
+/// The ranked "what needs my attention across everything" feed that opens the
+/// section. 27 projects / ~570 deps is 27 cards of scrolling before you know
+/// whether anything is on fire; this answers that in one card.
+///
+/// Like `StackProjectCard`, the whole fold runs ONCE in `init` and the body only
+/// reads stored `let`s. This is the section's single aggregate pass over every
+/// dependency — the per-project cards each fold their own list, and neither
+/// re-walks anything in `body`.
+private struct StackDigestCard: View {
+    /// Passed in, never read from the clock here: the exit criteria ask for
+    /// timestamped recommendations, and a view must not sample `Date()` in render.
+    let scannedAt: Date?
+    let enriching: Bool
+
+    private let digest: StackDigest
+
+    init(
+        projects: [ProjectStack],
+        enrichment: [String: StackHealthClient.DependencyEnrichment],
+        scannedAt: Date?,
+        enriching: Bool
+    ) {
+        self.scannedAt = scannedAt
+        self.enriching = enriching
+        self.digest = StackDigest(projects: projects, enrichment: enrichment)
+    }
+
+    /// Green requires a COMPLETE check: with anything still unchecked the card
+    /// stays neutral, because "we found nothing" and "we looked at everything" are
+    /// different claims and only the second one earns an all-clear color.
+    private var accent: Color {
+        if let worst = digest.advisories.first?.worstAdvisory { return worst.color }
+        if !digest.updates.isEmpty { return .orange }
+        if digest.totalDeps > 0, digest.uncheckedDeps == 0 { return .green }
+        return .secondary
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header
+
+            if digest.nothingChecked {
+                notCheckedNote
+            } else {
+                if !digest.advisories.isEmpty { advisorySection }
+                if !digest.updates.isEmpty { updateSection }
+                if digest.foundNothing { foundNothingNote }
+                if digest.uncheckedDeps > 0 { uncheckedNote }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .liquidGlass(cornerRadius: 18, tint: accent, padding: 14)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(accent)
+                Text("Needs attention first")
+                    .font(.callout.weight(.semibold))
+                Spacer(minLength: 0)
+                if enriching {
+                    ProgressView().controlSize(.small)
+                }
+                // The scan time is the only timestamp that exists — the store keeps
+                // no separate enrichment time — so it's labelled as what it is
+                // rather than passed off as when the registries were queried.
+                Text("scanned \(Format.relative(scannedAt))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var subtitle: String {
+        let projWord = digest.projectCount == 1 ? "project" : "projects"
+        let base = "\(digest.projectCount) \(projWord) · \(digest.totalDeps) deps"
+        guard !digest.nothingChecked else { return base }
+        return "\(base) · \(digest.checkedDeps) checked"
+    }
+
+    // MARK: Ranked lists
+
+    private var advisorySection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            listLabel("Security advisories", systemImage: "exclamationmark.shield.fill", tint: .red)
+            ForEach(digest.advisories.prefix(digestAdvisoryLimit)) { g in
+                advisoryRow(g)
+            }
+            if digest.advisories.count > digestAdvisoryLimit {
+                moreNote(digest.advisories.count - digestAdvisoryLimit, noun: "more with advisories")
+            }
+        }
+    }
+
+    private var updateSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            listLabel("Major updates", systemImage: "arrow.up.circle.fill", tint: .orange)
+            ForEach(digest.updates.prefix(digestUpdateLimit)) { g in
+                updateRow(g)
+            }
+            if digest.updates.count > digestUpdateLimit {
+                moreNote(digest.updates.count - digestUpdateLimit, noun: "more behind a major")
+            }
+        }
+    }
+
+    private func advisoryRow(_ g: DigestGroup) -> some View {
+        let level = g.worstAdvisory ?? .unknown
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                StatusDot(color: level.color, size: 7)
+                Text(g.name)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(g.versionsAgree ? (g.versions.first ?? "—") : "\(g.versions.count) versions")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Chip(
+                    text: "\(g.advisoryCount) advisor\(g.advisoryCount == 1 ? "y" : "ies")",
+                    systemImage: "exclamationmark.shield.fill",
+                    tint: level.color
+                )
+                Spacer(minLength: 8)
+                Text(projectList(g.projects))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            // OSV answered for one version of this dep, and these projects don't
+            // all run that version — so which of them is actually vulnerable is
+            // not something this data can say. Say that, rather than name them.
+            if !g.versionsAgree {
+                Text("checked at one version · these \(g.projects.count) projects run \(g.versions.count) different versions — open their cards to confirm")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(advisoryAccessibilityText(g))
+    }
+
+    private func updateRow(_ g: DigestGroup) -> some View {
+        let status: DepStatus = g.deprecated ? .deprecated : .majorBehind
+        let projWord = g.projects.count == 1 ? "project" : "projects"
+        return HStack(spacing: 8) {
+            StatusDot(color: status.color, size: 7)
+            Text(g.name)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text(versionArrow(g))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Chip(text: status.label, systemImage: status.icon, tint: status.color)
+            Spacer(minLength: 8)
+            Text("\(g.projects.count) \(projWord) · \(projectList(g.projects))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(g.name), \(versionArrow(g)), \(status.label), \(g.projects.count) \(projWord): \(g.projects.joined(separator: ", "))"
+        )
+    }
+
+    private func advisoryAccessibilityText(_ g: DigestGroup) -> String {
+        var parts = [g.name]
+        parts.append("\(g.advisoryCount) advisor\(g.advisoryCount == 1 ? "y" : "ies")")
+        if let worst = g.worstAdvisory, worst != .unknown {
+            parts.append("worst severity \(severityWord(worst))")
+        } else {
+            parts.append("severity unknown")
+        }
+        parts.append("used by \(g.projects.joined(separator: ", "))")
+        if !g.versionsAgree {
+            parts.append("checked at one version, these projects run \(g.versions.count) different versions")
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    // MARK: Honest states
+
+    /// Enrichment is a network round-trip, so a freshly-opened section knows
+    /// NOTHING — every dep is `.unknown`. Rendering an empty ranked feed here would
+    /// read as an all-clear over deps nobody has looked at.
+    private var notCheckedNote: some View {
+        Label(
+            enriching
+                ? "Checking \(digest.totalDeps) deps against npm, crates.io and OSV…"
+                : "Not checked yet — none of these \(digest.totalDeps) deps has been compared against a registry. This is not an all-clear.",
+            systemImage: enriching ? "arrow.triangle.2.circlepath" : "questionmark.circle"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .labelStyle(.titleAndIcon)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Scoped to what was actually checked — never "you're all good".
+    private var foundNothingNote: some View {
+        Label(
+            "No advisories or major updates in the \(digest.checkedDeps) deps checked.",
+            systemImage: "checkmark.circle.fill"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .labelStyle(.titleAndIcon)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var uncheckedNote: some View {
+        Label(
+            "\(digest.uncheckedDeps) of \(digest.totalDeps) deps have no latest version yet — not counted as up to date.",
+            systemImage: "questionmark.circle"
+        )
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .labelStyle(.titleAndIcon)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: Bits
+
+    private func listLabel(_ text: String, systemImage: String, tint: Color) -> some View {
+        Label(text, systemImage: systemImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .labelStyle(.titleAndIcon)
+            .padding(.top, 2)
+    }
+
+    private func moreNote(_ n: Int, noun: String) -> some View {
+        Text("+\(n) \(noun)")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+    }
+
+    private func severityWord(_ level: AdvisoryLevel) -> String {
+        switch level {
+        case .critical: return "critical"
+        case .high: return "high"
+        case .moderate: return "moderate"
+        case .low: return "low"
+        case .unknown: return "unknown"
+        }
     }
 }
 

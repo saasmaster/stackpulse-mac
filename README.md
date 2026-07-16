@@ -1,207 +1,236 @@
 # StackPulse
 
-**A local-first, privacy-first command center for AI-assisted development on macOS.**
+**A local-first command center for AI-assisted development on macOS.**
 
-StackPulse watches the AI-coding providers you already use — how much you have
-spent, how close you are to your usage limits, which models and projects are
-burning tokens, and whether each integration is healthy — and surfaces it in a
-native macOS menu-bar app. It reads only your own local logs, makes **no network
-calls in this version**, and is useful even without an AI API key.
+StackPulse reads the logs your AI coding tools already write to disk and tells you
+where your tokens went, how close you are to your limits, which projects are
+burning spend, and what needs your attention — in a native menu-bar app.
 
-> **Status: v0.1.0 — Phase 0 foundation.** The portable Rust core, the Claude
-> and Codex local-cost scanners, the C ABI bridge, and a SwiftUI menu-bar
-> popover are working against real data. Many surfaces described in the vision
-> below are explicitly marked **Planned**. StackPulse does not claim features it
-> has not built.
+It needs no account and no API key. Its defining constraint is **honest
+reporting**: it labels every number with where it came from, it refuses to guess
+a price it does not know, and it documents its gaps instead of hiding them.
 
----
-
-## Why StackPulse
-
-If you use Claude Code, the OpenAI Codex CLI, and other AI coding tools, your
-spend and rate-limit state are scattered across each tool's own logs. StackPulse
-consolidates them:
-
-- **Spend and tokens at a glance** — today, yesterday, and the last 30 days, per
-  provider and per model, with cache economics broken out.
-- **Live limit windows** — for providers that record them locally (Codex's
-  5-hour and weekly windows), StackPulse reads them with **zero network calls**.
-- **Honest numbers** — every value is labeled with its provenance (measured,
-  provider-reported, or a local estimate). Costs are estimates, never presented
-  as amounts you were billed.
-- **Local-first and private** — it reads files under your home directory that
-  the AI tools already write, and nothing leaves your machine.
-
-## What "local-first, no key required" means here
-
-StackPulse computes everything in v0.1.0 from logs that Claude Code and the
-Codex CLI already write to disk. It does not call any provider API, and it does
-not need you to paste an API key. Detection of credentials checks only for their
-**presence** (a file exists, or a Keychain item exists) — StackPulse never reads
-the secret itself.
+📖 **[Usage guide →](docs/USAGE.md)** — build, run, read the numbers, and know
+when not to trust them.
 
 ---
 
-## Architecture in one paragraph
+## Status
 
-A **portable Rust core** does all the platform-neutral work — provider
-detection, log scanning, token normalization, pricing, and aggregation — and
-speaks a small, versioned JSON protocol. The **macOS app** is a Swift package
-that links the Rust core as a static library and decodes the exact same JSON the
-command-line tool prints. The core has **no macOS-specific code**, so a future
-Windows client and a Chrome native-messaging host can reuse it unchanged.
+Working and used daily against real Claude Code and Codex CLI logs. Built from
+source; there is no signed release.
+
+Four independent version lines ([ADR-0006](docs/decisions/0006-independent-version-lines.md)):
+protocol **1.18.0**, core **0.1.0**, the app (see [`CHANGELOG.md`](CHANGELOG.md)),
+and a compatibility manifest that does not exist yet. `stackpulse ping` is
+authoritative for the first two.
+
+## Read this before you trust a number
+
+Three things, stated plainly.
+
+### 1. Costs are local list-price estimates. They are not your bill.
+
+Every dollar figure is computed on your machine by multiplying local token counts
+against an **embedded table of approximate public list prices**
+(`crates/stackpulse-core/src/pricing.rs`, as of `2026-07-16`). Costs are always
+tagged `LocalEstimate`.
+
+StackPulse cannot see your invoice, plan, discounts, or credits. On a
+subscription, the figure is an *equivalent metered list-price* estimate — what
+that volume would cost at pay-as-you-go rates, which is usually far more than you
+paid. Useful. Not a bill.
+
+### 2. An unpriced model has its tokens counted and its cost silently omitted.
+
+If `rates_for()` does not recognize a model — an unknown family, **or an
+unrecognized version of a known family** — it returns `None`. The core
+**deliberately refuses to guess**. The tokens still count; the cost is dropped
+from every total.
+
+That silence is the failure mode, so protocol 1.18.0 added **schema canaries**
+(`UsageSnapshot.canaries`) to name it. Every snapshot now carries a per-provider
+canary (`ok` / `drifted` / `no_data`) listing any unpriced model with its record
+and token counts, so the app can say *"I might be under-reporting"* instead of
+showing a confidently wrong total. Canaries cover **Claude and Codex** — the only
+two providers with local token accounting to verify.
+
+Strictness is only safe *because* the canary surfaces the gap. The two are a pair,
+and they exist because of a real incident: tolerant substring matching once priced
+**Opus 4.8 at Opus 4.1's rates — 3× the real price**, silently, overstating a
+month's spend by 2.7× on a real machine. A wrong rate looks exactly like a right
+one. `rates_for()` now parses the version instead.
+
+### The price table's known inaccuracies
+
+Stated in `pricing.rs`, not hidden. All three are live today:
+
+1. **Cache writes are priced at the 5-minute rate.** Anthropic bills a 1-hour
+   write at 2× input, and `TokenTotals` carries a single `cache_creation_tokens`,
+   so the split is lost before pricing. On a real machine **86% of cache writes
+   were 1-hour** — this **understates**.
+2. **OpenAI/Codex rates are unverified.** The Claude cards were read off
+   Anthropic's published list; the GPT/Codex cards were inherited from an earlier
+   revision and not checked.
+3. **Sonnet 5 is on introductory pricing** through **2026-08-31**. `rates_for()`
+   has no clock, so on that date the table silently becomes wrong until updated.
+
+Rates are hand-maintained (`PRICING_AS_OF = "2026-07-16"`). There is no remote
+price feed.
+
+### 3. Eleven providers are registered. Two have a full usage scan.
+
+| Providers | What they do |
+| --- | --- |
+| **Claude, Codex** | Full local cost scan — per-model, cache metrics, real numbers. Codex also reports 5-hour / weekly limit windows from local logs, **zero network**. |
+| **Antigravity** | **Activity only** — conversations, recency, model, step counts. Its tokens/cost live server-side at Google and **are not available locally, so they are not shown**. |
+| **Copilot, Cursor, Devin, Gemini, Grok, OpenCode, OpenRouter, Z.ai** | **Detection-only** — installed / authenticated, presence-only. No usage, no cost, no limits. |
+
+Full matrix: [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md).
+
+## Offline by default, with three named exceptions
+
+**The Rust core never makes a network call** — it has no HTTP client
+([ADR-0005](docs/decisions/0005-portable-core-boundary.md)). `GetStackHealth`
+accepts a `check_updates` flag and ignores it.
+
+Every request that **leaves your machine** is in the Swift layer. This is the
+complete list:
+
+| Feature | Endpoint | Sends | Default |
+| --- | --- | --- | --- |
+| Claude live limits | `api.anthropic.com/api/oauth/usage` | Your Claude Code OAuth token (Bearer) | **ON** |
+| BYOK balances | OpenRouter `/credits`, your LiteLLM `/key/info`, DeepSeek `/user/balance` | The key you saved | OFF — no key, no contact |
+| Stack Health enrichment | `registry.npmjs.org`, `crates.io`, `api.osv.dev` | Package names + versions | Off unless you ask |
+
+**Claude live limits is on by default and reads a real secret** — your OAuth
+token, from `~/.claude/.credentials.json` or the Keychain via `/usr/bin/security`
+(which triggers the macOS allow-access prompt). It goes to that one endpoint and
+nowhere else; it is never logged or persisted. Turn it off in Settings for a
+fully offline app. Details: [`docs/USAGE.md`](docs/USAGE.md#what-touches-the-network).
+
+Two local-only connections are not in that table because nothing leaves the
+machine: Project web preview probes `127.0.0.1:<port>` and renders your own dev
+server. StackPulse itself **opens no listening socket** — the core is linked
+in-process, so there is no port to reach it on.
+
+Everything else is read-only local scanning. Credential *detection* is
+presence-only — the file or Keychain item exists; it is never opened.
+
+## Not built
+
+Named so nobody assumes otherwise:
+
+- **Chrome native-messaging host** — no extension exists.
+- **Signed / notarized release, DMG, Sparkle auto-update** — needs an Apple
+  Developer certificate. `make package` builds an ad-hoc bundle for local use only.
+- **Windows client** — the core is portable and CI cross-compiles it, but no
+  Windows UI exists.
+- **Remote pricing feed**, **signed compatibility manifest** — designed, not built.
+
+## Architecture
+
+A **portable Rust core** does all platform-neutral work — detection, log
+scanning, normalization, pricing, aggregation — and speaks a small versioned JSON
+protocol. The **macOS app** is a Swift package that links the core as a static
+library **in-process** (no subprocess, no IPC, no localhost port) and decodes the
+same JSON the CLI prints.
 
 ```
               ┌──────────────────────────────────────────────┐
-              │  stackpulse-protocol   (versioned contracts)  │
+              │  stackpulse-protocol   (versioned contracts) │
               └──────────────────────────────────────────────┘
                          ▲                        ▲
                          │ types                  │ types
-              ┌──────────┴──────────┐   ┌─────────┴───────────┐
-              │   stackpulse-core   │   │   Swift decoders    │
+              ┌──────────┴──────────┐   ┌─────────┴────────────┐
+              │   stackpulse-core   │   │    Swift decoders    │
               │  (portable engine)  │   │  (apps/StackPulseMac)│
-              └──────────┬──────────┘   └─────────▲───────────┘
-                         │                         │
-         ┌───────────────┼─────────────┐           │ JSON in / JSON out
-         │               │             │           │
-   stackpulse-cli   stackpulse-ffi ────┘   (C ABI: sp_core_handle_request)
+              └──────────┬──────────┘   └─────────▲────────────┘
+                         │                        │
+         ┌───────────────┼─────────────┐          │ JSON in / JSON out
+         │               │             │          │
+   stackpulse-cli   stackpulse-ffi ────┘  (C ABI: sp_core_handle_request)
    (stackpulse bin)  (staticlib+cdylib)
 ```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full picture.
-
-## Repository layout
-
 | Path | What it is |
 | --- | --- |
-| `crates/stackpulse-protocol` | Versioned, platform-neutral serde contracts (`PROTOCOL_VERSION = 1.0.0`). |
-| `crates/stackpulse-core` | The portable engine: detection, scanning, pricing, aggregation, dispatch. No platform code. |
-| `crates/stackpulse-ffi` | Tiny C ABI (`staticlib` + `cdylib`) — JSON in, JSON out. |
-| `crates/stackpulse-cli` | The `stackpulse` binary and the portability smoke-test target. |
-| `apps/StackPulseMac` | The macOS menu-bar app (SwiftPM, links the Rust static lib). |
-| `docs/` | Architecture, protocol, capabilities, security, and decision records. |
+| `crates/stackpulse-protocol` | Versioned, platform-neutral serde contracts (`PROTOCOL_VERSION`). |
+| `crates/stackpulse-core` | The portable engine. No platform code, no network. |
+| `crates/stackpulse-ffi` | Tiny C ABI (`staticlib` + `cdylib`) — JSON in, JSON out, panic-safe. |
+| `crates/stackpulse-cli` | The `stackpulse` binary; the portability smoke-test target. |
+| `apps/StackPulseMac` | The macOS app (SwiftPM, links the Rust static lib). |
+| `docs/` | Usage, architecture, protocol, capabilities, security, ADRs. |
 
-## Supported providers (v0.1.0)
+Full picture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-All eleven providers — **Antigravity, Claude, Codex, GitHub Copilot, Cursor,
-Devin, Gemini, Grok, OpenCode, OpenRouter, Z.ai** — are registered and appear in
-every snapshot. Claude and Codex have full local-cost scanners, Antigravity has a
-local *activity* scanner, and the other eight are detection-only for now.
+## Build
 
-| Provider | v0.1.0 status |
-| --- | --- |
-| **Claude** (Claude Code) | Full local-cost scan, per-model breakdown, cache metrics. Live OAuth usage limits are **Planned**. |
-| **Codex** (OpenAI Codex CLI) | Full local-cost scan, per-model breakdown, cache metrics, plus **provider-reported 5-hour / weekly limit windows** read from local logs with no network. |
-| **Antigravity** (Google's agentic IDE) | **Local activity scan** — conversation count, recency, and model, read from `~/.gemini/antigravity` (no SQLite dependency), and in-progress sessions surfaced as **Missions**. Token/cost is managed **server-side** by Gemini and isn't available locally, so it is honestly not shown. |
-| The other 8 | **Detection-only.** Honest installed / authenticated detection (presence-only) + a full capability matrix. Local usage/cost scanning is **Planned**. Devin, OpenRouter, and Z.ai are cloud/API-key services with no local footprint and read `not_detected` until an API-key integration lands. |
-
-The full, honest capability matrix is in [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md).
-
-## Pricing and cost estimates
-
-Costs come from an **embedded price table** of approximate public list prices per
-million tokens (as of 2026-07). They are always labeled `LocalEstimate` and the
-UI never presents them as billed amounts. For subscription/plan users these are
-*equivalent metered list-price* estimates — a sense of what the same usage would
-cost at list, not what you actually paid. Remote pricing (litellm, models.dev)
-is a **Planned** enhancement. Details: [`docs/PRIVACY.md`](PRIVACY.md) and the
-pricing notes in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
-
----
-
-## Building
-
-### Prerequisites
-
-- macOS on Apple Silicon (developed on macOS 26.5.1).
-- **Rust 1.96+** (workspace MSRV is 1.80).
-- **Swift 6.0+** with the Command Line Tools. Full Xcode is **not** required or
-  used; the macOS app is a Swift Package built with SwiftPM.
-
-### 1. Build the portable core and the CLI
+Requires macOS 14+, **Rust 1.80+**, and **Swift 6** with Command Line Tools.
+**Xcode is not required or used** — it is a Swift Package built with SwiftPM
+([ADR-0002](docs/decisions/0002-swiftpm-not-xcodeproj.md)).
 
 ```sh
-# From the repo root
+make app        # Rust core (release) + swift build
+make run        # build + launch the menu-bar app
+make package    # → dist/StackPulse.app (ad-hoc signed, local use only)
+make dump       # headless: print the snapshot JSON through the FFI
+```
+
+Try the core directly:
+
+```sh
 cargo build --release
-cargo test            # runs the core, protocol, and provider unit tests
+./target/release/stackpulse snapshot     # includes the unpriced-model note
+./target/release/stackpulse ping         # core + protocol versions
 ```
 
-Try the CLI against your own machine:
+> Build the Swift app from `apps/StackPulseMac` — the static-archive link path is
+> relative so a repo path with spaces still builds.
+
+Step-by-step, plus flags and troubleshooting: [`docs/USAGE.md`](docs/USAGE.md).
+
+## Contributing / verification gates
 
 ```sh
-./target/release/stackpulse snapshot          # human-readable summary
-./target/release/stackpulse snapshot --json    # full UsageSnapshot JSON
-./target/release/stackpulse status             # cheap per-provider detection
-./target/release/stackpulse ping               # core + protocol versions
+cargo fmt --all -- --check
+cargo clippy -p stackpulse-protocol -p stackpulse-core -p stackpulse-cli --all-targets -- -D warnings
+cargo test --workspace
+cd apps/StackPulseMac && swift build -c release
+./.build/release/StackPulseApp --selftest-parsers
 ```
 
-### 2. Build the FFI static library and the macOS app
-
-The macOS app links `libstackpulse_ffi.a`, produced by building the FFI crate in
-release mode, and then builds with SwiftPM:
-
-```sh
-cargo build -p stackpulse-ffi --release
-cd apps/StackPulseMac
-swift build
-```
-
-Run the app headless to verify the bridge without launching the GUI:
-
-```sh
-swift run StackPulseApp --dump       # prints the raw snapshot JSON and exits
-swift run StackPulseApp --version    # prints the core version via the C ABI
-```
-
-Running `swift run StackPulseApp` with no flags starts the menu-bar accessory
-app (no Dock icon); click the menu-bar gauge to open the popover.
-
-> The SwiftPM linker search path for the static archive is **relative**
-> (`-L ../../target/release`) so it survives a repository path that contains
-> spaces. Build the app from the `apps/StackPulseMac` directory.
-
-### Verifying portability
-
-The core and protocol crates must build for non-macOS targets. That property is
-guarded by keeping all platform-specific code out of those crates
-(see [ADR-0005](docs/decisions/0005-portable-core-boundary.md)); the
-`stackpulse-cli` binary is the smoke-test target for it.
-
----
-
-## Distribution (Planned)
-
-The intended release pipeline is Developer ID signing + hardened runtime +
-notarization + a signed DMG with a published SHA-256, and in-app updates via a
-Sparkle feed (stable and beta channels). Sparkle is **not yet integrated**. See
-[`SECURITY.md`](SECURITY.md) for how signing fits the threat model.
-
-## Versioning
-
-The app version, the core version (`0.1.0`), the protocol version (`1.0.0`), and
-a future compatibility-manifest version are **independent** version lines, all
-SemVer. Pre-1.0 lines use `0.x`. Rationale:
-[ADR-0006](docs/decisions/0006-independent-version-lines.md).
+CI also builds and tests the portable crates on **Linux** and cross-compiles them
+for **Windows** — the guardrail that keeps platform code out of the core. Keep
+platform specifics in the Swift shell ([ADR-0005](docs/decisions/0005-portable-core-boundary.md)).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — event-driven design, crate/app boundaries, ownership split.
-- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — every protocol type and JSON envelope with real examples.
+- [`docs/USAGE.md`](docs/USAGE.md) — **start here**: build, run, sections, limits, troubleshooting.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — design, crate/app boundaries, ownership split.
+- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — every protocol type and JSON envelope.
 - [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) — the provider × capability matrix.
-- [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) — integration-health tracking and the planned signed manifest.
-- [`docs/SECURITY_BOUNDARIES.md`](docs/SECURITY_BOUNDARIES.md) — threat model and current mitigations.
-- [`docs/CROSS_REPO_CHANGELOG.md`](docs/CROSS_REPO_CHANGELOG.md) — protocol/core/capability changes across repos.
-- [`docs/decisions/`](docs/decisions/) — architecture decision records (ADRs).
-- [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md), [`PRIVACY.md`](PRIVACY.md), [`CHANGELOG.md`](CHANGELOG.md).
+- [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) — integration health and the planned signed manifest.
+- [`docs/SECURITY_BOUNDARIES.md`](docs/SECURITY_BOUNDARIES.md) — threat model and mitigations.
+- [`docs/decisions/`](docs/decisions/) — ADRs.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md) · [`PRIVACY.md`](PRIVACY.md) · [`CHANGELOG.md`](CHANGELOG.md)
 
 ## Attribution
 
 StackPulse incorporates **OpenUsage** (`robinebers/openusage`, MIT, upstream ref
-v0.7.5) as an attributed reference — its parsing and pricing logic was ported to
-Rust and its app was reimplemented natively — and studied **CodexBar**
-(`steipete/CodexBar`, MIT) and **Tokcat** (`handlecusion/tokcat`) for ideas. It
-is **not** a fork, and it does not reuse the OpenUsage name or marks. See
-[`NOTICE`](NOTICE) for the full, honest attribution.
+**v0.7.5**) as an **attributed reference — not a fork**. Its parsing and pricing
+behavior was re-implemented in Rust and its app re-implemented natively in Swift;
+**no OpenUsage source is copied verbatim**, and its name and marks are not reused
+(it ships a `TRADEMARK.md`). The reason is architectural: StackPulse needs a
+portable non-Swift core, which a fork of a ~98.6% Swift codebase cannot provide
+([ADR-0001](docs/decisions/0001-incorporate-openusage-as-reference.md)).
+
+**CodexBar** (`steipete/CodexBar`, MIT) and **Tokcat** (`handlecusion/tokcat`)
+were studied for ideas; no code was incorporated. StackPulse is independent and
+is not endorsed by any of them.
+
+Full attribution and upstream license text: [`NOTICE`](NOTICE).
 
 ## License
 

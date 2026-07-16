@@ -219,6 +219,12 @@ struct GlassButtonStyle: ButtonStyle {
     var tint: Color? = nil
     var prominent: Bool = false
     @Environment(\.colorScheme) private var scheme
+    /// Every OTHER glass surface honored this (`LiquidGlassSurface`,
+    /// `WindowBackdrop`, `Chip`, `MeterBar`, `StatusDot`) — buttons did not, so
+    /// Settings' "glass surfaces fall back to solid fills" was false for all 71
+    /// button call sites. Translucency plus a `plusLighter` sheen is exactly what
+    /// Reduce Transparency exists to switch off.
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -228,19 +234,26 @@ struct GlassButtonStyle: ButtonStyle {
             .background {
                 let shape = Capsule(style: .continuous)
                 ZStack {
-                    if prominent, let tint {
+                    if reduceTransparency {
+                        // Opaque, no material and no sheen. `.background` keeps a
+                        // plain button legible against whatever sits behind it.
+                        shape.fill(prominent ? (tint ?? .accentColor) : Color(nsColor: .windowBackgroundColor))
+                        shape.strokeBorder(prominent ? .clear : Color.secondary.opacity(0.8), lineWidth: 1)
+                    } else if prominent, let tint {
                         shape.fill(tint.opacity(scheme == .dark ? 0.85 : 0.9))
                     } else {
                         shape.fill(.thinMaterial)
                         shape.fill((tint ?? .white).opacity(scheme == .dark ? 0.10 : 0.14))
                     }
-                    shape.fill(
-                        LinearGradient(
-                            colors: [.white.opacity(scheme == .dark ? 0.16 : 0.5), .clear],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                    ).blendMode(.plusLighter)
-                    shape.strokeBorder(.white.opacity(scheme == .dark ? 0.28 : 0.7), lineWidth: 1)
+                    if !reduceTransparency {
+                        shape.fill(
+                            LinearGradient(
+                                colors: [.white.opacity(scheme == .dark ? 0.16 : 0.5), .clear],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        ).blendMode(.plusLighter)
+                        shape.strokeBorder(.white.opacity(scheme == .dark ? 0.28 : 0.7), lineWidth: 1)
+                    }
                 }
             }
             .foregroundStyle(prominent ? Color.white : Color.primary)

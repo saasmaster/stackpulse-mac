@@ -239,9 +239,11 @@ fn parse_ref_line(
             .clone()
     });
 
+    let (files, files_unknown) = captured_files(project_path, &id);
     Some(Checkpoint {
         restore_command: restore_command(project_path, &id),
-        files: captured_files(project_path, &id),
+        files,
+        files_unknown,
         id,
         ref_name,
         label,
@@ -322,10 +324,15 @@ fn shell_quote(s: &str) -> String {
 }
 
 /// Files whose uncommitted state the snapshot captured, capped at
-/// [`CHECKPOINT_FILES_CAP`]. Empty when git won't describe the object (e.g. a
-/// ref in our namespace that isn't a stash commit) — better to report no files
-/// than to guess.
-fn captured_files(project_path: &str, sha: &str) -> Vec<String> {
+/// [`CHECKPOINT_FILES_CAP`], plus whether git actually told us.
+///
+/// Returns `(files, files_unknown)`. When git won't describe the object (e.g. a
+/// ref in our namespace that isn't a stash commit) the answer is **unknown**, not
+/// empty. The old code returned a bare empty list and justified it as "better to
+/// report no files than to guess" — but reporting "no files" IS a guess: it
+/// asserts a fact we don't have, and it looks exactly like a snapshot that
+/// genuinely captured nothing. Absence of evidence is reported as absence.
+fn captured_files(project_path: &str, sha: &str) -> (Vec<String>, bool) {
     // `stash show` diffs the snapshot against its base commit, which is exactly
     // "what was uncommitted". quotePath=false keeps non-ASCII paths readable.
     let stdout = match git_stdout(
@@ -340,17 +347,18 @@ fn captured_files(project_path: &str, sha: &str) -> Vec<String> {
         ],
     ) {
         Some(s) => s,
-        None => return Vec::new(),
+        None => return (Vec::new(), true), // git wouldn't say — not "nothing"
     };
     // `quotePath=false` keeps non-ASCII bare, but git still quotes AND escapes
     // genuinely special characters, so `"quo\"te.txt"` needs real unescaping —
     // stripping the quotes alone left the backslash in the reported filename.
-    stdout
+    let files = stdout
         .lines()
         .map(crate::gitpath::decode)
         .filter(|p| !p.is_empty())
         .take(CHECKPOINT_FILES_CAP)
-        .collect()
+        .collect();
+    (files, false)
 }
 
 /// Explain why a capture produced nothing, grounded in what git actually
@@ -908,6 +916,41 @@ mod tests {
             !note.contains("no checkpoints"),
             "must not assert absence it never verified: {note}"
         );
+    }
+
+    /// A snapshot that captured nothing and a snapshot git refused to describe
+    /// both used to report `files: []`. They mean opposite things: one says "your
+    /// safety net holds nothing", the other says "we have no idea what it holds".
+    /// `files_unknown` is what tells them apart.
+    #[test]
+    fn a_file_list_git_refused_to_produce_is_unknown_not_empty() {
+        let repo = TempRepo::new();
+        // A ref in our namespace pointing at an ordinary commit, not a stash
+        // object: `stash show` refuses it, which is exactly the real-world case
+        // the old doc waved at ("a ref in our namespace that isn't a stash
+        // commit") while still reporting an empty list.
+        let head = repo.git(&["rev-parse", "HEAD"]);
+        let head = head.trim();
+        repo.git(&["update-ref", &format!("{REF_PREFIX}/not-a-stash"), head]);
+        assert!(
+            git_stdout(repo.str_path(), &["stash", "show", "--name-only", head]).is_none(),
+            "premise: stash show must actually fail on a non-stash commit"
+        );
+
+        let (files, unknown) = captured_files(repo.str_path(), head);
+        assert!(files.is_empty());
+        assert!(
+            unknown,
+            "git said nothing — that is not the same as 'no files'"
+        );
+
+        // And the honest case still reads as known-empty, so `unknown` isn't
+        // just always-true: a real stash reports its files with unknown = false.
+        repo.write("a.txt", "dirty\n");
+        let sha = stash_create(repo.str_path(), "probe").expect("a dirty tree stashes");
+        let (files, unknown) = captured_files(repo.str_path(), &sha);
+        assert_eq!(files, vec!["a.txt".to_string()]);
+        assert!(!unknown);
     }
 
     // --- pure helpers -----------------------------------------------------

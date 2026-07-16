@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 17,
+    minor: 18,
     patch: 0,
 };
 
@@ -579,6 +579,72 @@ pub struct ScopeFlag {
     pub match_count: usize,
 }
 
+// ---------------------------------------------------------------------------
+// Schema canaries — is what we're reading still what we think it is? (1.18.0)
+// ---------------------------------------------------------------------------
+
+/// Whether a provider's local data still looks like something this core version
+/// actually understands.
+///
+/// This app's entire premise is reading local logs whose format it does not
+/// control. When a provider changes that format, or ships a model our pricing
+/// table has never heard of, the failure is **silent**: tokens go uncounted, or
+/// get counted at no cost, and every number downstream quietly understates. The
+/// canary exists so the app can say "I might be under-reporting" instead of
+/// presenting a confidently wrong total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CanaryStatus {
+    /// Files were found and parsed, and everything in them was understood.
+    Ok,
+    /// Something was found that this core doesn't fully understand — the numbers
+    /// are incomplete in a way we can name.
+    Drifted,
+    /// Nothing local to check (provider not installed, or no recent activity).
+    /// Not a problem, and explicitly not "Ok" — there was nothing to verify.
+    NoData,
+    #[serde(other)]
+    Unknown,
+}
+
+/// A model observed in real local logs that the pricing table can't price.
+///
+/// Its tokens ARE counted; its cost is silently omitted, because the core refuses
+/// to guess a rate it doesn't know. That silence is the bug this reports: a new
+/// model family can quietly vanish from every cost estimate in the app.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnpricedModel {
+    /// The model id exactly as the logs record it.
+    pub model: String,
+    /// How many usage records named it, in the window scanned.
+    pub records: u64,
+    /// Tokens attributed to it — counted, but contributing zero cost.
+    pub tokens: TokenTotals,
+}
+
+/// One provider's canary result for this scan.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SchemaCanary {
+    pub provider: ProviderId,
+    pub status: CanaryStatus,
+    pub checked_at_unix: i64,
+    /// Plain-language statement of what was observed, in the user's terms — safe
+    /// to show verbatim. Never a stack trace, never a file path.
+    pub detail: String,
+    /// Log files the scan considered (counted from directory metadata — a fact,
+    /// not an estimate).
+    pub files_seen: u64,
+    /// Usage records the scan actually **counted** — deduplicated and inside the
+    /// reported window, so this reconciles with `ProviderUsage::models`. It is
+    /// therefore lower than the number of usage-shaped lines on disk (replayed
+    /// turns in resumed sessions collapse), and that is the intended meaning: a
+    /// canary must describe the numbers the app is showing.
+    pub records_parsed: u64,
+    /// Models found whose cost we cannot estimate, worst (most tokens) first.
+    #[serde(default)]
+    pub unpriced_models: Vec<UnpricedModel>,
+}
+
 /// The top-level object every UI surface renders. One scan → one snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageSnapshot {
@@ -602,6 +668,13 @@ pub struct UsageSnapshot {
     /// Additive since protocol 1.8.0 — older readers ignore it.
     #[serde(default)]
     pub insights: Vec<Insight>,
+    /// Per-provider checks that what we read still matches what we understand,
+    /// worst status first. Additive since protocol 1.18.0.
+    ///
+    /// Read this before trusting the totals above: a `Drifted` canary means the
+    /// numbers in this very snapshot are knowably incomplete.
+    #[serde(default)]
+    pub canaries: Vec<SchemaCanary>,
     /// Pricing table provenance note, e.g. "embedded estimate, as of 2026-07".
     pub pricing_note: String,
 }
@@ -805,8 +878,9 @@ pub struct StackSummary {
 }
 
 /// One project's dependency/stack health (since 1.9.0). Computed locally from the
-/// project's manifests + lockfiles; `latest`/`advisories` come from official
-/// registries + OSV when a network check is allowed (else a local-only inventory).
+/// project's manifests + lockfiles. `latest`/`advisories` are filled in by the
+/// CLIENT from official registries + OSV — never by the core, which does no
+/// network. Absent means "not checked", which is NOT the same as "up to date".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectStack {
     pub name: String,
@@ -907,9 +981,15 @@ pub enum CoreRequest {
         days: Option<u32>,
     },
     /// Analyze the dependency/stack health of projects under the approved roots
-    /// (since 1.9.0). With `check_updates` the core may contact official package
-    /// registries + OSV for latest versions and advisories; otherwise it returns
-    /// a local-only inventory with no network.
+    /// (since 1.9.0). **The core never contacts the network** for this — it
+    /// returns a local inventory from manifests and lockfiles, always.
+    ///
+    /// `check_updates` does NOT make the core fetch anything (this doc used to say
+    /// it "may contact registries + OSV"; the core ignores the flag entirely — see
+    /// `stack_health::analyze`'s `_check_updates`). It is a hint the CLIENT reads
+    /// to decide whether to enrich with `latest`/`advisories` itself. Network lives
+    /// in the client layer so the core stays portable and C-dependency-free
+    /// (ADR-0005).
     GetStackHealth {
         roots: Vec<String>,
         #[serde(default)]
@@ -1096,8 +1176,19 @@ pub struct Checkpoint {
     pub branch: Option<String>,
     pub created_at_unix: i64,
     /// Files whose uncommitted state the snapshot captured.
+    ///
+    /// Empty means "no files" ONLY when [`Checkpoint::files_unknown`] is false.
+    /// See that field — the two cases used to be indistinguishable.
     #[serde(default)]
     pub files: Vec<String>,
+    /// True when git wouldn't tell us what the snapshot captured (since 1.18.0).
+    ///
+    /// Without this, `files: []` meant both "this snapshot touched nothing" and
+    /// "git failed and we have no idea" — absence of evidence rendered as a
+    /// confident empty answer. A client must not present an unknown list as an
+    /// empty one. Defaults to false, which is the pre-1.18.0 reading.
+    #[serde(default)]
+    pub files_unknown: bool,
     /// The exact command that would restore this snapshot. Reported, never run.
     pub restore_command: String,
 }

@@ -12,13 +12,22 @@ manifest design referenced below, see [`COMPATIBILITY.md`](COMPATIBILITY.md).
 
 ## Security posture in one line
 
-v0.1.0 is **read-only, local-only, and network-free**: it scans local logs,
-detects credentials by presence only, executes nothing, follows no symlinks, and
-sends no data anywhere.
+The **Rust core** is read-only, local-only, and network-free. The **macOS app**
+is offline by default but is not network-free: three opt-in Swift clients make
+outbound calls, one of which sends the user's own Claude OAuth token to
+Anthropic. Local `git` and `lsof` are executed. Symlinks are still never followed
+and no telemetry exists.
+
+> **This document described v0.1.0 and drifted.** Until app 0.25.0 it claimed the
+> product was "network-free", "executes no external commands", and "never reads
+> secret values" — all three had become false as features landed, and a security
+> document that overclaims is worse than none: it is exactly the confident-wrong
+> answer the rest of this project refuses to ship. The claims below are stated
+> against the code as of app 0.25.0, and each names where to verify it.
 
 ## Threat model
 
-Each threat below lists its status in v0.1.0 and the mitigation.
+Each threat below lists its status **as of app 0.25.0** and the mitigation.
 
 ### 1. Malicious repository content
 
@@ -45,10 +54,22 @@ language content of a log. Malformed or partial lines are skipped, not trusted.
 
 **Threat:** Crafted data causes StackPulse to build and run a shell command.
 
-**Mitigation (Today):** StackPulse **executes no external commands** in v0.1.0.
-There is no shell invocation, no `Command`/`exec`, and no template that turns
-data into a command line. Detection is done by inspecting the filesystem, not by
-running provider CLIs.
+**Mitigation (Today):** StackPulse **does execute commands** — this section's
+"executes nothing" claim was true only of v0.1.0. What holds now:
+
+- The core runs **local `git`** (missions, checkpoints, worktrees, radar) and
+  **`lsof`** (services) via `std::process::Command` with **argument vectors, never
+  a shell string**, so log/path data cannot become a command line. It never runs
+  provider CLIs, and never runs a mutating git verb: restore/remove are only ever
+  *reported* as a `restore_command` / `remove_command` for the client to gate
+  (`checkpoints.rs`, test `restore_command_is_reported_but_never_run`).
+- The app runs commands the user asks for, and **never silently**: they appear in
+  Terminal or stream in-app, anything not `read_only` is confirmation-gated, and
+  destructive commands are extra-warned (`CommandRunner`, `CommandCapture`).
+- Commands discovered from a project's `package.json` are **whitelisted by script
+  name** (`projects.rs::is_script_name`) — a hostile `"test; echo PWNED #"` script
+  key was previously classified `read_only` and wired to a one-click button.
+- `KeychainProbe` shells `/usr/bin/security` with a fixed argument vector.
 
 ### 4. Symlink attacks / path traversal
 
@@ -102,12 +123,28 @@ opt-in, authenticated, and off by default.
 **Threat:** Secrets (tokens, keys) end up in logs, snapshots, crash output, or
 the UI.
 
-**Mitigation (Today):** StackPulse **never reads secret values**. Auth is
-detected by the *presence* of a credential file or Keychain item. The
-`UsageSnapshot` contains only usage/pricing data — no credential material — so
-there is nothing sensitive to leak through the protocol, the CLI's `--json`
-output, or the popover. There is no telemetry that could carry a secret off the
-machine.
+**Mitigation (Today):** "Never reads secret values" is **no longer true** and was
+the most misleading claim in this document. Precisely:
+
+- The **core** never reads a secret. Auth is detected by the *presence* of a
+  credential file or Keychain item, and `UsageSnapshot` carries no credential
+  material — so the protocol, the CLI's `--json`, and the popover have nothing
+  sensitive to leak. There is still **no telemetry**.
+- The **app** reads exactly one secret, with the user's explicit consent:
+  `KeychainProbe.readClaudeCredentialsResult()` fetches the Claude Code OAuth
+  token (`/usr/bin/security find-generic-password -w`) so live limits can be
+  requested. The sibling presence probe still passes `kSecReturnData: false`.
+- That token is **held in a local value, sent only to `api.anthropic.com/api/oauth/usage`,
+  and dropped**. It is never logged, persisted, printed, or shown in the UI, and
+  the raw HTTP response is never logged either — failures surface a short generic
+  string (`AnthropicUsageClient`, whose header documents this boundary).
+- BYOK provider keys live in StackPulse's **own** Keychain (`APIKeyStore`) and are
+  never displayed after entry.
+- Turning off live limits in Settings removes the only path that reads a secret.
+
+The Settings → **Security & Privacy** panel reports this from live runtime state
+rather than restating this document, on the principle that a claim you can't see
+verified is just a claim.
 
 ### 9. Token theft
 

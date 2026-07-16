@@ -97,10 +97,10 @@ fn claude_fixture_scans_exactly() {
     );
 
     // Dedup: the two identical (message.id, requestId) lines collapse to one, so
-    // "today" holds exactly the sonnet turn + the fable turn (not three).
+    // "today" holds exactly the sonnet turn + the unpriceable turn (not three).
     let today = window(&usage, "today");
     assert_eq!(today.records, 2, "duplicate assistant line must be deduped");
-    assert_eq!(today.tokens.input_tokens, 1300); // 1000 (sonnet) + 300 (fable)
+    assert_eq!(today.tokens.input_tokens, 1300); // 1000 (sonnet) + 300 (unpriceable)
     assert_eq!(today.tokens.output_tokens, 250); // 200 + 50
     assert_eq!(today.tokens.cache_creation_tokens, 100);
     assert_eq!(today.tokens.cache_read_tokens, 500);
@@ -117,9 +117,18 @@ fn claude_fixture_scans_exactly() {
     assert_eq!(yesterday.tokens.input_tokens, 800);
 
     // The unpriceable model is surfaced in a note, not silently dropped.
+    //
+    // The fixture names a FICTIONAL model on purpose. This slot used to hold
+    // `claude-fable-5`, picked because it happened to have no rate card — so the
+    // day Fable was priced correctly, this test failed and the note it guards
+    // stopped being exercised. A real id makes the fixture expire; an imaginary
+    // one can never be priced.
     assert!(
-        usage.notes.iter().any(|n| n.contains("claude-fable-5")),
-        "expected an unpriceable-model note mentioning claude-fable-5, notes: {:?}",
+        usage
+            .notes
+            .iter()
+            .any(|n| n.contains("acme-imaginary-model-1")),
+        "expected an unpriceable-model note mentioning the fixture's unknown model, notes: {:?}",
         usage.notes
     );
 
