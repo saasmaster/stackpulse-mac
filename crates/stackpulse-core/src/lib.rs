@@ -21,6 +21,7 @@ pub mod insights;
 pub mod missions;
 pub mod paths;
 pub mod pricing;
+pub mod project_usage;
 pub mod projects;
 pub mod providers;
 pub mod radar;

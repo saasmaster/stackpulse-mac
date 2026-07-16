@@ -141,6 +141,17 @@ enum CoreBridge {
         return (try? JSONDecoder().decode(Response.self, from: data))?.services ?? []
     }
 
+    // MARK: Project usage (protocol ≥ 1.13.0)
+
+    /// Per-project spend attribution. Re-reads the session logs, so call off the
+    /// main actor. Returns `[]` on any error or an undecodable payload.
+    static func projectUsage() -> [ProjectUsage] {
+        struct Response: Decodable { let projects: [ProjectUsage] }
+        let json = handle(#"{"op":"get_project_usage"}"#)
+        guard let data = json.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode(Response.self, from: data))?.projects ?? []
+    }
+
     // MARK: Repository Radar (protocol ≥ 1.11.0)
 
     /// Run the Repository Radar over the approved roots. Discovers projects and

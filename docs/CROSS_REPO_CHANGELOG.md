@@ -309,6 +309,23 @@ is breaking for downstream consumers, and the action they should take.
 
 ---
 
+### 2026-07-13 — Project usage attribution (protocol 1.13.0)
+
+- **Surface:** protocol + core
+- **Versions:** protocol **1.13.0** / core **0.1.0** / manifest *(not yet defined)*
+- **Breaking for downstream:** no (purely additive)
+- **Change:** `ProjectUsage` type + the `get_project_usage` op and
+  `project_usage` response. The core attributes local AI spend to the project a
+  session ran in, by grouping session records on the working directory recorded
+  in the logs, and reports `SpendWindow`s ("today" / "last_30_days") per project.
+  Offline (reads the same logs the provider scan reads); costs stay local
+  list-price estimates, never billed amounts.
+- **Downstream action:** target protocol **1.13.0**; `get_project_usage` is
+  optional and may return an empty list (e.g. no session logs, or a provider
+  whose logs don't record a working directory).
+
+---
+
 ## Pending / anticipated (not yet shipped)
 
 These are flagged so downstream repos can plan. They are **not** implemented and

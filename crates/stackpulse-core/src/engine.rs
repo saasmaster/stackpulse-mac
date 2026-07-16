@@ -90,6 +90,9 @@ impl Engine {
             CoreRequest::GetRadar { roots, max_depth } => {
                 CoreResponse::Radar(crate::radar::analyze(&roots, max_depth.unwrap_or(4)))
             }
+            CoreRequest::GetProjectUsage => CoreResponse::ProjectUsage {
+                projects: crate::project_usage::analyze(now_unix()),
+            },
         }
     }
 

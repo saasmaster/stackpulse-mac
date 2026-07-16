@@ -25,6 +25,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     case overview
     case trends
     case reports
+    case projectUsage
     case discover
     case stackHealth
     case services
@@ -48,6 +49,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .usage: return "Usage"
         case .trends: return "Trends"
         case .reports: return "Reports"
+        case .projectUsage: return "By Project"
         case .projects: return "Projects"
         case .discover: return "Discover"
         case .stackHealth: return "Stack Health"
@@ -69,6 +71,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .usage: return "chart.line.uptrend.xyaxis"
         case .trends: return "chart.xyaxis.line"
         case .reports: return "doc.text"
+        case .projectUsage: return "folder.badge.gearshape"
         case .projects: return "folder"
         case .discover: return "sparkle.magnifyingglass"
         case .stackHealth: return "shield.lefthalf.filled"
@@ -90,6 +93,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .overview: return "At-a-glance spend, volume, and live limits across every detected provider."
         case .usage: return "Where your tokens and money go — per-model and per-window breakdowns, long-run trends, and a shareable report."
         case .trends: return "Long-run spend and token trends across providers, built from durable usage history that outlives the 30-day logs."
+        case .projectUsage: return "Which projects your AI spend actually went to — attributed from the working directory each session ran in."
         case .reports: return "A shareable snapshot of your usage, efficiency, projects, and stack — export it as text, Markdown, CSV, or JSON."
         case .projects: return "Your code and what's running — remembered commands, live dev servers, and one-tap web preview."
         case .discover: return "Project-aware, explainable recommendations drawn from your own local projects — what to add, fix, or safely leave alone."
@@ -108,6 +112,9 @@ struct MainWindowView: View {
     @EnvironmentObject var theme: ThemeManager
     @State private var selection: MainSection = .home
     @State private var showingAlerts = false
+    @State private var showingOnboarding = false
+    /// Set once the first-run flow is finished or skipped (also reset from Settings).
+    @AppStorage("onboarding.completed") private var onboardingCompleted = false
     @Namespace private var navGlow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -119,8 +126,16 @@ struct MainWindowView: View {
         }
         .frame(minWidth: 720, minHeight: 480)
         .preferredColorScheme(theme.colorScheme)
-        .onAppear { applyPendingSection() }
+        .onAppear {
+            applyPendingSection()
+            // First run: greet once, explain the trust story, and get folders added.
+            if !onboardingCompleted { showingOnboarding = true }
+        }
         .onChange(of: store.pendingSection) { applyPendingSection() }
+        .sheet(isPresented: $showingOnboarding) {
+            OnboardingView(onFinish: { showingOnboarding = false })
+                .environmentObject(store)
+        }
     }
 
     /// Consumes a one-shot navigation request from the store (e.g. the popover's
@@ -343,6 +358,7 @@ struct MainWindowView: View {
         case .overview: OverviewSection()
         case .trends: TrendsSection()
         case .reports: ReportsSection()
+        case .projectUsage: ProjectUsageSection()
         case .discover: DiscoverSection()
         case .stackHealth: StackHealthSection()
         case .services: ServicesSection()

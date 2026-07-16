@@ -625,6 +625,42 @@ struct RunningService: Codable, Sendable, Identifiable {
     var id: String { "\(pid)\u{1}\(port)" }
 }
 
+// MARK: - Project usage (protocol ≥ 1.13.0)
+
+/// Local AI spend attributed to one project (grouped by the working directory in
+/// the session logs). Costs are local list-price estimates, never billed amounts.
+struct ProjectUsage: Codable, Sendable, Identifiable {
+    let project_path: String
+    let project_name: String
+    let providers: [String]
+    let windows: [SpendWindow]
+    let last_activity_unix: Int64?
+
+    var id: String { project_path }
+
+    private enum CodingKeys: String, CodingKey {
+        case project_path, project_name, providers, windows, last_activity_unix
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        project_path = try c.decode(String.self, forKey: .project_path)
+        project_name = (try? c.decode(String.self, forKey: .project_name))
+            ?? (project_path as NSString).lastPathComponent
+        providers = ((try? c.decodeIfPresent([String].self, forKey: .providers)) ?? nil) ?? []
+        windows = ((try? c.decodeIfPresent([SpendWindow].self, forKey: .windows)) ?? nil) ?? []
+        last_activity_unix = try c.decodeIfPresent(Int64.self, forKey: .last_activity_unix)
+    }
+
+    func window(_ label: String) -> SpendWindow? { windows.first { $0.label == label } }
+    var today: SpendWindow? { window("today") }
+    var last30: SpendWindow? { window("last_30_days") }
+
+    var lastActivityAt: Date? {
+        last_activity_unix.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+    }
+}
+
 // MARK: - Repository Radar (protocol ≥ 1.11.0)
 
 // String-valued enums (`category`, `effort`, `risk`) are interpreted in the view

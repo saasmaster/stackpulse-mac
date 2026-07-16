@@ -7,8 +7,11 @@ struct SettingsSection: View {
     @EnvironmentObject var store: SnapshotStore
     @EnvironmentObject var theme: ThemeManager
 
+    /// Mirrors the first-run flag so the welcome tour can be replayed on demand.
+    @AppStorage("onboarding.completed") private var onboardingCompleted = false
+
     /// The macOS app's own version (distinct from the Rust core version).
-    private let appVersion = "0.16.0"
+    private let appVersion = "0.17.0"
 
     var body: some View {
         SectionScaffold(section: .settings) { snapshot in
@@ -25,6 +28,7 @@ struct SettingsSection: View {
 
                 // Tools
                 commandCenterCard
+                welcomeCard
                 exportCard(snapshot)
 
                 // About & reference (not settings, but spec-required here).
@@ -34,6 +38,35 @@ struct SettingsSection: View {
                 accessibilityCard
             }
         }
+    }
+
+    /// Replay the first-run welcome tour. Clearing the flag makes the main window
+    /// present it again on its next appearance (reopen the window to see it).
+    private var welcomeCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles").foregroundStyle(.tint)
+                Text("Welcome tour").font(.headline)
+                Spacer()
+                Button {
+                    onboardingCompleted = false
+                } label: {
+                    Label("Show again", systemImage: "arrow.counterclockwise")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.glass(tint: .accentColor))
+                .disabled(!onboardingCompleted)
+                .help("Show the first-run walkthrough again next time the main window opens")
+            }
+            Text(onboardingCompleted
+                 ? "Replay the short walkthrough of what StackPulse does and where things live."
+                 : "The walkthrough will show the next time the main window opens.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(padding: 16)
     }
 
     /// A quiet divider separating the settings/options above from the static

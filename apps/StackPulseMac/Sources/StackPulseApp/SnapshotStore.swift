@@ -584,6 +584,27 @@ final class SnapshotStore: ObservableObject {
         }
     }
 
+    // MARK: Project usage (protocol ≥ 1.13.0)
+
+    /// Per-project spend attribution from the last scan, highest 30-day cost first.
+    @Published private(set) var projectUsage: [ProjectUsage] = []
+    @Published private(set) var isScanningProjectUsage = false
+    @Published private(set) var projectUsageUpdatedAt: Date?
+
+    /// Recompute per-project spend off the main actor. Coalesced.
+    func rescanProjectUsage() {
+        guard !isScanningProjectUsage else { return }
+        isScanningProjectUsage = true
+        Task.detached(priority: .utility) {
+            let result = CoreBridge.projectUsage()
+            await MainActor.run {
+                self.isScanningProjectUsage = false
+                self.projectUsageUpdatedAt = Date()
+                self.projectUsage = result
+            }
+        }
+    }
+
     // MARK: Repository Radar (protocol ≥ 1.11.0)
 
     /// The last Repository Radar report over the approved roots.

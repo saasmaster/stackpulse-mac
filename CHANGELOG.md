@@ -18,6 +18,31 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Project usage attribution + first-run onboarding (app 0.17.0 / protocol 1.13.0)
+
+Closes the Phase 3 "project/task usage" gap and the last Phase 1 gap (onboarding).
+
+- **Where your AI spend actually goes.** A new **By Project** tab under Usage
+  attributes local spend to the project each session ran in, by grouping session
+  records on the working directory recorded in the logs. Ranked by 30-day cost
+  with a share-of-spend bar, today/30-day cost + tokens, turns, last activity, and
+  provider chips. Costs remain local list-price estimates, never billed amounts.
+  Protocol 1.13.0 adds `ProjectUsage` + the `get_project_usage` op; the engine
+  (`project_usage.rs`) is offline and reuses the logs the provider scan reads.
+  **Claude and Codex both attributed** (Codex verified against all 87 real session
+  files first — every one records exactly one working directory).
+  **Reconciled: 100% of scanned spend is attributed** (project totals match the
+  provider scan to the record, modulo turns written mid-scan).
+  **Umbrella folders are labelled honestly** — a watched *parent* folder that
+  collects sessions started outside any repo says so on its card, instead of
+  masquerading as a single project that ate the budget.
+- **First-run onboarding.** A short, skippable welcome: what StackPulse is and the
+  trust story (everything read locally, nothing uploaded; costs are estimates),
+  add your project folders (single project *or* a parent folder), a one-line tour
+  of the six sections, and the shortcuts. Replayable from **Settings → Welcome
+  tour → Show again**.
+- **112 core tests** (9 new), clippy/fmt clean; integrated Swift build clean.
+
 ### Sidebar Copy command + favorites + filter (app 0.16.0)
 
 - **Copy the one-paste command from the sidebar.** Each app row in the sidebar

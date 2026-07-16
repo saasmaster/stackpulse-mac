@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 12,
+    minor: 13,
     patch: 0,
 };
 
@@ -908,6 +908,10 @@ pub enum CoreRequest {
         #[serde(default)]
         max_depth: Option<u32>,
     },
+    /// Attribute local AI spend to the projects the sessions ran in (since
+    /// 1.13.0), by grouping session records on their recorded working directory.
+    /// Offline; reads the same logs the provider scan reads.
+    GetProjectUsage,
 }
 
 // ---------------------------------------------------------------------------
@@ -994,6 +998,31 @@ pub struct RadarReport {
     pub recommendations: Vec<Recommendation>,
 }
 
+// ---------------------------------------------------------------------------
+// Project usage — per-project spend attribution (since 1.13.0)
+// ---------------------------------------------------------------------------
+
+/// Local AI spend attributed to one project, derived by grouping session records
+/// by the working directory recorded in the session logs. Answers "which project
+/// is burning my budget?". Costs remain local list-price estimates, never billed
+/// amounts. Fully offline (reads the same logs the provider scan already reads).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectUsage {
+    /// Absolute working directory the sessions ran in.
+    pub project_path: String,
+    /// Last path component — a friendly label.
+    pub project_name: String,
+    /// Which providers contributed usage to this project.
+    #[serde(default)]
+    pub providers: Vec<ProviderId>,
+    /// Spend windows for this project ("today", "last_30_days").
+    #[serde(default)]
+    pub windows: Vec<SpendWindow>,
+    /// Most recent session activity seen for this project.
+    #[serde(default)]
+    pub last_activity_unix: Option<i64>,
+}
+
 /// The core's reply. `request_echo` lets async clients correlate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1019,6 +1048,9 @@ pub enum CoreResponse {
         services: Vec<RunningService>,
     },
     Radar(RadarReport),
+    ProjectUsage {
+        projects: Vec<ProjectUsage>,
+    },
     Error(CoreError),
 }
 
