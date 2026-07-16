@@ -44,6 +44,13 @@ enum WebPreview {
         /// Steps after the `cd`, in order (e.g. `["npm install", "npm run dev -- --host"]`).
         let steps: [String]
         let port: Int
+        /// True when the first step installs dependencies.
+        ///
+        /// Surfaced so the UI can SAY so before you press Launch. Installing pulls
+        /// packages from the network and can run their install scripts — a fair
+        /// thing to do when you asked to launch an app that isn't installed yet,
+        /// but not a fair thing to do silently behind a button labelled "Launch".
+        let installsDependencies: Bool
 
         /// The command run *inside* the project dir (what ``CommandRunner`` cd's to).
         var command: String { steps.joined(separator: " && ") }
@@ -60,11 +67,14 @@ enum WebPreview {
         guard let dev = devCommand(for: project) else { return nil }
         let port = resolvedPort(for: project, devCommand: dev)
         var steps: [String] = []
+        var installs = false
         if installNeeded, let install = installCommand(for: project) {
             steps.append(install)
+            installs = true
         }
         steps.append(withHost(dev, frameworks: project.frameworks))
-        return Recipe(projectName: project.name, cwd: project.path, steps: steps, port: port)
+        return Recipe(projectName: project.name, cwd: project.path, steps: steps, port: port,
+                      installsDependencies: installs)
     }
 
     /// Run the full recipe in Terminal (so you see the dev server's own Network URL)

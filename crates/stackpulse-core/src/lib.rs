@@ -17,6 +17,7 @@ pub mod alerts;
 pub mod checkpoints;
 pub mod datetime;
 pub mod engine;
+pub mod gitpath;
 pub mod history;
 pub mod insights;
 pub mod missions;

@@ -5,7 +5,7 @@ contract shared by every StackPulse surface: the Rust core, the macOS app (over
 the C ABI), the `stackpulse` CLI, and — in the future — a Chrome
 native-messaging host and a Windows client.
 
-- **Current version:** `PROTOCOL_VERSION = 1.16.0`. Additive history (older
+- **Current version:** `PROTOCOL_VERSION = 1.17.0`. Additive history (older
   readers keep parsing):
   - **1.3.0** — added a `Gemini` variant to the (open) `ProviderId` enum; the
     engine now lists eleven providers.
@@ -60,6 +60,12 @@ native-messaging host and a Windows client.
     `remove_command` (never for the main worktree) for the client to gate. The
     client passes a `worktrees_dir` so the copies land outside the user's project
     folders and can't be mistaken for new projects.
+  - **1.17.0** — one additive field: `ScopeFlag.match_count`, how many files a
+    scope flag actually matched. `files` is capped at 8, so its length is a floor,
+    not a total — and with no count on the wire the UI showed the sample as the
+    total, announcing "Security / auth code · 8" for a session touching 40 auth
+    files. Absent (pre-1.17.0 core) it defaults to `0`, which means **unknown**:
+    fall back to `files.len()` and never present `0` as a real count.
   - **1.16.0** — one additive field: `get_usage_snapshot.record_history_dir`. When
     set, the core folds that same snapshot into the durable history store before
     returning it. Without it a client must call `record_history`, which builds its

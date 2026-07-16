@@ -688,19 +688,14 @@ const GIT_CHANGED_FILES_CAP: usize = 20;
 /// [`GIT_CHANGED_FILES_CAP`]. Each line is `XY <path>`: the two-char status code,
 /// a space, then the path from byte index 3 (both status chars and the space are
 /// ASCII, so index 3 is always a char boundary). Rename/copy entries read
-/// `old -> new`; we keep the destination. Paths git quotes (special chars) have
-/// their surrounding quotes stripped.
+/// `old -> new`; we keep the destination.
 fn parse_porcelain(stdout: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in stdout.lines() {
         if line.len() < 4 {
             continue; // too short to hold "XY <path>"
         }
-        let mut path = &line[3..];
-        if let Some(idx) = path.find(" -> ") {
-            path = &path[idx + 4..]; // rename/copy: keep the new path
-        }
-        let cleaned = unquote(path);
+        let cleaned = crate::gitpath::decode_porcelain_field(&line[3..]);
         if !cleaned.is_empty() {
             out.push(cleaned);
             if out.len() >= GIT_CHANGED_FILES_CAP {
@@ -709,17 +704,6 @@ fn parse_porcelain(stdout: &str) -> Vec<String> {
         }
     }
     out
-}
-
-/// Strip the surrounding double quotes git wraps around paths with special
-/// characters. A non-quoted path is returned as-is (trimmed).
-fn unquote(s: &str) -> String {
-    let s = s.trim();
-    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        s[1..s.len() - 1].to_string()
-    } else {
-        s.to_string()
-    }
 }
 
 /// A short, single-line, sanitized preview of a message: whitespace/newlines
@@ -829,8 +813,16 @@ fn parse_iso_unix(ts: &str) -> Option<i64> {
             if hh <= 23 && mm <= 59 && ss <= 60 {
                 secs += hh * 3600 + mm * 60 + ss;
                 // A trailing numeric offset shifts local → UTC.
-                let rest =
-                    time_part[8..].trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
+                //
+                // `.get`, not `[8..]`: the ':' checks above only prove bytes 2
+                // and 5 are ASCII, so a multi-byte char can straddle byte 8 and
+                // slicing there panics. The FFI catches it, which turned one odd
+                // character in one log line into an error for the WHOLE snapshot
+                // — every provider blank. This file promises never to panic.
+                let rest = time_part
+                    .get(8..)
+                    .unwrap_or("")
+                    .trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
                 if let Some(pos) = rest.find(['+', '-']) {
                     let off = &rest[pos..];
                     let sign = if off.starts_with('-') { -1 } else { 1 };
@@ -853,6 +845,19 @@ fn parse_iso_unix(ts: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    /// A multi-byte char can straddle byte 8 of the time field (only bytes 2 and
+    /// 5 are proven ASCII by the ':' checks). Slicing there panicked, and the FFI
+    /// turns a panic into an error for the ENTIRE snapshot — one malformed
+    /// timestamp blanked every provider. Degrade, never panic.
+    #[test]
+    fn parse_iso_unix_survives_multibyte_in_the_time_field() {
+        // Must not panic; the date still resolves.
+        let midnight = parse_iso_unix("2026-01-01T00:00:00Z").unwrap();
+        let got = parse_iso_unix("2026-01-01T12:34:\u{20ac}X").unwrap();
+        assert_eq!(got, midnight + 12 * 3600 + 34 * 60);
+        assert!(parse_iso_unix("2026-01-01T\u{20ac}\u{20ac}:00:00Z").is_some());
+    }
+
     use super::*;
 
     #[test]
@@ -988,6 +993,57 @@ mod tests {
         assert_eq!(
             parse_porcelain(stdout),
             vec!["path with space.ts".to_string(), "new name.ts".to_string(),]
+        );
+    }
+
+    /// Verbatim `git status --porcelain` output for a repo containing a file
+    /// literally named `a -> b.txt`, captured from git itself (macOS git 2.x).
+    /// Splitting on ` -> ` before reading the quotes reported `b.txt"` — a path
+    /// that does not exist, trailing quote and all.
+    #[test]
+    fn parse_porcelain_keeps_filenames_containing_the_rename_arrow() {
+        let stdout = concat!(
+            " M \"a -> b.txt\"\n",
+            "RM plain.txt -> \"new spaced.txt\"\n",
+            "RM \"spaced name.txt\" -> renamed.txt\n",
+        );
+        assert_eq!(
+            parse_porcelain(stdout),
+            vec![
+                "a -> b.txt".to_string(),     // NOT `b.txt"`
+                "new spaced.txt".to_string(), // quoted destination
+                "renamed.txt".to_string(),    // quoted source, bare destination
+            ]
+        );
+    }
+
+    /// With the default `core.quotepath`, git escapes non-ASCII as literal octal
+    /// bytes: `é` arrives as the six characters `\303\251`. Merely stripping the
+    /// quotes surfaced that raw escape to the user as the filename.
+    #[test]
+    fn parse_porcelain_decodes_octal_escaped_unicode() {
+        let stdout = concat!(
+            " M \"uni-caf\\303\\251.txt\"\n",
+            "?? \"quo\\\"te.txt\"\n",
+            "?? \"tab\\there.txt\"\n",
+        );
+        assert_eq!(
+            parse_porcelain(stdout),
+            vec![
+                "uni-café.txt".to_string(),
+                "quo\"te.txt".to_string(),
+                "tab\there.txt".to_string(),
+            ]
+        );
+    }
+
+    /// `core.quotepath=false` (common for unicode users) emits raw UTF-8 with no
+    /// quoting — it must pass through untouched.
+    #[test]
+    fn parse_porcelain_passes_through_raw_utf8_when_quotepath_disabled() {
+        assert_eq!(
+            parse_porcelain("RM uni-café.txt -> uni-renamed-é.txt\n"),
+            vec!["uni-renamed-é.txt".to_string()]
         );
     }
 

@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 16,
+    minor: 17,
     patch: 0,
 };
 
@@ -561,9 +561,22 @@ pub struct ScopeFlag {
     pub severity: ScopeSeverity,
     /// Short human label (e.g. "Secrets / env files").
     pub label: String,
-    /// The changed files that matched, capped for payload size.
+    /// The changed files that matched, capped for payload size — a **sample**,
+    /// not the whole set. Use [`ScopeFlag::match_count`] for how many there were.
     #[serde(default)]
     pub files: Vec<String>,
+    /// How many files actually matched (since 1.17.0).
+    ///
+    /// `files` is capped, so its length is a floor, not a total. Without this the
+    /// two were indistinguishable on the wire and the UI counted the sample: a
+    /// session touching 40 auth files displayed "Security / auth code · 8". A
+    /// scope *guard* that under-reports scope is worse than none, so the true
+    /// count is carried explicitly rather than inferred from a capped list.
+    ///
+    /// Defaults to 0 when absent (a pre-1.17.0 core); treat 0 as "unknown" and
+    /// fall back to `files.len()`, never present 0 as a real count.
+    #[serde(default)]
+    pub match_count: usize,
 }
 
 /// The top-level object every UI surface renders. One scan → one snapshot.

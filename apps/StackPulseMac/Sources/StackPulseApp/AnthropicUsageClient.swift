@@ -38,6 +38,36 @@ enum AnthropicUsageClient {
         static let empty = Outcome(limits: [], error: nil)
     }
 
+    /// The windows a payload reported, plus what that payload proved about its own
+    /// scale.
+    ///
+    /// The scale has to be decided per PAYLOAD, not per value. `utilization` may
+    /// arrive as a percent (0–100) or a fraction (0–1), and `0.8` is 80% under one
+    /// reading and 0.8% under the other — but a single response is one or the
+    /// other, never both. Deciding value-by-value (`v <= 1 ? v * 100 : v`) claimed
+    /// otherwise: given `{ seven_day: 12.5, five_hour: 0.45 }` it reported weekly
+    /// 12.5% and 5h 45%, silently multiplying one and passing the other through.
+    /// No API reports both scales in one body, so at least one of those was wrong.
+    ///
+    /// A value above 1.0 proves the payload is already a percent, since a fraction
+    /// cannot exceed 1.0 — so nothing in it is scaled. Only when EVERY window is
+    /// ≤ 1.0 is the payload genuinely ambiguous, and that is precisely the state
+    /// just after a reset. Hence ``percentScaleLearned``: once the endpoint has
+    /// proved it speaks percent, that verdict is remembered and the ambiguous
+    /// payload is read correctly.
+    ///
+    /// Until it has proved anything, an all-≤1.0 payload is scaled — the reading
+    /// under which the percentages this app has actually displayed (82%, 5%) are
+    /// real. It errs toward over-reporting: a false "near your limit" is a wasted
+    /// warning, while the opposite error is silence while you burn through a limit.
+    struct ParsedUsage: Sendable {
+        var limits: [LimitWindow]
+        /// True when a window exceeded 1.0 — only a percent-scaled payload can.
+        var provedPercentScale: Bool
+
+        static let empty = ParsedUsage(limits: [], provedPercentScale: false)
+    }
+
     // MARK: Public entry point
 
     /// Reads the local Claude Code credentials and, if valid, fetches live
@@ -113,11 +143,15 @@ enum AnthropicUsageClient {
                 }
                 return Outcome(limits: [], error: "Live limits unavailable (HTTP \(http.statusCode)).")
             }
-            let limits = parseUsage(data)
-            if limits.isEmpty {
+            let learned = percentScaleLearned
+            let parsed = parseUsage(data, assumePercentScale: learned)
+            if parsed.provedPercentScale, !learned {
+                percentScaleLearned = true // one-way: a fraction can never exceed 1.0
+            }
+            if parsed.limits.isEmpty {
                 return Outcome(limits: [], error: "Live limits: no limit data in response.")
             }
-            return Outcome(limits: limits, error: nil)
+            return Outcome(limits: parsed.limits, error: nil)
         } catch {
             // Offline / TLS / timeout. Report the category, never the details.
             return Outcome(limits: [], error: "Live limits unavailable (offline?).")
@@ -140,18 +174,25 @@ enum AnthropicUsageClient {
     /// shapes differ structurally, `percent`/`utilization` may be Int or Double,
     /// and `resets_at` may be a unix number OR an ISO-8601 string — a permissive
     /// hand-decode is far less brittle here than a bespoke `Decodable`.
-    static func parseUsage(_ data: Data) -> [LimitWindow] {
+    static func parseUsage(_ data: Data, assumePercentScale: Bool = false) -> ParsedUsage {
         guard
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [] }
+        else { return .empty }
 
-        var out: [LimitWindow] = []
+        /// A window read from the payload but not yet scaled — the scale is a
+        /// property of the payload as a whole, so it can't be applied yet.
+        struct Staged {
+            let label: String
+            let raw: Double
+            let resetsAt: Int64?
+        }
+        var staged: [Staged] = []
         var seen = Set<String>()
 
-        func add(_ window: LimitWindow) {
+        func add(_ window: Staged) {
             guard !seen.contains(window.label) else { return }   // live/first wins
             seen.insert(window.label)
-            out.append(window)
+            staged.append(window)
         }
 
         // --- Modern shape: `limits: [{ kind, group?, percent, resets_at, scope?, is_active? }]`
@@ -161,13 +202,10 @@ enum AnthropicUsageClient {
                 guard let raw = coerceDouble(entry["percent"] ?? entry["utilization"]) else { continue }
                 let kind = (entry["kind"] as? String) ?? ""
                 let group = entry["group"] as? String
-                let label = modernLabel(kind: kind, group: group, scopedModel: scopeModelName(entry["scope"]))
-                add(LimitWindow(
-                    label: label,
-                    used_percent: normalizePercent(raw),
-                    window_minutes: windowMinutes(forLabel: label),
-                    resets_at_unix: parseResetsAt(entry["resets_at"]),
-                    provenance: liveProvenance
+                add(Staged(
+                    label: modernLabel(kind: kind, group: group, scopedModel: scopeModelName(entry["scope"])),
+                    raw: raw,
+                    resetsAt: parseResetsAt(entry["resets_at"])
                 ))
             }
         }
@@ -184,16 +222,23 @@ enum AnthropicUsageClient {
                 let entry = root[key] as? [String: Any],
                 let raw = coerceDouble(entry["utilization"] ?? entry["percent"])
             else { continue }
-            add(LimitWindow(
-                label: label,
-                used_percent: normalizePercent(raw),
-                window_minutes: windowMinutes(forLabel: label),
-                resets_at_unix: parseResetsAt(entry["resets_at"]),
-                provenance: liveProvenance
-            ))
+            add(Staged(label: label, raw: raw, resetsAt: parseResetsAt(entry["resets_at"])))
         }
 
-        return out
+        let provedPercentScale = staged.contains { $0.raw > 1.0 }
+        let scale = (provedPercentScale || assumePercentScale) ? 1.0 : 100.0
+        return ParsedUsage(
+            limits: staged.map { s in
+                LimitWindow(
+                    label: s.label,
+                    used_percent: s.raw * scale,
+                    window_minutes: windowMinutes(forLabel: s.label),
+                    resets_at_unix: s.resetsAt,
+                    provenance: liveProvenance
+                )
+            },
+            provedPercentScale: provedPercentScale
+        )
     }
 
     // MARK: Parsing helpers
@@ -229,11 +274,19 @@ enum AnthropicUsageClient {
         label == "5h" ? 300 : 10080
     }
 
-    /// Normalizes a utilization/percent value: a fraction (≤ 1.0) is scaled ×100;
-    /// anything larger is already a percent.
-    static func normalizePercent(_ value: Double) -> Double {
-        value <= 1.0 ? value * 100.0 : value
+    /// Whether this endpoint has ever been observed reporting a utilization above
+    /// 1.0 — which only a percent-scaled payload can do. See ``ParsedUsage``.
+    ///
+    /// Remembered across launches because the decisive evidence and the ambiguous
+    /// payload rarely arrive together: the proof shows up whenever usage passes
+    /// 1%, but the payload that *needs* it is the one where every window is under
+    /// 1% (right after a reset) — exactly when there is nothing to learn from.
+    static var percentScaleLearned: Bool {
+        get { UserDefaults.standard.bool(forKey: percentScaleDefaultsKey) }
+        set { UserDefaults.standard.set(newValue, forKey: percentScaleDefaultsKey) }
     }
+
+    private static let percentScaleDefaultsKey = "stackpulse.anthropicUsage.percentScaleObserved"
 
     static func coerceDouble(_ any: Any?) -> Double? {
         switch any {
@@ -306,16 +359,21 @@ enum AnthropicUsageClient {
           "seven_day_sonnet": { "utilization": 30,   "resets_at": 1893456000000 }
         }
         """
-        let legacy = parseUsage(Data(legacyJSON.utf8))
+        let legacyParsed = parseUsage(Data(legacyJSON.utf8))
+        let legacy = legacyParsed.limits
         func find(_ list: [LimitWindow], _ label: String) -> LimitWindow? {
             list.first { $0.label == label }
         }
-        guard legacy.count == 4,
-              let l5 = find(legacy, "5h"), approx(l5.used_percent, 45), l5.window_minutes == 300,
+        // 12.5 and 30 can only be percents, so this payload is percent-scaled and
+        // NOTHING in it is multiplied — 0.45 means 0.45%, not 45%. The old
+        // per-value rule read the same body as both scales at once.
+        guard legacyParsed.provedPercentScale,
+              legacy.count == 4,
+              let l5 = find(legacy, "5h"), approx(l5.used_percent, 0.45), l5.window_minutes == 300,
               l5.resets_at_unix == 1_893_456_000,
               let lw = find(legacy, "weekly"), approx(lw.used_percent, 12.5), lw.window_minutes == 10080,
               (lw.resets_at_unix ?? 0) > 1_700_000_000,               // ISO parsed to a real epoch
-              let lo = find(legacy, "weekly (Opus)"), approx(lo.used_percent, 90),
+              let lo = find(legacy, "weekly (Opus)"), approx(lo.used_percent, 0.9),
               let ls = find(legacy, "weekly (Sonnet)"), approx(ls.used_percent, 30),
               ls.resets_at_unix == 1_893_456_000,                     // millis normalized to seconds
               legacy.allSatisfy({ $0.provenance == liveProvenance })
@@ -332,18 +390,40 @@ enum AnthropicUsageClient {
           ]
         }
         """
-        let modern = parseUsage(Data(modernJSON.utf8))
+        let modern = parseUsage(Data(modernJSON.utf8)).limits
         guard modern.count == 3,                                       // sonnet skipped (is_active:false)
               let m5 = find(modern, "5h"), approx(m5.used_percent, 45), m5.window_minutes == 300,
               (m5.resets_at_unix ?? 0) > 1_700_000_000,                // fractional-second ISO parsed
-              let mw = find(modern, "weekly"), approx(mw.used_percent, 12.5), mw.window_minutes == 10080,
+              // 45 and 88 prove the percent scale, so 0.125 is 0.125% — not 12.5%.
+              let mw = find(modern, "weekly"), approx(mw.used_percent, 0.125), mw.window_minutes == 10080,
               let mo = find(modern, "weekly (Opus)"), approx(mo.used_percent, 88), mo.window_minutes == 10080,
               find(modern, "weekly (Sonnet)") == nil
         else { return false }
 
-        // 3) Garbage / empty inputs degrade to [].
-        guard parseUsage(Data("not json".utf8)).isEmpty,
-              parseUsage(Data("{}".utf8)).isEmpty
+        // 3) An all-≤1.0 payload is genuinely ambiguous: 0.82 is either 82% or
+        //    0.82% and nothing in the body says which. Unproven ⇒ scaled.
+        let ambiguousJSON = """
+        { "limits": [ { "kind": "session", "percent": 0.05 },
+                      { "kind": "seven_day", "percent": 0.82 } ] }
+        """
+        let ambiguous = parseUsage(Data(ambiguousJSON.utf8))
+        guard !ambiguous.provedPercentScale,
+              let a5 = find(ambiguous.limits, "5h"), approx(a5.used_percent, 5),
+              let aw = find(ambiguous.limits, "weekly"), approx(aw.used_percent, 82)
+        else { return false }
+
+        // 4) ...but once the endpoint has PROVED it speaks percent, the same body
+        //    reads as 0.05% / 0.82%. This is the just-after-a-reset case: without
+        //    the remembered verdict, 0.82% would be shown as 82% — a fake "you're
+        //    nearly out" alert, and a notification to match.
+        let known = parseUsage(Data(ambiguousJSON.utf8), assumePercentScale: true)
+        guard let k5 = find(known.limits, "5h"), approx(k5.used_percent, 0.05),
+              let kw = find(known.limits, "weekly"), approx(kw.used_percent, 0.82)
+        else { return false }
+
+        // 5) Garbage / empty inputs degrade to [].
+        guard parseUsage(Data("not json".utf8)).limits.isEmpty,
+              parseUsage(Data("{}".utf8)).limits.isEmpty
         else { return false }
 
         return true

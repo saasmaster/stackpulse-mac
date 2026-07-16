@@ -287,17 +287,34 @@ struct ScopeFlag: Codable, Sendable, Identifiable {
     let kind: String       // secrets | migrations | security | dependencies | lockfile | build_config | tests | other
     let severity: String   // info | notable | high
     let label: String
+    /// A capped SAMPLE of the matching files — never the whole set. Use
+    /// ``matchedFileCount`` for how many there were.
     let files: [String]
+    /// How many files matched (protocol 1.17.0). `0` means the core didn't say.
+    private let match_count: Int
 
     var id: String { kind }
 
-    private enum CodingKeys: String, CodingKey { case kind, severity, label, files }
+    /// How many files this flag actually matched.
+    ///
+    /// `files` is capped at 8 by the core, so counting it under-reports: a session
+    /// touching 40 auth files rendered "Security / auth code · 8". Falls back to
+    /// the sample's length when the core didn't report a count (pre-1.17.0), which
+    /// is the old floor — never worse than before, and honest above the cap.
+    var matchedFileCount: Int { match_count > 0 ? match_count : files.count }
 
-    init(kind: String, severity: String, label: String, files: [String]) {
+    /// True when `files` lists fewer than matched, so the UI can say "showing 8 of
+    /// 40" instead of implying the list is complete.
+    var filesAreSampled: Bool { matchedFileCount > files.count }
+
+    private enum CodingKeys: String, CodingKey { case kind, severity, label, files, match_count }
+
+    init(kind: String, severity: String, label: String, files: [String], match_count: Int = 0) {
         self.kind = kind
         self.severity = severity
         self.label = label
         self.files = files
+        self.match_count = match_count
     }
 
     init(from decoder: Decoder) throws {
@@ -306,6 +323,7 @@ struct ScopeFlag: Codable, Sendable, Identifiable {
         severity = (try? c.decode(String.self, forKey: .severity)) ?? "info"
         label = (try? c.decode(String.self, forKey: .label)) ?? "Change"
         files = ((try? c.decodeIfPresent([String].self, forKey: .files)) ?? nil) ?? []
+        match_count = ((try? c.decodeIfPresent(Int.self, forKey: .match_count)) ?? nil) ?? 0
     }
 }
 

@@ -114,18 +114,20 @@ struct MissionRow: View {
 struct MissionCard: View {
     let mission: Mission
 
+    /// The strongest completion evidence we have for this session's project: a real
+    /// test/check outcome. `nil` means unverified — which the UI says out loud
+    /// rather than implying the work is fine.
+    ///
+    /// Resolved once for the whole list by the parent, not per card: the match
+    /// depends only on the project path, so cards sharing a project would each
+    /// rescan every captured run to reach the same answer, on every body pass.
+    let verification: CommandRun?
+
     @EnvironmentObject private var store: SnapshotStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var filesExpanded = false
     @State private var copied = false
     @State private var handedOff = false
-
-    /// The strongest completion evidence we have for this session's project: a real
-    /// test/check outcome. `nil` means unverified — which the UI says out loud
-    /// rather than implying the work is fine.
-    private var verification: CommandRun? {
-        MissionEvidence.latestVerification(for: mission, in: store.commandRuns)
-    }
 
     private var messageLabel: String? {
         guard let count = mission.message_count else { return nil }
@@ -262,18 +264,29 @@ struct MissionCard: View {
             FlowLayout(spacing: 6, lineSpacing: 6) {
                 ForEach(flags) { flag in
                     let tint = ScopeStyle.tint(flag.severity)
+                    // `matchedFileCount`, not `files.count`: the core caps the list
+                    // at 8, so counting it announced "Security / auth code · 8" for
+                    // a session that touched 40 auth files — a scope guard talking
+                    // a change DOWN. The tooltip says so when the list is a sample.
                     Chip(
-                        text: flag.files.count > 1 ? "\(flag.label) · \(flag.files.count)" : flag.label,
+                        text: flag.matchedFileCount > 1 ? "\(flag.label) · \(flag.matchedFileCount)" : flag.label,
                         systemImage: ScopeStyle.icon(flag.kind),
                         tint: tint
                     )
-                    .help(flag.files.joined(separator: ", "))
+                    .help(scopeHelp(flag))
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Scope: " + flags.map(\.label).joined(separator: ", "))
+    }
+
+    /// The flag's files, disclosing when the list is only a sample of the match.
+    private func scopeHelp(_ flag: ScopeFlag) -> String {
+        let list = flag.files.joined(separator: ", ")
+        guard flag.filesAreSampled else { return list }
+        return "Showing \(flag.files.count) of \(flag.matchedFileCount):\n\(list)"
     }
 
     // MARK: Changed files
@@ -500,14 +513,46 @@ struct MissionsSection: View {
                     message: "No AI coding sessions in the last 2 hours."
                 )
             } else {
+                let verifications = verificationIndex(missions, store.commandRuns)
                 VStack(alignment: .leading, spacing: 18) {
                     summaryBar(missions)
                     ForEach(groups(missions), id: \.0) { status, items in
-                        groupBlock(status, items)
+                        groupBlock(status, items, verifications)
                     }
                 }
             }
         }
+    }
+
+    // MARK: Verification index
+
+    /// Each project's verifying run, resolved once for the whole list and keyed by
+    /// `project_path` — the only field the match looks at.
+    ///
+    /// Defers to ``MissionEvidence/latestVerification(for:in:)`` rather than
+    /// reimplementing the match, so what counts as verifying a mission stays
+    /// defined in one place. A project with no verifying run is simply absent, so a
+    /// miss reads back as the same `nil` the card renders as "not verified".
+    ///
+    /// `resolved` tracks paths already asked about, so a project that answers `nil`
+    /// isn't rescanned once per mission it owns.
+    private func verificationIndex(_ missions: [Mission], _ runs: [CommandRun]) -> [String: CommandRun] {
+        var index: [String: CommandRun] = [:]
+        var resolved: Set<String> = []
+        for mission in missions {
+            guard let path = mission.project_path, !path.isEmpty,
+                  resolved.insert(path).inserted else { continue }
+            index[path] = MissionEvidence.latestVerification(for: mission, in: runs)
+        }
+        return index
+    }
+
+    /// A mission's entry in the prebuilt index. The absent/empty-path guard mirrors
+    /// ``MissionEvidence/latestVerification(for:in:)``, which refuses to hand a
+    /// mission evidence when we don't know which project it belongs to.
+    private func verification(for mission: Mission, in index: [String: CommandRun]) -> CommandRun? {
+        guard let path = mission.project_path, !path.isEmpty else { return nil }
+        return index[path]
     }
 
     // MARK: Summary
@@ -538,7 +583,9 @@ struct MissionsSection: View {
         }
     }
 
-    private func groupBlock(_ status: MissionStatus, _ items: [Mission]) -> some View {
+    private func groupBlock(_ status: MissionStatus,
+                            _ items: [Mission],
+                            _ verifications: [String: CommandRun]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: status.icon)
@@ -550,7 +597,8 @@ struct MissionsSection: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(items) { mission in
-                MissionCard(mission: mission)
+                MissionCard(mission: mission,
+                            verification: verification(for: mission, in: verifications))
             }
         }
     }

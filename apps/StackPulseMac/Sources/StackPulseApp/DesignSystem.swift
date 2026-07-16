@@ -475,16 +475,22 @@ struct DailyBarChart: View {
         usesCost ? Format.usd(v) : "\(Format.tokens(UInt64(max(0, v)))) tok"
     }
 
+    /// Peak of the series, floored so an all-zero chart can't divide by zero.
+    ///
+    /// `lazy` drops the intermediate array; the real fix is the single call site
+    /// below. Read inside `ForEach` this rescanned the whole series once per bar —
+    /// 30 bars ⇒ 900 `value(_:)` calls and 30 array allocations per render.
     private var maxValue: Double {
-        max(daily.map(value).max() ?? 0, 0.0001)
+        max(daily.lazy.map(value).max() ?? 0, 0.0001)
     }
 
     var body: some View {
+        let peak = maxValue // once per render, not once per bar
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .bottom, spacing: 3) {
                 ForEach(daily) { day in
                     let v = value(day)
-                    let fraction = v / maxValue
+                    let fraction = v / peak
                     ZStack(alignment: .bottom) {
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
                             .fill(Color.primary.opacity(0.06))

@@ -74,6 +74,15 @@ struct ProjectLaunchPanel: View {
                     .buttonStyle(.glass)
                     .help("Copy the whole one-paste command:\n\(recipe.oneLiner)")
 
+                    // Launching an uninstalled project installs its dependencies
+                    // first — network access plus whatever the packages run on
+                    // install. Say so on the face of the panel rather than only in
+                    // the Launch tooltip nobody hovers.
+                    if recipe.installsDependencies {
+                        Chip(text: "installs deps first", systemImage: "arrow.down.circle", tint: .orange)
+                            .help("No node_modules yet, so Launch runs \(recipe.steps.first ?? "the install step") before the dev server.")
+                    }
+
                     Spacer(minLength: 0)
                 }
                 urlRow(recipe)

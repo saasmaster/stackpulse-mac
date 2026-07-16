@@ -168,22 +168,35 @@ pub fn list(project_path: &str) -> (Vec<Checkpoint>, Option<String>) {
         );
     }
 
-    let stdout = match git_stdout(
-        project_path,
-        &[
-            "for-each-ref",
-            REF_PREFIX,
-            // Subject last: it's the only field that could itself contain a tab.
-            "--format=%(refname)%09%(objectname)%09%(committerdate:unix)%09%(contents:subject)",
-        ],
-    ) {
-        Some(s) => s,
-        None => return (Vec::new(), None),
+    // Subject last: it's the only field that could itself contain a tab.
+    const FORMAT: &str =
+        "--format=%(refname)%09%(objectname)%09%(committerdate:unix)%09%(contents:subject)";
+
+    // An empty list from a failed read would be indistinguishable from "you have
+    // no checkpoints" — the same answer we give when git succeeds and reports
+    // none. That one is a fact; this one is our ignorance, and a user who reads
+    // it as fact concludes their safety net is empty when it may not be.
+    let Some(stdout) = git_stdout(project_path, &["for-each-ref", REF_PREFIX, FORMAT]) else {
+        return (
+            Vec::new(),
+            Some(
+                "Couldn't read this repository's checkpoints — git wouldn't list them. This is \
+                 not the same as having none: any existing checkpoints are untouched and still \
+                 there."
+                    .to_string(),
+            ),
+        );
     };
+
+    // At most one read for the whole list: the branch fallback is a property of
+    // the repo, not of any single ref, so asking git per-checkpoint would spawn N
+    // processes to recompute one identical answer. `None` = not asked yet, so a
+    // list whose refs all name their own branch never asks at all.
+    let mut repo_branch: Option<Option<String>> = None;
 
     let mut out: Vec<Checkpoint> = stdout
         .lines()
-        .filter_map(|line| parse_ref_line(project_path, line))
+        .filter_map(|line| parse_ref_line(project_path, line, &mut repo_branch))
         .collect();
 
     // Newest first. Ref names embed the creation second, so they break ties
@@ -199,7 +212,15 @@ pub fn list(project_path: &str) -> (Vec<Checkpoint>, Option<String>) {
 
 /// Build one [`Checkpoint`] from a `for-each-ref` line, filling in the fields
 /// that need a follow-up git read. `None` for a malformed line.
-fn parse_ref_line(project_path: &str, line: &str) -> Option<Checkpoint> {
+///
+/// `repo_branch` memoizes the repo-wide branch fallback across the whole list
+/// (see [`list`]); it is read at most once per list, and only if some ref needs
+/// it.
+fn parse_ref_line(
+    project_path: &str,
+    line: &str,
+    repo_branch: &mut Option<Option<String>>,
+) -> Option<Checkpoint> {
     let mut fields = line.splitn(4, '\t');
     let ref_name = fields.next()?.trim().to_string();
     let id = fields.next()?.trim().to_string();
@@ -212,7 +233,11 @@ fn parse_ref_line(project_path: &str, line: &str) -> Option<Checkpoint> {
     let (branch, label) = parse_subject(subject);
     // The subject only records a branch for snapshots taken on one; fall back to
     // where the repo is now, which is the best honest guess available.
-    let branch = branch.or_else(|| current_branch(project_path));
+    let branch = branch.or_else(|| {
+        repo_branch
+            .get_or_insert_with(|| current_branch(project_path))
+            .clone()
+    });
 
     Some(Checkpoint {
         restore_command: restore_command(project_path, &id),
@@ -317,23 +342,15 @@ fn captured_files(project_path: &str, sha: &str) -> Vec<String> {
         Some(s) => s,
         None => return Vec::new(),
     };
+    // `quotePath=false` keeps non-ASCII bare, but git still quotes AND escapes
+    // genuinely special characters, so `"quo\"te.txt"` needs real unescaping —
+    // stripping the quotes alone left the backslash in the reported filename.
     stdout
         .lines()
-        .map(unquote)
+        .map(crate::gitpath::decode)
         .filter(|p| !p.is_empty())
         .take(CHECKPOINT_FILES_CAP)
         .collect()
-}
-
-/// Strip the surrounding double quotes git wraps around paths it had to escape.
-/// A non-quoted path is returned as-is (trimmed).
-fn unquote(s: &str) -> String {
-    let s = s.trim();
-    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        s[1..s.len() - 1].to_string()
-    } else {
-        s.to_string()
-    }
 }
 
 /// Explain why a capture produced nothing, grounded in what git actually
@@ -826,6 +843,71 @@ mod tests {
         let (checkpoints, note) = list(repo.str_path());
         assert!(checkpoints.is_empty());
         assert_eq!(note, None);
+    }
+
+    /// The branch fallback: a ref whose subject names no branch reports where the
+    /// repo is now. Covers the memoized path in `list` — several such refs must
+    /// resolve to the same answer one git read produces.
+    #[test]
+    fn refs_without_a_branch_in_the_subject_fall_back_to_the_current_branch() {
+        let repo = TempRepo::new();
+        for (i, msg) in ["subjectless one", "subjectless two"].iter().enumerate() {
+            repo.write("a.txt", msg);
+            repo.git(&["commit", "-q", "-a", "-m", msg]);
+            let sha = repo.git(&["rev-parse", "HEAD"]);
+            repo.git(&[
+                "update-ref",
+                &format!("{REF_PREFIX}/{i}-{}", &sha[..7]),
+                &sha,
+            ]);
+        }
+
+        let (checkpoints, note) = list(repo.str_path());
+        assert_eq!(note, None);
+        assert_eq!(checkpoints.len(), 2);
+        for cp in &checkpoints {
+            assert_eq!(
+                cp.branch.as_deref(),
+                Some("main"),
+                "subjectless ref must fall back to the repo's branch"
+            );
+        }
+    }
+
+    /// "git wouldn't answer" and "you have no checkpoints" produce the same
+    /// empty list, so the note is the only thing that can tell them apart — and
+    /// the difference decides whether the user believes they have a safety net.
+    /// Absence of evidence must never be reported as evidence of absence.
+    #[test]
+    fn list_reports_a_git_failure_rather_than_claiming_no_checkpoints() {
+        let repo = TempRepo::new();
+        // A corrupt packed-refs is the narrow case we need: `rev-parse --git-dir`
+        // still succeeds (so we're past the not-a-repo guard and genuinely
+        // exercising the read failure), but `for-each-ref` refuses to run.
+        std::fs::write(repo.path.join(".git").join("packed-refs"), "corrupt\n")
+            .expect("write packed-refs");
+        assert!(
+            is_git_repo(repo.str_path()),
+            "premise: this must still look like a repo, or the test proves nothing"
+        );
+        assert!(
+            git_stdout(repo.str_path(), &["for-each-ref", REF_PREFIX]).is_none(),
+            "premise: for-each-ref must actually be failing here"
+        );
+
+        let (checkpoints, note) = list(repo.str_path());
+
+        assert!(checkpoints.is_empty());
+        let note = note.expect("a git failure must not be reported as 'no checkpoints'");
+        assert!(
+            note.contains("git"),
+            "the note must name git as the reason: {note}"
+        );
+        // The one claim it must never make is the reassuring one.
+        assert!(
+            !note.contains("no checkpoints"),
+            "must not assert absence it never verified: {note}"
+        );
     }
 
     // --- pure helpers -----------------------------------------------------

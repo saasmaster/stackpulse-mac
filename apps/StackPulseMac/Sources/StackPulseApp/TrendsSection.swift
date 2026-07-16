@@ -11,9 +11,18 @@ struct TrendsSection: View {
     @EnvironmentObject var store: SnapshotStore
     @State private var range: TrendsRange = .d30
 
+    /// Last built model, keyed by the inputs it was built from. `SnapshotStore`
+    /// publishes ~50 properties and `@EnvironmentObject` subscribes to all of
+    /// them, so this body re-runs for changes Trends does not read (balances,
+    /// projects, services…). Building ``TrendsModel`` is not cheap enough to
+    /// repeat on those passes, so it is rebuilt only when its inputs change.
+    @State private var cached: CachedTrends?
+
     var body: some View {
+        let inputs = TrendsInputs(range: range, points: store.history)
+        let model = resolvedModel(inputs)
+
         SectionScaffold(section: .trends) { _ in
-            let model = TrendsModel(points: store.history, range: range)
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .center) {
                     GlassSegmentedControl(segments: TrendsRange.allSegments, selection: $range)
@@ -36,6 +45,21 @@ struct TrendsSection: View {
                 }
             }
         }
+        .onChange(of: inputs, initial: true) { _, latest in
+            cached = CachedTrends(
+                inputs: latest,
+                model: TrendsModel(points: store.history, range: range)
+            )
+        }
+    }
+
+    /// The model for `inputs`, reusing the cached build while it still matches.
+    /// A miss builds here rather than reusing the stale model, so a body pass
+    /// that runs before `onChange` lands still draws current numbers; `onChange`
+    /// then caches the result and every later pass costs one `==`.
+    private func resolvedModel(_ inputs: TrendsInputs) -> TrendsModel {
+        if let cached, cached.inputs == inputs { return cached.model }
+        return TrendsModel(points: store.history, range: range)
     }
 
     // MARK: Export
@@ -128,7 +152,7 @@ struct TrendsSection: View {
             )
 
             if model.peakValue > 0, let peak = model.peak {
-                Text("Peak \(model.peakLabel) on \(HistoryDate.pretty(peak.date)) · \(model.dayTotals.count) days shown.")
+                Text("Peak \(model.peakLabel) on \(peak.prettyDate) · \(model.dayTotals.count) days shown.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -216,6 +240,40 @@ struct TrendsSection: View {
     }
 }
 
+// MARK: - Derived-model cache
+
+/// Everything a ``TrendsModel`` is derived from, compared field-by-field so the
+/// model is rebuilt exactly when the numbers it would show change — no more, no
+/// less. `HistoryPoint` belongs to the shared model layer and isn't `Equatable`,
+/// hence the explicit comparison; it covers precisely the fields ``TrendsModel``
+/// reads, so an in-place update of today's row (same count) still compares
+/// unequal. Holding the array is a retain, not a copy, so building this per body
+/// pass is O(1); only the `==` walks it.
+private struct TrendsInputs: Equatable {
+    let range: TrendsRange
+    let points: [HistoryPoint]
+
+    static func == (lhs: TrendsInputs, rhs: TrendsInputs) -> Bool {
+        guard lhs.range == rhs.range, lhs.points.count == rhs.points.count else { return false }
+        for i in lhs.points.indices {
+            let a = lhs.points[i]
+            let b = rhs.points[i]
+            guard a.date == b.date,
+                  a.provider == b.provider,
+                  a.tokens.grandTotal == b.tokens.grandTotal,
+                  a.records == b.records,
+                  a.estimated_cost_usd == b.estimated_cost_usd
+            else { return false }
+        }
+        return true
+    }
+}
+
+private struct CachedTrends {
+    let inputs: TrendsInputs
+    let model: TrendsModel
+}
+
 // MARK: - Range selector
 
 /// The look-back window for Trends. `all` returns the entire accumulated store.
@@ -292,6 +350,10 @@ struct TrendsModel {
         /// Summed estimated cost; `nil` only when no provider that day carried one.
         let cost: Double?
         let tokens: UInt64
+        /// `HistoryDate.pretty(date)`, resolved at build time. That call drives a
+        /// `DateFormatter` and reads the wall clock for the year check — neither
+        /// belongs on a per-bar render path, so the label is carried, not derived.
+        let prettyDate: String
         var id: String { date }
     }
 
@@ -384,7 +446,8 @@ struct TrendsModel {
             DayTotal(
                 date: date,
                 cost: costPresentByDate.contains(date) ? costByDate[date] : nil,
-                tokens: tokensByDate[date] ?? 0
+                tokens: tokensByDate[date] ?? 0,
+                prettyDate: HistoryDate.pretty(date)
             )
         }
 
@@ -445,8 +508,6 @@ struct TrendsDailyChart: View {
         usesCost ? Format.usd(v) : "\(Format.tokens(UInt64(max(0, v)))) tok"
     }
 
-    private var maxValue: Double { max(days.map(value).max() ?? 0, 0.0001) }
-
     /// Tighter spacing as the day count grows, so long ranges stay legible.
     private var barSpacing: CGFloat {
         switch days.count {
@@ -457,6 +518,9 @@ struct TrendsDailyChart: View {
     }
 
     var body: some View {
+        // Scaled once for the whole series: every bar below divides by this, so
+        // it must not itself walk `days`.
+        let maxValue = max(days.lazy.map(value).max() ?? 0, 0.0001)
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .bottom, spacing: barSpacing) {
                 ForEach(days) { day in
@@ -470,7 +534,7 @@ struct TrendsDailyChart: View {
                             .frame(height: v <= 0 ? 0 : max(3, height * fraction))
                     }
                     .frame(maxWidth: .infinity)
-                    .help("\(HistoryDate.pretty(day.date)): \(label(v))")
+                    .help("\(day.prettyDate): \(label(v))")
                 }
             }
             .frame(height: height)
@@ -495,7 +559,7 @@ struct TrendsDailyChart: View {
             return "No activity in the selected range."
         }
         let latest = days.last.map { "Most recent day \(label(value($0)))." } ?? ""
-        return "Peak \(label(value(peak))) on \(HistoryDate.pretty(peak.date)). \(latest)"
+        return "Peak \(label(value(peak))) on \(peak.prettyDate). \(latest)"
     }
 }
 
@@ -568,22 +632,25 @@ enum HistoryDate {
         return c
     }()
 
-    private static let iso: DateFormatter = {
+    /// `DateFormatter` is `NS_SWIFT_SENDABLE` — its state is lock-protected, so
+    /// sharing an instance is safe but the compiler will not flag a write to one.
+    /// Each formatter below is therefore fully configured here and never mutated
+    /// afterwards: reassigning `dateFormat` on a shared instance both races any
+    /// concurrent reader for the format it renders with, and discards the cached
+    /// `CFDateFormatter` behind it — which is the entire value of caching one.
+    /// One formatter per distinct format, never one format swapped in place.
+    private static func formatter(_ dateFormat: String) -> DateFormatter {
         let f = DateFormatter()
         f.calendar = utc
         f.timeZone = TimeZone(identifier: "UTC") ?? .gmt
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
+        f.dateFormat = dateFormat
         return f
-    }()
+    }
 
-    private static let prettyFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.calendar = utc
-        f.timeZone = TimeZone(identifier: "UTC") ?? .gmt
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f
-    }()
+    private static let iso: DateFormatter = formatter("yyyy-MM-dd")
+    private static let prettyMonthDay: DateFormatter = formatter("MMM d")
+    private static let prettyMonthDayYear: DateFormatter = formatter("MMM d, yyyy")
 
     static func date(_ s: String) -> Date? { iso.date(from: s) }
     static func string(_ d: Date) -> String { iso.string(from: d) }
@@ -610,12 +677,12 @@ enum HistoryDate {
     }
 
     /// Friendly label for a history date, e.g. "Apr 13" (adds the year when it
-    /// isn't the current year, so long "All" ranges stay unambiguous).
+    /// isn't the current year, so long "All" ranges stay unambiguous). Reads the
+    /// clock, so call it while building a model — never from a view body.
     static func pretty(_ iso: String) -> String {
         guard let d = date(iso) else { return iso }
         let year = utc.component(.year, from: d)
         let currentYear = utc.component(.year, from: Date())
-        prettyFormatter.dateFormat = (year == currentYear) ? "MMM d" : "MMM d, yyyy"
-        return prettyFormatter.string(from: d)
+        return (year == currentYear ? prettyMonthDay : prettyMonthDayYear).string(from: d)
     }
 }

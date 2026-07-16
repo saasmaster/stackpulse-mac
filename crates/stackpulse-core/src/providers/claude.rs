@@ -240,18 +240,23 @@ fn scan_file(
         if total == 0 {
             continue;
         }
+        let date = match parsed.timestamp.as_deref().and_then(parse_iso_date) {
+            Some(d) => d,
+            None => continue, // undated turns can't be bucketed
+        };
         // Dedup by (message.id, requestId) — replays across resumed sessions
         // repeat the same turn. Fall back to always-include when id is absent.
+        //
+        // Claimed only once the turn is otherwise accepted, and so *after* the
+        // timestamp check above: a key claimed by a turn we then drop would
+        // silently discard the next good copy of that same turn as a duplicate,
+        // under-reporting real token usage.
         if let Some(id) = &msg.id {
             let key = (id.clone(), parsed.request_id.clone().unwrap_or_default());
             if !seen.insert(key) {
                 continue;
             }
         }
-        let date = match parsed.timestamp.as_deref().and_then(parse_iso_date) {
-            Some(d) => d,
-            None => continue, // undated turns can't be bucketed
-        };
         records.push(UsageRecord {
             model,
             date,
@@ -288,6 +293,39 @@ mod tests {
         assert_eq!(records[0].tokens.input_tokens, 100);
         assert_eq!(records[0].tokens.cache_read_tokens, 20);
         assert_eq!(vc.get("2.1.0"), Some(&2)); // version counted per line
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A turn we *drop* must not consume its dedup key. Claude Code replays the
+    /// same turn across resumed sessions, and the replays are not byte-identical
+    /// — a copy can arrive without a timestamp. If the undated copy claims the
+    /// key, the dated copy that follows is discarded as a duplicate and its
+    /// tokens vanish from the scan. Under-reporting usage is the one direction
+    /// this app must never fail in silently.
+    #[test]
+    fn an_undated_turn_does_not_claim_the_dedup_key() {
+        let undated = r#"{"requestId":"req_1","message":{"id":"msg_1","model":"claude-sonnet-4","usage":{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":5,"cache_read_input_tokens":20}}}"#;
+        let dated = r#"{"requestId":"req_1","timestamp":"2026-07-12T10:00:00Z","message":{"id":"msg_1","model":"claude-sonnet-4","usage":{"input_tokens":100,"output_tokens":10,"cache_creation_input_tokens":5,"cache_read_input_tokens":20}}}"#;
+
+        let dir = std::env::temp_dir().join(format!("sp-claude-dedup-{}", std::process::id()));
+        let projects = dir.join("projects").join("proj");
+        std::fs::create_dir_all(&projects).unwrap();
+        let file = projects.join("s.jsonl");
+        std::fs::write(&file, format!("{undated}\n{dated}\n")).unwrap();
+
+        let mut records = Vec::new();
+        let mut seen = HashSet::new();
+        let mut vc = HashMap::new();
+        scan_file(&file, &mut records, &mut seen, &mut vc);
+
+        assert_eq!(
+            records.len(),
+            1,
+            "the dated turn must survive a dropped undated one with the same key"
+        );
+        assert_eq!(records[0].tokens.input_tokens, 100);
+        assert_eq!(records[0].tokens.cache_read_tokens, 20);
 
         std::fs::remove_dir_all(&dir).ok();
     }

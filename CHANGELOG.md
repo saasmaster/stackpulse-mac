@@ -18,6 +18,63 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Bug sweep round 3 (app 0.25.0 / protocol 1.17.0)
+
+Same rule as rounds 1–2: nothing was fixed before it was reproduced. Three claims
+from the backlog turned out to be **false or overstated**, and are recorded as
+such rather than quietly "fixed".
+
+**Filenames the app reported that did not exist.** `git status --porcelain`
+quotes any path containing a space, so a file named `a -> b.txt` arrives as
+`"a -> b.txt"`. Splitting on the ` -> ` rename separator *before* reading the
+quotes reported `b.txt"` — trailing quote and all. Non-ASCII was worse: git
+escapes `é` as the literal text `\303\251`, and stripping quotes surfaced that raw
+escape as the filename. Both verified against real git output, then fixed in one
+shared `gitpath` decoder (the three hand-rolled copies each got a different subset
+wrong). `stash show --name-only` disagrees with `status --porcelain` about
+quoting spaces, so checkpoints had its own variant of the bug.
+
+**One odd character blanked every provider.** `parse_iso_unix` sliced at byte 8 of
+the time field, which is only proven ASCII at bytes 2 and 5 — a multi-byte
+character straddling it panicked. The FFI catches panics, so a single malformed
+timestamp in a single log line turned the whole snapshot into an error: every
+provider blank. The module's own doc promised "we never panic".
+
+**Claude usage was under-counted.** The scanner claimed a record's dedup key
+before validating its timestamp, so a rejected record permanently blocked a later
+valid one with the same key. Codex shares the shape but not the bug — its key is
+derived from the timestamp, so a collision implies the same verdict.
+
+**Live limits: one payload, two scales.** `utilization` may be a percent (0–100)
+or a fraction (0–1) — `0.8` is 80% under one reading and 0.8% under the other. The
+scale was decided per *value* (`v <= 1 ? v * 100 : v`), so `{ seven_day: 12.5,
+five_hour: 0.45 }` reported weekly 12.5% **and** 5h 45%, reading one body as both
+scales at once. It is now decided per payload: a value above 1.0 proves the
+payload is a percent. The genuinely ambiguous case (every window ≤ 1.0) is exactly
+the state just after a reset, so the verdict is remembered once the endpoint proves
+it — otherwise 0.82% would display as 82% and fire a fake "nearly out" alert.
+
+**A scope guard that under-reported scope** (protocol 1.17.0, `ScopeFlag.match_count`).
+The core caps a flag's file list at 8 and the true count wasn't on the wire, so the
+UI counted the sample: a session touching 40 auth files announced "Security / auth
+code · 8". Found by chasing a doc comment that claimed a total the code never
+carried.
+
+**"No checkpoints" when git had actually failed**, and **"0 outdated" for
+dependencies nobody had checked yet** — two more cases of absence rendered as a
+confident zero.
+
+Also: a user-cancelled run could persist as "Test failed"; `DailyBarChart` and the
+Trends chart each rescanned their whole series once per bar (8,100 → 90 calls at
+90d); Stack Health made 11 passes per project per render; and Launch now says on
+its face when it will install dependencies first.
+
+**Not real, and left alone:** the `MissionCard` rescan is structurally real but
+costs ~6 comparisons every 120s, not the claimed N×100 — no measurable win, so no
+performance claim is made for it. `DateFormatter` was not allocated per bar (only
+mutated). The `normalizePercent` fraction/percent ambiguity could not be resolved
+from local data alone; the residual all-≤1.0 case is documented, not guessed at.
+
 ### Bug sweep rounds 1-2 (app 0.23.0-0.24.0 / protocol 1.16.0)
 
 Four adversarial reviewers swept performance, Swift correctness, Rust robustness

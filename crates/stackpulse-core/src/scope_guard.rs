@@ -13,8 +13,12 @@
 
 use stackpulse_protocol::{ScopeFlag, ScopeFlagKind, ScopeSeverity};
 
-/// Max files listed per flag (keeps the payload small; the count still reflects
-/// the true total via the label/UI).
+/// Max files listed per flag (keeps the payload small).
+///
+/// `files` is a **sample**, never a total — nothing downstream may present it as
+/// one. The true total rides along in `ScopeFlag::match_count` (protocol 1.17.0);
+/// before that field existed a 40-match flag was indistinguishable on the wire
+/// from an 8-match one, and the UI duly rendered "Security / auth code · 8".
 const FILES_PER_FLAG_CAP: usize = 8;
 
 /// Classify changed paths into scope-guard flags, ordered most-severe first.
@@ -33,12 +37,16 @@ pub fn flags_for(changed_files: &[String]) -> Vec<ScopeFlag> {
     let mut flags: Vec<ScopeFlag> = buckets
         .into_iter()
         .map(|(kind, mut files)| {
+            // Count before truncating — after the cap the total is unrecoverable,
+            // which is exactly how the UI came to render the sample as the total.
+            let match_count = files.len();
             files.truncate(FILES_PER_FLAG_CAP);
             ScopeFlag {
                 kind,
                 severity: severity(kind),
                 label: label(kind).to_string(),
                 files,
+                match_count,
             }
         })
         .collect();
@@ -235,11 +243,26 @@ mod tests {
         assert_eq!(flags.last().unwrap().severity, ScopeSeverity::Info);
     }
 
+    /// The list is a sample and the count is the truth: 20 matches must report 20
+    /// while listing 8. The UI used to count the sample, so a session touching 40
+    /// auth files announced 8 — a scope guard under-reporting scope.
     #[test]
-    fn files_are_capped() {
+    fn files_are_capped_but_the_true_count_survives() {
         let files: Vec<String> = (0..20).map(|i| format!("tests/t{i}.spec.ts")).collect();
         let flags = flags_for(&files);
         assert_eq!(flags.len(), 1);
         assert_eq!(flags[0].files.len(), FILES_PER_FLAG_CAP);
+        assert_eq!(flags[0].match_count, 20);
+        assert_eq!(flags[0].label, "Tests");
+    }
+
+    /// Under the cap, the count is just the length — no double-counting, and no
+    /// pretending a 3-file flag is bigger than it is.
+    #[test]
+    fn match_count_equals_files_when_under_the_cap() {
+        let files: Vec<String> = (0..3).map(|i| format!("tests/t{i}.spec.ts")).collect();
+        let flags = flags_for(&files);
+        assert_eq!(flags[0].match_count, 3);
+        assert_eq!(flags[0].files.len(), 3);
     }
 }

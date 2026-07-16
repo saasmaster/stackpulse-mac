@@ -260,6 +260,33 @@ fn unknown_enum_values_fall_back_instead_of_failing() {
     assert_eq!(src, CommandSource::Other);
 }
 
+/// `ScopeFlag::match_count` is additive (since 1.17.0): a pre-1.17.0 payload has
+/// no such key and must still decode. It defaults to 0, which means "unknown" —
+/// clients fall back to `files.len()` and must never show 0 as a real count.
+#[test]
+fn scope_flag_match_count_is_additive_and_defaults_to_unknown() {
+    let old: ScopeFlag = serde_json::from_value(json!({
+        "kind": "security",
+        "severity": "high",
+        "label": "Security / auth code",
+        "files": ["auth/login.ts"]
+    }))
+    .expect("a pre-1.17.0 ScopeFlag must still decode");
+    assert_eq!(old.match_count, 0, "absent ⇒ unknown, not a real count");
+
+    let new: ScopeFlag = serde_json::from_value(json!({
+        "kind": "security",
+        "severity": "high",
+        "label": "Security / auth code",
+        "files": ["auth/login.ts"],
+        "match_count": 40
+    }))
+    .unwrap();
+    assert_eq!(new.match_count, 40);
+    // The whole point: the count is NOT the length of the sampled list.
+    assert_ne!(new.match_count, new.files.len());
+}
+
 /// Additive fields must be optional. Each payload below is the *minimum* an older
 /// producer would emit; a newer reader must still accept it.
 #[test]

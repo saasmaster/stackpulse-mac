@@ -490,7 +490,14 @@ fn parse_iso_unix(ts: &str) -> Option<i64> {
     secs += hh * 3600 + mm * 60 + ss;
 
     // A trailing numeric offset shifts local → UTC.
-    let rest = time_part[8..].trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
+    //
+    // `.get`, not `[8..]`: the ':' checks above only prove bytes 2 and 5 are
+    // ASCII, so a multi-byte char can straddle byte 8 and slicing there panics —
+    // which the FFI turns into an error for the entire snapshot.
+    let rest = time_part
+        .get(8..)
+        .unwrap_or("")
+        .trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
     if let Some(pos) = rest.find(['+', '-']) {
         let off = &rest[pos..];
         let sign = if off.starts_with('-') { -1 } else { 1 };
@@ -510,6 +517,19 @@ fn parse_iso_unix(ts: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    /// A multi-byte char can straddle byte 8 of the time field (only bytes 2 and
+    /// 5 are proven ASCII by the ':' checks). Slicing there panicked, and the FFI
+    /// turns a panic into an error for the ENTIRE snapshot — one malformed
+    /// timestamp blanked every provider. Degrade, never panic.
+    #[test]
+    fn parse_iso_unix_survives_multibyte_in_the_time_field() {
+        // Must not panic; the date still resolves.
+        let midnight = parse_iso_unix("2026-01-01T00:00:00Z").unwrap();
+        let got = parse_iso_unix("2026-01-01T12:34:\u{20ac}X").unwrap();
+        assert_eq!(got, midnight + 12 * 3600 + 34 * 60);
+        assert!(parse_iso_unix("2026-01-01T\u{20ac}\u{20ac}:00:00Z").is_some());
+    }
+
     use super::*;
     use crate::datetime::civil_from_days;
 
