@@ -209,6 +209,13 @@ struct OverviewProviderCard: View {
                 MeterBar(fraction: limit.used_percent / 100,
                          tint: SPStatus.limitColor(limit.used_percent),
                          glowsWhenHigh: true)
+                // Claude's limits can be a cached value the fetch could not
+                // refresh. Unlabelled, a 3-day-old 82% reads exactly like a live
+                // 82% — this card showed no age at all while the popover did.
+                if provider.provider == "claude" {
+                    LiveLimitsAgeNote(capturedAt: store.liveLimitsCapturedAt,
+                                      isStale: store.liveLimitsAreStale)
+                }
             }
         } else {
             HStack(spacing: 5) {

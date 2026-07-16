@@ -153,6 +153,12 @@ final class SnapshotStore: ObservableObject {
     /// blank card that reads as "signed out".
     private let liveLimitsStaleAfter: TimeInterval = 3 * 24 * 60 * 60
 
+    /// How long a *failing* fetch stays unreported. Shorter than
+    /// `liveLimitsStaleAfter` on purpose: how long we'll SHOW a cached number and
+    /// how long we'll stay SILENT about not being able to refresh it are different
+    /// questions, and conflating them hid a 70-hour failure behind a stale "82%".
+    private let liveLimitsErrorGrace: TimeInterval = 60 * 60
+
     /// When the currently-shown live limits were actually captured (last
     /// successful fetch), or nil when there are none. Drives the "as of …" label.
     var liveLimitsCapturedAt: Date? { lastGoodLiveLimits.isEmpty ? nil : lastGoodLiveLimitsAt }
@@ -1057,19 +1063,39 @@ final class SnapshotStore: ObservableObject {
                 // Persist so the % survives a relaunch / an expired saved token.
                 self.persistLiveLimits()
             } else {
-                // Fetch failed. If we still have a usable cached value, keep showing
-                // it and stay quiet — a transient 429/offline shouldn't alarm the
-                // user. Only surface the error when there's nothing to fall back on
-                // (e.g. first-run access-denied / signed out).
-                self.liveLimitsError = self.cachedLiveLimitsUsable ? nil : outcome.error
+                // Fetch failed. Stay quiet only while the failure is still
+                // plausibly transient (a 429 or a moment offline).
+                //
+                // This used to suppress the error for as long as ANY cached value
+                // was displayable — three days. So a real, persistent condition
+                // (an expired login, a revoked Keychain grant) produced no error
+                // at all, while the cached percentage kept rendering as if live.
+                // Observed doing exactly that: 70 hours of silent failure behind a
+                // stale "82%". Suppressing the one message that explains a wrong
+                // number is worse than the wrong number.
+                self.liveLimitsError = self.liveLimitsFailureIsStillTransient ? nil : outcome.error
             }
         }
     }
 
     /// Whether the cached live limits are present and recent enough to display.
+    ///
+    /// Displaying is a lower bar than staying silent: a stale value is fine to show
+    /// **because ``LiveLimitsAgeNote`` states its age**, but it is never a reason to
+    /// hide why it's stale. See `liveLimitsFailureIsStillTransient`.
     private var cachedLiveLimitsUsable: Bool {
         guard !lastGoodLiveLimits.isEmpty, let at = lastGoodLiveLimitsAt else { return false }
         return Date().timeIntervalSince(at) < liveLimitsStaleAfter
+    }
+
+    /// Whether a failed fetch is still young enough to be worth ignoring.
+    ///
+    /// The refetch interval is 8 minutes, so this grace covers several consecutive
+    /// failures — enough to ride out a rate-limit or a closed laptop — without ever
+    /// letting a persistent problem hide behind a cached number.
+    private var liveLimitsFailureIsStillTransient: Bool {
+        guard let at = lastGoodLiveLimitsAt else { return false }
+        return Date().timeIntervalSince(at) < liveLimitsErrorGrace
     }
 
     /// The cached limits that are still meaningful, dropping any whose **own reset
