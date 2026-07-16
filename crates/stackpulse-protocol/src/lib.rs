@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 13,
+    minor: 14,
     patch: 0,
 };
 
@@ -912,6 +912,16 @@ pub enum CoreRequest {
     /// 1.13.0), by grouping session records on their recorded working directory.
     /// Offline; reads the same logs the provider scan reads.
     GetProjectUsage,
+    /// Capture a non-destructive snapshot of a project's uncommitted work (since
+    /// 1.14.0). Uses `git stash create` + a ref under `refs/stackpulse/`; never
+    /// alters the working tree, the index, or HEAD. Returns the updated list.
+    CreateCheckpoint {
+        project_path: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
+    /// List a project's StackPulse checkpoints, newest first (since 1.14.0).
+    ListCheckpoints { project_path: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,6 +1033,39 @@ pub struct ProjectUsage {
     pub last_activity_unix: Option<i64>,
 }
 
+// ---------------------------------------------------------------------------
+// Checkpoints — safe automation (since 1.14.0)
+// ---------------------------------------------------------------------------
+
+/// A **non-destructive** snapshot of a project's uncommitted work.
+///
+/// Captured with `git stash create`, which builds a commit object **without
+/// touching the working tree, the index, or HEAD** — nothing the user is doing is
+/// disturbed. The resulting object is kept alive under
+/// `refs/stackpulse/checkpoints/*` so git can't garbage-collect it and so it's
+/// listable later. Creating and listing are therefore additive-only.
+///
+/// Restoring is the one genuinely mutating step, so the core never performs it:
+/// it only reports [`Checkpoint::restore_command`] for the client to surface
+/// behind an explicit confirmation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Checkpoint {
+    /// Commit SHA of the snapshot.
+    pub id: String,
+    /// The ref keeping it alive (`refs/stackpulse/checkpoints/<name>`).
+    pub ref_name: String,
+    pub label: String,
+    pub project_path: String,
+    #[serde(default)]
+    pub branch: Option<String>,
+    pub created_at_unix: i64,
+    /// Files whose uncommitted state the snapshot captured.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// The exact command that would restore this snapshot. Reported, never run.
+    pub restore_command: String,
+}
+
 /// The core's reply. `request_echo` lets async clients correlate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1050,6 +1093,14 @@ pub enum CoreResponse {
     Radar(RadarReport),
     ProjectUsage {
         projects: Vec<ProjectUsage>,
+    },
+    Checkpoints {
+        checkpoints: Vec<Checkpoint>,
+        /// An honest note when a create captured nothing (e.g. the working tree
+        /// is clean, so the last commit is already the restore point), or when
+        /// the project isn't a git repository.
+        #[serde(default)]
+        note: Option<String>,
     },
     Error(CoreError),
 }

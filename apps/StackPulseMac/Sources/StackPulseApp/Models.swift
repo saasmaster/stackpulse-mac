@@ -625,6 +625,43 @@ struct RunningService: Codable, Sendable, Identifiable {
     var id: String { "\(pid)\u{1}\(port)" }
 }
 
+// MARK: - Checkpoints (protocol ≥ 1.14.0)
+
+/// A non-destructive snapshot of a project's uncommitted work (`git stash create`
+/// + a `refs/stackpulse/` ref — the working tree, index and HEAD are untouched).
+/// `restore_command` is reported by the core but never run by it; restoring is
+/// gated behind an explicit confirmation in the UI.
+struct Checkpoint: Codable, Sendable, Identifiable {
+    let id: String
+    let ref_name: String
+    let label: String
+    let project_path: String
+    let branch: String?
+    let created_at_unix: Int64
+    let files: [String]
+    let restore_command: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id, ref_name, label, project_path, branch, created_at_unix, files, restore_command
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        ref_name = (try? c.decode(String.self, forKey: .ref_name)) ?? ""
+        label = (try? c.decode(String.self, forKey: .label)) ?? "Checkpoint"
+        project_path = (try? c.decode(String.self, forKey: .project_path)) ?? ""
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        created_at_unix = (try? c.decode(Int64.self, forKey: .created_at_unix)) ?? 0
+        files = ((try? c.decodeIfPresent([String].self, forKey: .files)) ?? nil) ?? []
+        restore_command = (try? c.decode(String.self, forKey: .restore_command)) ?? ""
+    }
+
+    var createdAt: Date { Date(timeIntervalSince1970: TimeInterval(created_at_unix)) }
+    /// Short SHA for display.
+    var shortID: String { String(id.prefix(7)) }
+}
+
 // MARK: - Project usage (protocol ≥ 1.13.0)
 
 /// Local AI spend attributed to one project (grouped by the working directory in

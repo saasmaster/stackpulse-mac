@@ -326,6 +326,25 @@ is breaking for downstream consumers, and the action they should take.
 
 ---
 
+### 2026-07-16 — Checkpoints (protocol 1.14.0)
+
+- **Surface:** protocol + core
+- **Versions:** protocol **1.14.0** / core **0.1.0** / manifest *(not yet defined)*
+- **Breaking for downstream:** no (purely additive)
+- **Change:** `Checkpoint` type + the `create_checkpoint` / `list_checkpoints` ops
+  and the `checkpoints` response. A checkpoint is a **non-destructive** snapshot of
+  a project's uncommitted work: the core runs `git stash create` (which writes a
+  commit object **without touching the working tree, index, or HEAD**) and keeps it
+  alive under `refs/stackpulse/checkpoints/*`. Create and list are additive-only.
+  The core **never restores** — it reports `restore_command` and the client must
+  gate that behind an explicit confirmation. The response carries an honest `note`
+  when nothing was captured (clean tree, not a git repository).
+- **Downstream action:** target protocol **1.14.0**. Both ops are optional. Any
+  client linking the core inherits the same guarantee: capture never mutates the
+  user's work; restoring is the client's gated decision.
+
+---
+
 ## Pending / anticipated (not yet shipped)
 
 These are flagged so downstream repos can plan. They are **not** implemented and

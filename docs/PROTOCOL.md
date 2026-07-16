@@ -5,7 +5,7 @@ contract shared by every StackPulse surface: the Rust core, the macOS app (over
 the C ABI), the `stackpulse` CLI, and — in the future — a Chrome
 native-messaging host and a Windows client.
 
-- **Current version:** `PROTOCOL_VERSION = 1.13.0`. Additive history (older
+- **Current version:** `PROTOCOL_VERSION = 1.14.0`. Additive history (older
   readers keep parsing):
   - **1.3.0** — added a `Gemini` variant to the (open) `ProviderId` enum; the
     engine now lists eleven providers.
@@ -45,6 +45,13 @@ native-messaging host and a Windows client.
     each session ran in by grouping session records on their recorded working
     directory, reusing `SpendWindow` ("today" / "last_30_days"). Offline; costs
     remain local estimates.
+  - **1.14.0** — Checkpoints: `Checkpoint` type + the `create_checkpoint` /
+    `list_checkpoints` ops and the `checkpoints` response (with an honest `note`
+    for the "nothing to capture" cases). Capture is **non-destructive** — the core
+    uses `git stash create` (which writes a commit object without touching the
+    working tree, the index, or HEAD) and keeps it alive under
+    `refs/stackpulse/checkpoints/*`. The core never restores; it only reports
+    `restore_command` for the client to gate behind a confirmation.
   - **1.1.0** — `ProviderAnalytics` / `DailyUsage` types and the optional
     `ProviderUsage.analytics` field.
   - **1.2.0** — `Alert` / `AlertSeverity` / `AlertKind` types and the

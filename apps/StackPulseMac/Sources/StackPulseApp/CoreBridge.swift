@@ -141,6 +141,46 @@ enum CoreBridge {
         return (try? JSONDecoder().decode(Response.self, from: data))?.services ?? []
     }
 
+    // MARK: Checkpoints (protocol ≥ 1.14.0)
+
+    /// The result of a checkpoint op: the project's checkpoints (newest first) and
+    /// an honest note when nothing was captured (clean tree, not a git repo, …).
+    struct CheckpointResult: Decodable {
+        let checkpoints: [Checkpoint]
+        let note: String?
+    }
+
+    /// Capture a non-destructive snapshot of `projectPath`'s uncommitted work.
+    /// Shells out to git, so call off the main actor.
+    static func createCheckpoint(projectPath: String, label: String?) -> CheckpointResult? {
+        struct Request: Encodable {
+            let op = "create_checkpoint"
+            let project_path: String
+            let label: String?
+        }
+        guard let data = try? JSONEncoder().encode(Request(project_path: projectPath, label: label)),
+              let json = String(data: data, encoding: .utf8)
+        else { return nil }
+        return decodeCheckpoints(handle(json))
+    }
+
+    /// List a project's checkpoints, newest first. Shells out to git.
+    static func listCheckpoints(projectPath: String) -> CheckpointResult? {
+        struct Request: Encodable {
+            let op = "list_checkpoints"
+            let project_path: String
+        }
+        guard let data = try? JSONEncoder().encode(Request(project_path: projectPath)),
+              let json = String(data: data, encoding: .utf8)
+        else { return nil }
+        return decodeCheckpoints(handle(json))
+    }
+
+    private static func decodeCheckpoints(_ json: String) -> CheckpointResult? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(CheckpointResult.self, from: data)
+    }
+
     // MARK: Project usage (protocol ≥ 1.13.0)
 
     /// Per-project spend attribution. Re-reads the session logs, so call off the

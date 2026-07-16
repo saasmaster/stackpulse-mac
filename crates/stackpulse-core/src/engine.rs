@@ -93,6 +93,18 @@ impl Engine {
             CoreRequest::GetProjectUsage => CoreResponse::ProjectUsage {
                 projects: crate::project_usage::analyze(now_unix()),
             },
+            CoreRequest::CreateCheckpoint {
+                project_path,
+                label,
+            } => {
+                let (checkpoints, note) =
+                    crate::checkpoints::create(&project_path, label.as_deref(), now_unix());
+                CoreResponse::Checkpoints { checkpoints, note }
+            }
+            CoreRequest::ListCheckpoints { project_path } => {
+                let (checkpoints, note) = crate::checkpoints::list(&project_path);
+                CoreResponse::Checkpoints { checkpoints, note }
+            }
         }
     }
 

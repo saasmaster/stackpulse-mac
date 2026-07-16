@@ -371,6 +371,14 @@ struct ProjectCard: View {
     /// Commands are collapsed by default — the launch panel + Test Project are the
     /// primary actions, and hiding the command list keeps a 20-card grid light.
     @State private var showCommands = false
+    /// Checkpoints are collapsed too, which also means the panel's git lookup only
+    /// runs when you actually open it — never for 20 cards during a scroll.
+    @State private var showCheckpoints = false
+
+    /// Only git repositories can be checkpointed.
+    private var isGitRepo: Bool {
+        project.git_branch != nil || project.markers.contains("git")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -422,6 +430,28 @@ struct ProjectCard: View {
                 Text("No runnable commands discovered for this project.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if isGitRepo {
+                Divider().opacity(0.4)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { showCheckpoints.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: showCheckpoints ? "chevron.down" : "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                        Label("Checkpoints", systemImage: "clock.arrow.2.circlepath")
+                            .font(.caption.weight(.medium))
+                            .labelStyle(.titleAndIcon)
+                        Spacer()
+                    }
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Snapshot your uncommitted work before letting an agent loose — capturing never touches your files")
+                if showCheckpoints {
+                    CheckpointsPanel(project: project)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

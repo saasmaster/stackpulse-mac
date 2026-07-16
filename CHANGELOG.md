@@ -18,6 +18,34 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Checkpoints — Phase 5 safe automation (app 0.19.0 / protocol 1.14.0)
+
+Makes "let an agent loose on my repo" a reversible decision — without the safety
+net itself being risky.
+
+- **Snapshot now.** Every git project in Projects gets a **Checkpoints** panel:
+  capture your uncommitted work before an agent run, see past snapshots (label,
+  short SHA, branch, captured files, age), and get back if it goes wrong.
+- **Capturing is non-destructive, by construction.** It uses `git stash create`,
+  which writes a commit object **without touching the working tree, the index, or
+  HEAD** — unlike `git stash push`, it rolls nothing back, so it's safe to run
+  while an agent is mid-edit. The object is kept alive under
+  `refs/stackpulse/checkpoints/*`; checkpoints never appear as branches or tags.
+  Verified: working tree, file contents and HEAD are byte-identical after a
+  capture, and your stash list is never touched.
+- **Restoring is the only mutating step, and the core refuses to own it.** The
+  core only *reports* the exact `restore_command`; the app runs it **visibly in
+  Terminal** behind an explicit confirmation that names the files, project, SHA
+  and age. You can also just copy the command.
+- **It tells you what it did *not* capture.** `git stash create` snapshots tracked
+  work only, so a checkpoint taken with untracked files present now says so
+  ("does not include N untracked file(s) — `git add` anything new you'd want
+  back") instead of letting you trust an incomplete safety net. Clean trees,
+  untracked-only trees, repos with no commits, and non-repos each get their own
+  honest note rather than a fabricated empty checkpoint.
+- **129 core tests** (17 new, incl. a test pinning that the working tree is
+  untouched and that exclusions are disclosed), clippy/fmt clean.
+
 ### App icon fix + menu clarity (app 0.18.0)
 
 - **Icon now fills its tile.** The `.icns` artwork was a squircle inset inside the

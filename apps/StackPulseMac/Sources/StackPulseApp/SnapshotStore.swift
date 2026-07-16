@@ -584,6 +584,42 @@ final class SnapshotStore: ObservableObject {
         }
     }
 
+    // MARK: Checkpoints (protocol ≥ 1.14.0)
+
+    /// Checkpoints per project path (newest first), loaded on demand.
+    @Published private(set) var checkpoints: [String: [Checkpoint]] = [:]
+    /// An honest per-project note from the last op (clean tree, not a repo, …).
+    @Published private(set) var checkpointNotes: [String: String] = [:]
+    /// Project paths with an op in flight.
+    @Published private(set) var checkpointBusy: Set<String> = []
+
+    /// Load a project's checkpoints off the main actor. Coalesced per project.
+    func loadCheckpoints(for projectPath: String) {
+        guard !checkpointBusy.contains(projectPath) else { return }
+        checkpointBusy.insert(projectPath)
+        Task.detached(priority: .utility) {
+            let result = CoreBridge.listCheckpoints(projectPath: projectPath)
+            await MainActor.run { self.applyCheckpoints(result, for: projectPath) }
+        }
+    }
+
+    /// Capture a new checkpoint (non-destructive) off the main actor.
+    func createCheckpoint(for projectPath: String, label: String?) {
+        guard !checkpointBusy.contains(projectPath) else { return }
+        checkpointBusy.insert(projectPath)
+        Task.detached(priority: .utility) {
+            let result = CoreBridge.createCheckpoint(projectPath: projectPath, label: label)
+            await MainActor.run { self.applyCheckpoints(result, for: projectPath) }
+        }
+    }
+
+    private func applyCheckpoints(_ result: CoreBridge.CheckpointResult?, for path: String) {
+        checkpointBusy.remove(path)
+        guard let result else { return }
+        checkpoints[path] = result.checkpoints
+        checkpointNotes[path] = result.note
+    }
+
     // MARK: Project usage (protocol ≥ 1.13.0)
 
     /// Per-project spend attribution from the last scan, highest 30-day cost first.
