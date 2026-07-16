@@ -215,14 +215,16 @@ struct OverviewProviderCard: View {
                 if provider.provider == "claude" {
                     LiveLimitsStatusNote(capturedAt: store.liveLimitsCapturedAt,
                                          isStale: store.liveLimitsAreStale,
-                                         error: store.liveLimitsError)
+                                         error: store.liveLimitsError,
+                                         onRenewLogin: renewAction)
                 }
             }
         } else if provider.provider == "claude", let err = store.liveLimitsError {
             // "No live limits reported" blamed Claude for our own failure to
             // fetch. When we know the reason, give it — it's the difference
             // between a dead card and one telling you exactly what to do.
-            LiveLimitsStatusNote(capturedAt: nil, isStale: false, error: err)
+            LiveLimitsStatusNote(capturedAt: nil, isStale: false, error: err,
+                                 onRenewLogin: renewAction)
         } else {
             HStack(spacing: 5) {
                 Image(systemName: "gauge.open.with.lines.needle.33percent")
@@ -237,6 +239,12 @@ struct OverviewProviderCard: View {
 
     private var topModel: ModelUsage? {
         provider.models.max(by: { ($0.estimated_cost_usd ?? -1) < ($1.estimated_cost_usd ?? -1) })
+    }
+
+    /// The one-click fix, offered only for the failure that actually has one.
+    /// Keyed off the typed `Recovery`, never off the message text.
+    private var renewAction: (() -> Void)? {
+        store.liveLimitsRecovery == .renewLoginInTerminal ? { store.renewClaudeLogin() } : nil
     }
 
     private func limitLabel(_ raw: String) -> String {

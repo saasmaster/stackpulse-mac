@@ -29,13 +29,30 @@ enum AnthropicUsageClient {
     /// protocol's convention for values the provider itself reported.
     static let liveProvenance = "provider_reported"
 
+    /// What the user can actually DO about a failure, as a value rather than a
+    /// sentence the UI would have to string-match to act on.
+    enum Recovery: Sendable, Equatable {
+        /// The saved CLI token aged out. Only a *terminal* Claude Code session
+        /// rewrites it — Desktop sessions authenticate through Claude's own
+        /// encrypted storage and never renew it. Running `claude` once fixes it.
+        case renewLoginInTerminal
+    }
+
     /// Result of a live-limits fetch. `error` is a short, user-facing note (never
     /// the token or raw response); `nil` means "no problem to report".
     struct Outcome: Sendable {
         var limits: [LimitWindow]
         var error: String?
+        /// Set when there is a concrete, safe action that would fix this.
+        var recovery: Recovery?
 
-        static let empty = Outcome(limits: [], error: nil)
+        init(limits: [LimitWindow], error: String? = nil, recovery: Recovery? = nil) {
+            self.limits = limits
+            self.error = error
+            self.recovery = recovery
+        }
+
+        static let empty = Outcome(limits: [])
     }
 
     /// The windows a payload reported, plus what that payload proved about its own
@@ -107,7 +124,8 @@ enum AnthropicUsageClient {
                 // session does. Say exactly how to revive it.
                 return Outcome(
                     limits: [],
-                    error: "Claude's saved login has expired — run `claude` in Terminal once to renew it. (Desktop sessions don't refresh it; StackPulse never changes your login.)"
+                    error: "Claude's saved login has expired — run `claude` in Terminal once to renew it. (Desktop sessions don't refresh it; StackPulse never changes your login.)",
+                    recovery: .renewLoginInTerminal
                 )
             }
             return await fetchUsage(token: creds.accessToken, claudeVersion: claudeVersion)

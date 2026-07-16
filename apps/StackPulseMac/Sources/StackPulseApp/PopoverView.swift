@@ -456,7 +456,9 @@ struct ProviderCard: View {
             if provider.provider == "claude" {
                 LiveLimitsStatusNote(capturedAt: store.liveLimitsCapturedAt,
                                      isStale: store.liveLimitsAreStale,
-                                     error: store.liveLimitsError)
+                                     error: store.liveLimitsError,
+                                     onRenewLogin: store.liveLimitsRecovery == .renewLoginInTerminal
+                                        ? { store.renewClaudeLogin() } : nil)
             }
         }
     }

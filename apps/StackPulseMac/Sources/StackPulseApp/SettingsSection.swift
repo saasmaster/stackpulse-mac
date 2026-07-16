@@ -934,6 +934,14 @@ private struct SecurityPrivacyCard: View {
                         .foregroundStyle(.orange)
                         .labelStyle(.titleAndIcon)
                         .fixedSize(horizontal: false, vertical: true)
+                    if store.liveLimitsRecovery == .renewLoginInTerminal {
+                        Button { store.renewClaudeLogin() } label: {
+                            Label("Renew login in Terminal", systemImage: "terminal")
+                                .font(.caption.weight(.medium))
+                        }
+                        .buttonStyle(.glass(tint: .orange))
+                        .help("Runs `claude` in Terminal so it can refresh its saved login. StackPulse never changes your login itself.")
+                    }
                 }
             }
 

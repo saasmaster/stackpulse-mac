@@ -420,10 +420,26 @@ struct LiveLimitsStatusNote: View {
     let isStale: Bool
     /// Why there is no live value, when there isn't one.
     let error: String?
+    /// The one-click fix, when the failure has one. `nil` ⇒ no button.
+    var onRenewLogin: (() -> Void)?
 
     var body: some View {
         if let error {
-            row("exclamationmark.triangle", error, tint: .orange)
+            VStack(alignment: .leading, spacing: 4) {
+                row("exclamationmark.triangle", error, tint: .orange)
+                // Telling someone to go type a command is a worse answer than
+                // offering to type it for them. It still runs visibly in Terminal
+                // and still needs their sign-in — this only saves the retyping.
+                if let onRenewLogin {
+                    Button(action: onRenewLogin) {
+                        Label("Renew login in Terminal", systemImage: "terminal")
+                            .font(.caption2.weight(.medium))
+                    }
+                    .buttonStyle(.glass(tint: .orange))
+                    .help("Runs `claude` in Terminal so it can refresh its saved login. StackPulse never changes your login itself.")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         } else if isStale, let capturedAt {
             row("clock.arrow.circlepath",
                 "as of \(Format.relative(capturedAt)) — not live right now",

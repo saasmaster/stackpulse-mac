@@ -121,6 +121,7 @@ final class SnapshotStore: ObservableObject {
                 lastGoodLiveLimits = []
                 lastGoodLiveLimitsAt = nil
                 liveLimitsError = nil
+                liveLimitsRecovery = nil
                 liveLimitsUpdatedAt = nil
                 try? FileManager.default.removeItem(at: liveLimitsCacheURL)
             }
@@ -130,6 +131,21 @@ final class SnapshotStore: ObservableObject {
     /// A short, user-facing note when the last live fetch couldn't produce data
     /// (offline, signed out, etc). Never contains the token or raw response.
     @Published private(set) var liveLimitsError: String?
+
+    /// The concrete action that would fix `liveLimitsError`, when one exists.
+    /// Carried as a value so the UI can offer a button without string-matching the
+    /// message — the message is for humans, this is for code.
+    @Published private(set) var liveLimitsRecovery: AnthropicUsageClient.Recovery?
+
+    /// Run `claude` in Terminal to renew the expired CLI login.
+    ///
+    /// The app cannot do this silently and shouldn't: signing in is the user's act,
+    /// and it needs a real interactive terminal. This just saves them retyping it —
+    /// the command is visible in Terminal, exactly like every other command
+    /// StackPulse offers to run.
+    func renewClaudeLogin() {
+        CommandRunner.runInTerminal(command: "claude", cwd: NSHomeDirectory())
+    }
 
     /// When the last live-limits fetch completed (success or handled failure).
     @Published private(set) var liveLimitsUpdatedAt: Date?
@@ -1065,6 +1081,7 @@ final class SnapshotStore: ObservableObject {
                 self.lastGoodLiveLimits = outcome.limits
                 self.lastGoodLiveLimitsAt = Date()
                 self.liveLimitsError = nil
+                self.liveLimitsRecovery = nil
                 self.applyLiveLimits(outcome.limits)
                 // Persist so the % survives a relaunch / an expired saved token.
                 self.persistLiveLimits()
@@ -1079,7 +1096,9 @@ final class SnapshotStore: ObservableObject {
                 // Observed doing exactly that: 70 hours of silent failure behind a
                 // stale "82%". Suppressing the one message that explains a wrong
                 // number is worse than the wrong number.
-                self.liveLimitsError = self.liveLimitsFailureIsStillTransient ? nil : outcome.error
+                let quiet = self.liveLimitsFailureIsStillTransient
+                self.liveLimitsError = quiet ? nil : outcome.error
+                self.liveLimitsRecovery = quiet ? nil : outcome.recovery
             }
         }
     }

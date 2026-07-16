@@ -148,15 +148,24 @@ enum KeychainProbe {
         proc.standardError = FileHandle.nullDevice
         do { try proc.run() } catch { return .missing }
 
+        // Drain the pipe WHILE the process runs, not after it exits. Waiting for
+        // exit first deadlocks the moment the payload exceeds the ~64KB pipe
+        // buffer: `security` blocks writing, so it never exits, so we never read.
+        // Not hypothetical — the real credential blob here is already 10KB and
+        // these payloads only grow.
+        var data = Data()
+        let handle = out.fileHandleForReading
         let deadline = Date().addingTimeInterval(12)
-        while proc.isRunning && Date() < deadline { usleep(50_000) }
+        while proc.isRunning && Date() < deadline {
+            data.append(handle.availableData)
+        }
         if proc.isRunning {
             proc.terminate()
             return .timedOut
         }
+        data.append(handle.readDataToEndOfFile()) // whatever landed after exit
         guard proc.terminationStatus == 0 else { return .missing }
 
-        let data = out.fileHandleForReading.readDataToEndOfFile()
         guard let text = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
         else { return .missing }
