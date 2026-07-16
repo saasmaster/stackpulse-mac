@@ -58,8 +58,18 @@ impl Engine {
             CoreRequest::GetProviderStatus => CoreResponse::ProviderStatus {
                 providers: self.providers.iter().map(|p| p.status()).collect(),
             },
-            CoreRequest::GetUsageSnapshot { providers } => {
-                CoreResponse::UsageSnapshot(self.snapshot(providers.as_deref()))
+            CoreRequest::GetUsageSnapshot {
+                providers,
+                record_history_dir,
+            } => {
+                let snap = self.snapshot(providers.as_deref());
+                // Fold this very snapshot into history rather than making the
+                // client call `record_history`, which would scan everything a
+                // second time. The points are re-read cheaply via `get_history`.
+                if let Some(dir) = record_history_dir {
+                    let _ = crate::history::record(&dir, &snap, now_unix(), None);
+                }
+                CoreResponse::UsageSnapshot(snap)
             }
             CoreRequest::GetProjects { roots, max_depth } => CoreResponse::Projects {
                 projects: crate::projects::discover(&roots, max_depth.unwrap_or(4)),

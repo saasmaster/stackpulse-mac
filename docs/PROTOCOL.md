@@ -5,7 +5,7 @@ contract shared by every StackPulse surface: the Rust core, the macOS app (over
 the C ABI), the `stackpulse` CLI, and — in the future — a Chrome
 native-messaging host and a Windows client.
 
-- **Current version:** `PROTOCOL_VERSION = 1.15.0`. Additive history (older
+- **Current version:** `PROTOCOL_VERSION = 1.16.0`. Additive history (older
   readers keep parsing):
   - **1.3.0** — added a `Gemini` variant to the (open) `ProviderId` enum; the
     engine now lists eleven providers.
@@ -60,6 +60,10 @@ native-messaging host and a Windows client.
     `remove_command` (never for the main worktree) for the client to gate. The
     client passes a `worktrees_dir` so the copies land outside the user's project
     folders and can't be mistaken for new projects.
+  - **1.16.0** — one additive field: `get_usage_snapshot.record_history_dir`. When
+    set, the core folds that same snapshot into the durable history store before
+    returning it. Without it a client must call `record_history`, which builds its
+    **own** snapshot — so the pair re-reads every session log twice per refresh.
   - **1.1.0** — `ProviderAnalytics` / `DailyUsage` types and the optional
     `ProviderUsage.analytics` field.
   - **1.2.0** — `Alert` / `AlertSeverity` / `AlertKind` types and the
@@ -109,7 +113,7 @@ Internally tagged by **`op`** (`#[serde(tag = "op", rename_all = "snake_case")]`
 | --- | --- | --- |
 | `ping` | Liveness + version report. | — |
 | `get_provider_status` | Cheap detection only (installed / auth / health). No log scanning. Suitable for frequent polling. | — |
-| `get_usage_snapshot` | Full scan of local provider data. | `providers` (optional array of `ProviderId`; if present, only those are scanned) |
+| `get_usage_snapshot` | Full scan of local provider data. | `providers` (optional array of `ProviderId`; if present, only those are scanned), `record_history_dir` (optional abs path, *1.16.0* — record this snapshot into history without a second scan) |
 | `get_projects` *(1.4.0)* | Discover projects + commands under approved roots. | `roots` (array of absolute paths), `max_depth` (optional int) |
 | `record_history` *(1.6.0)* | Fold today's usage into the durable store, then return history. | `data_dir` (writable abs path), `days` (optional int) |
 | `get_history` *(1.6.0)* | Read accumulated history without recording. | `data_dir`, `days` (optional int) |

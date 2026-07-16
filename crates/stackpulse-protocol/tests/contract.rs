@@ -35,7 +35,10 @@ fn request_op_tags_are_stable() {
         (CoreRequest::Ping, "ping"),
         (CoreRequest::GetProviderStatus, "get_provider_status"),
         (
-            CoreRequest::GetUsageSnapshot { providers: None },
+            CoreRequest::GetUsageSnapshot {
+                providers: None,
+                record_history_dir: None,
+            },
             "get_usage_snapshot",
         ),
         (
@@ -124,6 +127,8 @@ fn documented_request_json_parses() {
         json!({"op": "get_provider_status"}),
         json!({"op": "get_usage_snapshot"}),
         json!({"op": "get_usage_snapshot", "providers": ["claude", "codex"]}),
+        // record_history_dir is additive (1.16.0) — older clients omit it.
+        json!({"op": "get_usage_snapshot", "record_history_dir": "/tmp/x"}),
         json!({"op": "get_projects", "roots": ["/Users/me/code"], "max_depth": 4}),
         json!({"op": "get_projects", "roots": []}), // max_depth is optional
         json!({"op": "record_history", "data_dir": "/tmp"}),

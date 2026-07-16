@@ -131,7 +131,7 @@ impl Provider for CodexProvider {
                     if !recently_modified(&file, mtime_cutoff) {
                         continue;
                     }
-                    scan_file(&file, &mut state);
+                    scan_file(&file, now_unix, &mut state);
                 }
             }
         }
@@ -183,7 +183,7 @@ fn recently_modified(path: &PathBuf, cutoff_unix: i64) -> bool {
     }
 }
 
-fn scan_file(file: &PathBuf, state: &mut ScanState) {
+fn scan_file(file: &PathBuf, now_unix: i64, state: &mut ScanState) {
     let f = match std::fs::File::open(file) {
         Ok(f) => f,
         Err(_) => return,
@@ -224,7 +224,7 @@ fn scan_file(file: &PathBuf, state: &mut ScanState) {
                 if payload.get("type").and_then(Value::as_str) != Some("token_count") {
                     continue;
                 }
-                capture_rate_limits(payload, ts, state);
+                capture_rate_limits(payload, ts, now_unix, state);
                 let Some(last) = payload.get("info").and_then(|i| i.get("last_token_usage")) else {
                     continue;
                 };
@@ -280,7 +280,7 @@ fn scan_file(file: &PathBuf, state: &mut ScanState) {
 
 /// Track the most recent `rate_limits` block seen across all files; it reflects
 /// the current 5-hour / weekly window state as of the last logged turn.
-fn capture_rate_limits(payload: &Value, ts: &str, state: &mut ScanState) {
+fn capture_rate_limits(payload: &Value, ts: &str, now_unix: i64, state: &mut ScanState) {
     let Some(rl) = payload.get("rate_limits") else {
         return;
     };
@@ -303,6 +303,21 @@ fn capture_rate_limits(payload: &Value, ts: &str, state: &mut ScanState) {
                 .map(|m| m as u32)
                 .unwrap_or(default_minutes);
             let resets = w.get("resets_at").and_then(Value::as_i64);
+            // A window whose reset time has passed no longer exists: usage started
+            // over from zero. Reporting the last-seen percentage for it isn't
+            // merely stale, it's false — and it reaches the user loudly, because
+            // `alerts.rs` raises a *critical* "Codex 5h limit at 96%" from it and
+            // the app turns new alerts into macOS notifications. Sessions are
+            // scanned for 35 days back, so an old file's expired 5-hour window
+            // would otherwise be replayed as current for weeks.
+            //
+            // Dropped rather than zeroed: we don't know the new window's usage
+            // until Codex writes one, and inventing 0% would be its own lie.
+            if let Some(resets_at) = resets {
+                if resets_at < now_unix {
+                    continue;
+                }
+            }
             windows.push(LimitWindow {
                 // Label from the actual window duration, not the primary/secondary
                 // slot — Codex sometimes reports only one window, so a weekly
@@ -354,7 +369,8 @@ mod tests {
         std::fs::write(&file, format!("{meta}\n{ctx}\n{tok}\n")).unwrap();
 
         let mut state = ScanState::default();
-        scan_file(&file, &mut state);
+        // A clock before both fixture reset times, so the windows are still open.
+        scan_file(&file, 1_779_000_000, &mut state);
 
         assert_eq!(state.records.len(), 1);
         let r = &state.records[0];
@@ -368,6 +384,47 @@ mod tests {
         // Labels derive from the window duration, not the primary/secondary slot.
         assert_eq!(state.latest_limits[0].label, "5h"); // 300 min
         assert_eq!(state.latest_limits[1].label, "weekly"); // 10080 min
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A rate-limit window whose reset time has passed no longer exists — usage
+    /// restarted from zero. Replaying the last-seen percentage would be false, and
+    /// loudly so: `alerts.rs` turns a high percentage into a *critical* alert and
+    /// the app raises a macOS notification from it. Sessions are scanned 35 days
+    /// back, so without this an old file's expired 5-hour window would be reported
+    /// as current for weeks.
+    #[test]
+    fn expired_limit_windows_are_dropped_not_replayed() {
+        let ctx = r#"{"timestamp":"2026-07-12T09:00:01.000Z","type":"turn_context","payload":{"model":"gpt-5.5"}}"#;
+        // primary resets at 1_779_942_915; secondary at 1_780_529_715.
+        let tok = r#"{"timestamp":"2026-07-12T09:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}},"rate_limits":{"primary":{"used_percent":96.0,"window_minutes":300,"resets_at":1779942915},"secondary":{"used_percent":32.0,"window_minutes":10080,"resets_at":1780529715}}}}"#;
+
+        let dir = std::env::temp_dir().join(format!("sp-codex-expiry-{}", std::process::id()));
+        let sessions = dir.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let file = sessions.join("rollout.jsonl");
+        std::fs::write(&file, format!("{ctx}\n{tok}\n")).unwrap();
+
+        // Clock AFTER the 5h window reset but BEFORE the weekly one.
+        let mut state = ScanState::default();
+        scan_file(&file, 1_780_000_000, &mut state);
+
+        // The expired 96% window must be gone — that is the false critical alert.
+        assert!(
+            !state.latest_limits.iter().any(|l| l.label == "5h"),
+            "an expired window must not be reported: {:?}",
+            state.latest_limits
+        );
+        // ...while the window that is still open survives untouched.
+        assert_eq!(state.latest_limits.len(), 1);
+        assert_eq!(state.latest_limits[0].label, "weekly");
+        assert_eq!(state.latest_limits[0].used_percent, 32.0);
+
+        // Every window expired ⇒ report none rather than inventing 0%.
+        let mut later = ScanState::default();
+        scan_file(&file, 4_000_000_000, &mut later);
+        assert!(later.latest_limits.is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }

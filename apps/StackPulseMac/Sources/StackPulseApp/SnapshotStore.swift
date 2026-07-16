@@ -811,11 +811,17 @@ final class SnapshotStore: ObservableObject {
         isLoading = true
         lastError = nil
 
-        // Cheap, non-prompting Keychain probe for Claude auth (main-actor OK).
-        let claudeAuthed = KeychainProbe.claudeCredentialsPresent()
+        let historyDir = historyDataDir
 
         Task.detached(priority: .utility) {
-            let snap = CoreBridge.snapshot()
+            // Probe the Keychain here rather than on the main actor: it's a few
+            // synchronous XPC round-trips to securityd, and this is the only
+            // synchronous XPC on the refresh path.
+            let claudeAuthed = KeychainProbe.claudeCredentialsPresent()
+            // ONE scan. The core folds this same snapshot into history while it
+            // still has it — asking it to `record_history` afterwards would make
+            // it build a second snapshot and re-read every log file again.
+            let snap = CoreBridge.snapshot(recordHistoryDir: historyDir)
             await MainActor.run {
                 self.isLoading = false
                 self.lastUpdated = Date()
@@ -832,9 +838,9 @@ final class SnapshotStore: ObservableObject {
                     if !self.apiKeyProviderIDs.isEmpty {
                         self.fetchAndMergeBalances()
                     }
-                    // Fold today's usage into the durable history store and refresh
-                    // the published series (records every refresh, keeps Trends live).
-                    self.recordHistorySnapshot()
+                    // History was already recorded by the scan above; just re-read
+                    // the accumulated series (cheap — reads the JSON store, no scan).
+                    self.loadHistory()
                     // Decide whether anything new warrants a notification. Re-runs
                     // after the async live-limits merge too (see `applyLiveLimits`),
                     // so Claude live-limit alerts are considered once they arrive.
@@ -955,8 +961,11 @@ final class SnapshotStore: ObservableObject {
 
         // 1) Re-apply the last-good limits onto the fresh core snapshot right away,
         //    so a transient fetch failure (e.g. HTTP 429) never blanks the value.
-        if !lastGoodLiveLimits.isEmpty, cachedLiveLimitsUsable {
-            applyLiveLimits(lastGoodLiveLimits)
+        //    Only the windows that haven't reset yet: a cached percentage for a
+        //    window that has already rolled over isn't stale, it's wrong.
+        let usable = unexpiredCachedLimits()
+        if !usable.isEmpty, cachedLiveLimitsUsable {
+            applyLiveLimits(usable)
         }
 
         // 2) Only hit the network when the cache is stale (or empty) — reusing the
@@ -999,6 +1008,26 @@ final class SnapshotStore: ObservableObject {
     private var cachedLiveLimitsUsable: Bool {
         guard !lastGoodLiveLimits.isEmpty, let at = lastGoodLiveLimitsAt else { return false }
         return Date().timeIntervalSince(at) < liveLimitsStaleAfter
+    }
+
+    /// The cached limits that are still meaningful, dropping any whose **own reset
+    /// time has already passed**.
+    ///
+    /// A cached percentage is an estimate of a *specific window*. Once that window
+    /// resets, the number isn't merely old — it is **known to be wrong**: usage
+    /// starts again from zero and a new window begins. Showing it anyway is what
+    /// made the app report a stale weekly percentage after the limit had rolled
+    /// over, and kept a 5-hour window on screen days after it expired. Age alone
+    /// can't catch this: the weekly window legitimately outlives the refetch
+    /// interval, while a 5-hour one expires long before the staleness cutoff.
+    ///
+    /// Dropping is the honest choice — we genuinely don't know the new percentage
+    /// until a fetch succeeds, and no number beats a confidently wrong one.
+    private func unexpiredCachedLimits(now: Date = Date()) -> [LimitWindow] {
+        lastGoodLiveLimits.filter { limit in
+            guard let resets = limit.resets_at_unix else { return true } // no window ⇒ can't expire
+            return TimeInterval(resets) > now.timeIntervalSince1970
+        }
     }
 
     /// Rebuilds the snapshot so Claude's `limits` = its core limits + the fetched

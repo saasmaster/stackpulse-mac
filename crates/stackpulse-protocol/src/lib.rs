@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 15,
+    minor: 16,
     patch: 0,
 };
 
@@ -855,6 +855,16 @@ pub enum CoreRequest {
         /// If set, only scan these providers; otherwise scan all detected ones.
         #[serde(default)]
         providers: Option<Vec<ProviderId>>,
+        /// When set, fold this same snapshot into the durable history store under
+        /// this directory before returning it (since 1.16.0).
+        ///
+        /// This exists so a client never has to scan twice. `record_history`
+        /// builds its own snapshot, so calling `get_usage_snapshot` and then
+        /// `record_history` re-reads every log file a second time — on a machine
+        /// with gigabytes of session logs that doubles the app's heaviest
+        /// operation for nothing.
+        #[serde(default)]
+        record_history_dir: Option<String>,
     },
     /// Lightweight detection only (installed / authenticated / health), no
     /// expensive log scanning. Cheap enough for frequent menu-bar polling.

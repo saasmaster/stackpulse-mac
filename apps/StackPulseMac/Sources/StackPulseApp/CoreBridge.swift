@@ -26,8 +26,20 @@ enum CoreBridge {
 
     /// Full usage snapshot, decoded. `nil` if the core returned an error or the
     /// payload could not be decoded.
-    static func snapshot() -> UsageSnapshot? {
-        let json = handle(#"{"op":"get_usage_snapshot"}"#)
+    ///
+    /// Pass `recordHistoryDir` to have the core fold *this* snapshot into the
+    /// durable history store while it already has it in hand. Doing that here
+    /// rather than with a follow-up `record_history` call matters: that op builds
+    /// its own snapshot, so the pair re-read every session log twice per refresh.
+    static func snapshot(recordHistoryDir: String? = nil) -> UsageSnapshot? {
+        struct Request: Encodable {
+            let op = "get_usage_snapshot"
+            let record_history_dir: String?
+        }
+        guard let reqData = try? JSONEncoder().encode(Request(record_history_dir: recordHistoryDir)),
+              let reqJSON = String(data: reqData, encoding: .utf8)
+        else { return nil }
+        let json = handle(reqJSON)
         guard let data = json.data(using: .utf8) else { return nil }
         // The response carries an extra "kind":"usage_snapshot" tag which the
         // decoder simply ignores (unknown keys are skipped).
