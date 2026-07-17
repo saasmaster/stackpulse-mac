@@ -29,9 +29,17 @@ struct OnboardingView: View {
 
     /// The pages, in order. `rawValue` drives Back/Next, so the order here is the
     /// only place the sequence is defined.
+    ///
+    /// Still deliberately short. The spec lists ten onboarding concerns; this
+    /// covers them in six pages rather than ten, because the flow's job is to get
+    /// out of the way — `detected` folds "we found your tools" and "choose what to
+    /// enable" into one honest page, and `preferences` folds notifications,
+    /// launch-at-login, and the reduce-transparency acknowledgement into another.
     private enum Step: Int, CaseIterable, Identifiable {
         case welcome
+        case detected
         case projects
+        case preferences
         case tour
         case done
 
@@ -128,7 +136,9 @@ struct OnboardingView: View {
         Group {
             switch step {
             case .welcome: welcomePage
+            case .detected: OnboardingDetectedPage()
             case .projects: projectsPage
+            case .preferences: OnboardingPreferencesPage()
             case .tour: tourPage
             case .done: donePage
             }
@@ -380,6 +390,187 @@ struct OnboardingView: View {
     private func skip() {
         completed = true
         onFinish()
+    }
+}
+
+// MARK: - Detected providers page
+
+/// "What's on this Mac" — the providers StackPulse found, plus the one opt-in
+/// integration (Claude live limits, the only thing that reads a credential and
+/// goes online). Its own view to keep `OnboardingView`'s body small enough for the
+/// compiler and to own no state beyond the shared store.
+private struct OnboardingDetectedPage: View {
+    @EnvironmentObject var store: SnapshotStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Image(systemName: "sparkle.magnifyingglass")
+                .font(.system(size: 34)).foregroundStyle(Color.accentColor)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("What's on this Mac").font(.title2.weight(.semibold))
+                Text("StackPulse looks for the AI coding tools you already use. Nothing to install — if it's here, it's read locally.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            detected.glassCard(padding: 16)
+
+            // Spec: "let the user choose which integrations to enable." The only
+            // real choice — because it reads a credential and makes a network call
+            // — is Claude live limits. Everything else is local-only, nothing to
+            // opt into.
+            Toggle(isOn: $store.liveLimitsEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Show Claude's live usage limits").font(.callout)
+                    Text("The one feature that goes online: it reads your Claude login and asks Anthropic for your current limits. Everything else stays fully offline. Change it any time in Settings.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.switch)
+            .glassCard(padding: 16)
+        }
+    }
+
+    @ViewBuilder private var detected: some View {
+        let installed = (store.snapshot?.providers ?? []).filter(\.installed)
+        if installed.isEmpty {
+            HStack(alignment: .top, spacing: 8) {
+                if store.isLoading {
+                    ProgressView().controlSize(.small)
+                    Text("Looking for your AI tools…").font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Image(systemName: "circle.dashed").foregroundStyle(.tertiary)
+                    Text("No supported AI tools detected yet — StackPulse will pick them up as you use them.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Found \(installed.count) on this Mac")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                FlowLayout(spacing: 8, lineSpacing: 8) {
+                    ForEach(installed) { p in
+                        Chip(text: p.display_name,
+                             systemImage: store.isAuthenticated(p) ? "checkmark.seal.fill" : "shippingbox.fill",
+                             tint: store.isAuthenticated(p) ? .green : .cyan)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+// MARK: - Preferences page
+
+/// Notifications, launch-at-login, and an honest acknowledgement of the system
+/// accessibility settings the app already respects. All optional, all editable
+/// later. Its own view for the same compiler and state-locality reasons.
+private struct OnboardingPreferencesPage: View {
+    @EnvironmentObject var store: SnapshotStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 34)).foregroundStyle(Color.accentColor)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("A couple of preferences").font(.title2.weight(.semibold))
+                Text("Optional, and all changeable later in Settings.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle(isOn: $store.notificationsEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Notify me when something needs attention").font(.callout)
+                        Text("A limit almost reached, an integration that broke — as a native notification. Off by default; macOS still asks permission the first time.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                Divider().opacity(0.4)
+                OnboardingLaunchAtLoginToggle()
+
+                // Spec #9 — acknowledge the system accessibility settings the app
+                // honours, shown only when one is actually on. Telling a user we
+                // respect a setting they don't use is noise; a toggle we can't back
+                // (these are system-owned) would be worse.
+                if reduceTransparency || reduceMotion {
+                    Divider().opacity(0.4)
+                    Label(acknowledgement, systemImage: "figure.wave")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .labelStyle(.titleAndIcon)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .glassCard(padding: 16)
+        }
+    }
+
+    private var acknowledgement: String {
+        switch (reduceTransparency, reduceMotion) {
+        case (true, true):
+            return "StackPulse follows your Reduce Transparency and Reduce Motion settings — solid surfaces, and no spinning indicators."
+        case (true, false):
+            return "StackPulse follows your Reduce Transparency setting — glass surfaces fall back to solid fills."
+        default:
+            return "StackPulse follows your Reduce Motion setting — the refresh indicator won't spin."
+        }
+    }
+}
+
+// MARK: - Launch-at-login toggle (onboarding)
+
+/// The launch-at-login switch, mirroring `StartupCard` in Settings but sized for
+/// the onboarding card. Reads the OS's live status into `@State` so it reflects
+/// the real login-item state, not a hope.
+private struct OnboardingLaunchAtLoginToggle: View {
+    @State private var enabled = LaunchAtLogin.isEnabled
+    @State private var needsApproval = LaunchAtLogin.needsApproval
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: Binding(get: { enabled }, set: { setEnabled($0) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Open StackPulse at login")
+                        .font(.callout)
+                    Text("So the menu-bar monitor is there when you sit down — it's only useful while running.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.switch)
+
+            if needsApproval {
+                Label(LaunchAtLogin.statusDetail, systemImage: "hand.raised")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .labelStyle(.titleAndIcon)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onAppear {
+            enabled = LaunchAtLogin.isEnabled
+            needsApproval = LaunchAtLogin.needsApproval
+        }
+    }
+
+    private func setEnabled(_ on: Bool) {
+        LaunchAtLogin.setEnabled(on)
+        enabled = LaunchAtLogin.isEnabled
+        needsApproval = LaunchAtLogin.needsApproval
     }
 }
 

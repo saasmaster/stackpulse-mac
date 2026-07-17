@@ -14,7 +14,9 @@ struct APIKeyProviderInfo: Identifiable, Sendable, Equatable {
     /// Only LiteLLM: needs a user-supplied base URL alongside the key.
     let needsBaseURL: Bool
     /// True when StackPulse can fetch a real, verified balance for this provider
-    /// (OpenRouter, LiteLLM). Others store the key but show a "coming soon" note.
+    /// (OpenRouter, LiteLLM, DeepSeek). For the rest the key is stored and usable,
+    /// but there is no balance endpoint to read — reported plainly, never as a
+    /// promise (see `APIKeyProviders.noBalanceNote`).
     let hasLiveBalance: Bool
     /// A masked-field placeholder hinting at the key format.
     let placeholder: String
@@ -51,6 +53,21 @@ enum APIKeyProviders {
     static func displayName(for id: String) -> String {
         info(for: id)?.displayName ?? id
     }
+
+    /// The honest statement for a provider StackPulse can store a key for but has
+    /// no way to read a balance from.
+    ///
+    /// This replaced "balance coming soon" — a promise the app has no plan to keep
+    /// and, for most of these providers, no public endpoint that would let it. A
+    /// standing "coming soon" is a small lie that never resolves; this states the
+    /// fact instead. The key is genuinely saved and usable (the provider reads as
+    /// Connected), so the note leads with what *is* true.
+    static func noBalanceNote(for id: String) -> String {
+        "Key saved. \(displayName(for: id)) has no balance StackPulse can read, so none is shown."
+    }
+
+    /// The short chip label for the same state.
+    static let noBalanceLabel = "No balance readout"
 }
 
 // MARK: - Balance fetcher
@@ -85,8 +102,8 @@ enum ProviderBalanceClient {
     // MARK: Public entry point
 
     /// Fetches the credit balance for a provider that has a stored key. Providers
-    /// without a verified endpoint return a note-only balance ("coming soon") so
-    /// nothing is fabricated — the connection still reads as saved. Never throws.
+    /// without a balance endpoint return a note-only balance that states so plainly
+    /// — nothing is fabricated, and the connection still reads as saved. Never throws.
     static func fetchBalance(providerID: String, key: String, baseURL: String?) async -> Outcome {
         switch providerID {
         case "open_router":
@@ -96,11 +113,10 @@ enum ProviderBalanceClient {
         case "deepseek":
             return await fetchDeepSeek(key: key)
         default:
-            // Stored, but no verified balance endpoint here — do NOT invent one.
+            // Stored, but no balance endpoint here — say so; do NOT invent one and
+            // do NOT promise one.
             return Outcome(
-                balance: ProviderBalance(
-                    note: "Key saved — live balance for \(APIKeyProviders.displayName(for: providerID)) is coming soon."
-                ),
+                balance: ProviderBalance(note: APIKeyProviders.noBalanceNote(for: providerID)),
                 error: nil
             )
         }

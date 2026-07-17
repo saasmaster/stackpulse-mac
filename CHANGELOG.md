@@ -18,6 +18,50 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Launch at login, honest BYOK, fuller onboarding (app 0.40.0)
+
+Working the "what's left" shortlist — and the honest first finding was that **two
+of the five items were already built**: command run history persists to
+`command_runs.json` with a full view/re-run/clear UI, and evidence-based
+completion/handoff (`MissionHandoff`) already composes a verified handoff package
+in Missions. Not going to re-announce work that exists. The three genuinely-unbuilt
+ones:
+
+**Launch at login.** A menu-bar monitor is only useful while running, so
+`LaunchAtLogin` (via `SMAppService.mainApp`) offers to start StackPulse at login —
+off until you say yes. It stores nothing: the OS owns the login item, so the switch
+reads the live status every time rather than a remembered bool that would drift the
+moment you flip it in System Settings. `.requiresApproval` (macOS holding it
+pending your OK) reads as *not enabled*, because it isn't, with a line telling you
+where to approve it. A new **Startup** card in Settings and a toggle in onboarding.
+
+**Honest BYOK.** Five providers (OpenAI, Z.ai, Mistral, Perplexity, Groq) stored an
+API key and showed *"balance coming soon"* — a promise the app had no plan to keep
+and, for most, no endpoint that would let it. A standing "coming soon" is a small
+lie that never resolves. Replaced with the fact: *"Key saved. <provider> has no
+balance StackPulse can read, so none is shown"*, and the chip reads **"No balance
+readout."** The three providers with real endpoints (OpenRouter, LiteLLM, DeepSeek)
+still fetch. A test forbids any provider note from implying a future balance.
+
+**Fuller onboarding.** The spec lists ten first-run concerns; onboarding covered
+four. Now six pages, not ten — the flow's job is to get out of the way. A new
+**"What's on this Mac"** page shows the providers StackPulse detected (honest about
+the still-scanning and none-found cases) and folds in the one real integration
+choice (Claude live limits, the only feature that reads a credential and goes
+online). A new **preferences** page covers notifications, launch-at-login, and —
+shown only when you actually use them — an acknowledgement that StackPulse follows
+your Reduce Transparency / Reduce Motion settings (system-owned, so acknowledged,
+never faked as an app toggle).
+
+4 new tests on the BYOK honesty rule. Gate: 106 Swift tests, 230 Rust, clippy + fmt
+clean.
+
+**Compiler gotcha (cost a debugging pass):** passing a bare instance-method
+reference as a SwiftUI `Binding(get:set:)` set closure (`set: setEnabled`) crashed
+swift-frontend in **IRGen** (signal 6, not a type error) on this Swift 6 / CLT
+toolchain. Inlining to `set: { setEnabled($0) }` fixed it. IRGen crashes name the
+file, not the line — bisect by construct, not by reading the error.
+
 ### Integration Diagnostics — is StackPulse working, and if not, why (app 0.39.0)
 
 The spec's `DIAGNOSTICS` screen (a Phase 1 exit criterion) was never built. The

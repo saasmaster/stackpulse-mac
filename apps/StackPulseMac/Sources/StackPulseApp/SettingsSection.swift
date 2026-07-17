@@ -34,6 +34,7 @@ struct SettingsSection: View {
                 sidebarCard
                 budgetCard
                 liveLimitsCard
+                startupCard
                 powerCard
                 ProviderConnectionsCard()
                 SecurityPrivacyCard()
@@ -429,6 +430,15 @@ struct SettingsSection: View {
 
     // MARK: Power
 
+    // MARK: Startup
+
+    /// Launch-at-login. The OS owns the state, so this reads it live rather than
+    /// mirroring it into a persisted bool that would drift the moment the user
+    /// flips the login item in System Settings.
+    private var startupCard: some View {
+        StartupCard()
+    }
+
     private var powerCard: some View {
         SettingsCard(title: "Power", systemImage: "bolt.fill") {
             Toggle(isOn: $store.keepAwake) {
@@ -485,6 +495,66 @@ struct SettingsSection: View {
         }
         .font(.callout)
         .foregroundStyle(.secondary)
+    }
+}
+
+// MARK: - Startup (launch at login)
+
+/// The launch-at-login control. Its own view so it can hold the live OS status in
+/// `@State` and re-read it on appear — the login item can be changed from System
+/// Settings behind the app's back, and the switch must reflect that, not a stale
+/// remembered value.
+private struct StartupCard: View {
+    @State private var enabled = LaunchAtLogin.isEnabled
+    @State private var needsApproval = LaunchAtLogin.needsApproval
+    @State private var failed = false
+
+    var body: some View {
+        SettingsCard(title: "Startup", systemImage: "power") {
+            Toggle(isOn: Binding(
+                get: { enabled },
+                set: { setEnabled($0) }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Open StackPulse at login")
+                        .font(.callout)
+                    Text("A menu-bar monitor is only useful while it's running. macOS manages this login item; you can also change it in System Settings → General → Login Items.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.switch)
+
+            if failed {
+                Label("macOS wouldn't change the login item. If you're running StackPulse from the Desktop, move it to Applications and try again.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .labelStyle(.titleAndIcon)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if needsApproval {
+                Label(LaunchAtLogin.statusDetail, systemImage: "hand.raised")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .labelStyle(.titleAndIcon)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onAppear(perform: refresh)
+    }
+
+    private func setEnabled(_ on: Bool) {
+        let ok = LaunchAtLogin.setEnabled(on)
+        failed = !ok
+        refresh()
+    }
+
+    /// Re-read the OS's own truth. Never assume the toggle took — `register()` can
+    /// land in `requiresApproval`, which is neither on nor an error.
+    private func refresh() {
+        enabled = LaunchAtLogin.isEnabled
+        needsApproval = LaunchAtLogin.needsApproval
     }
 }
 
@@ -601,9 +671,10 @@ private struct ProviderConnectionRow: View {
                 }
                 Spacer()
                 if !info.hasLiveBalance {
-                    Text("balance coming soon")
+                    Text(APIKeyProviders.noBalanceLabel)
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                        .help("StackPulse can store and use this key, but \(info.displayName) exposes no balance it can read.")
                 }
             }
 
