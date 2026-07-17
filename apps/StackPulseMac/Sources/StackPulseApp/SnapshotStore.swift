@@ -749,25 +749,78 @@ final class SnapshotStore: ObservableObject {
     @Published private(set) var stackEnrichment: [String: StackHealthClient.DependencyEnrichment] = [:]
     @Published private(set) var isEnrichingStack = false
 
-    /// Fetch latest versions + advisories for the current stack, unless we already
-    /// have them or a fetch is in flight. `force` re-fetches after a fresh scan.
-    func enrichStack(force: Bool = false) {
-        guard stackCheckUpdates, !isEnrichingStack else { return }
-        if force { stackEnrichment = [:] }
-        guard stackEnrichment.isEmpty else { return } // already have it
-        let deps = stackHealth.flatMap(\.dependencies)
-        guard !deps.isEmpty else { return }
+    /// Projects whose update check has finished, by project path.
+    ///
+    /// Tracked separately from `stackEnrichment` because that map is keyed by
+    /// dependency, and "we checked this project" is not derivable from it: a
+    /// project whose every dep was already fetched for a sibling would look
+    /// checked without ever having been asked about.
+    @Published private(set) var checkedProjects: Set<String> = []
+    /// Projects with a check in flight, by project path.
+    @Published private(set) var enrichingProjects: Set<String> = []
+
+    /// Check ONE project's dependencies for updates + advisories.
+    ///
+    /// Per project, on demand — NOT the whole portfolio. Checking everything meant
+    /// **249 registry requests across 35 projects (703 deps)** on every visit to
+    /// Stack Health, which is slow enough that the section was effectively unusable
+    /// and the network cost was paid for 34 projects the user wasn't asking about.
+    /// You check the app you're working on.
+    ///
+    /// `stackEnrichment` stays keyed by dependency and accumulates: `latest` is a
+    /// property of the PACKAGE, so a dep already fetched for another project is
+    /// reused rather than re-requested.
+    func enrichStack(projectPath: String, force: Bool = false) {
+        guard stackCheckUpdates, !enrichingProjects.contains(projectPath) else { return }
+        guard let project = stackHealth.first(where: { $0.path == projectPath }) else { return }
+        let deps = project.dependencies
+        guard !deps.isEmpty else {
+            checkedProjects.insert(projectPath) // nothing to check IS a real answer
+            return
+        }
+        // Already checked and not being forced ⇒ nothing to do.
+        if !force, checkedProjects.contains(projectPath) { return }
+
+        // Only ask about deps we don't already hold, unless forced.
+        let wanted = force ? deps : deps.filter { stackEnrichment[$0.id] == nil }
+        guard !wanted.isEmpty else {
+            checkedProjects.insert(projectPath)
+            return
+        }
+
+        enrichingProjects.insert(projectPath)
         isEnrichingStack = true
         Task {
-            let result = await StackHealthClient.enrich(deps)
-            self.stackEnrichment = result
-            self.isEnrichingStack = false
+            let result = await StackHealthClient.enrich(wanted)
+            self.stackEnrichment.merge(result) { _, new in new }
+            self.enrichingProjects.remove(projectPath)
+            self.checkedProjects.insert(projectPath)
+            self.isEnrichingStack = !self.enrichingProjects.isEmpty
         }
     }
 
+    /// Check every project. Explicit, never automatic — this is the expensive one
+    /// (~249 requests here), so it stays a thing the user asks for.
+    func enrichAllProjects(force: Bool = false) {
+        for project in stackHealth {
+            enrichStack(projectPath: project.path, force: force)
+        }
+    }
+
+    /// Whether this project's updates have been checked.
+    func isProjectChecked(_ path: String) -> Bool { checkedProjects.contains(path) }
+    /// Whether this project has a check in flight.
+    func isProjectEnriching(_ path: String) -> Bool { enrichingProjects.contains(path) }
+
     /// Drop enrichment (update-checking turned off, or the scan changed).
+    ///
+    /// Clears `checkedProjects` too: without that, a project would keep claiming it
+    /// had been checked using data that no longer exists.
     func clearStackEnrichment() {
         stackEnrichment = [:]
+        checkedProjects = []
+        enrichingProjects = []
+        isEnrichingStack = false
     }
 
     // MARK: Worktrees (protocol ≥ 1.15.0)

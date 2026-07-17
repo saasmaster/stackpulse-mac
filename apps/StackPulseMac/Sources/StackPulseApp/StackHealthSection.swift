@@ -101,6 +101,31 @@ private enum AdvisoryLevel: Int, Comparable {
     }
 }
 
+// MARK: - Per-project check state
+
+/// Where one project stands on update-checking.
+///
+/// Three states, not a Bool, because they mean different things to the reader and
+/// collapsing them puts the wrong sentence on the card: "update checking off" is a
+/// setting, "not checked yet" is an invitation, and only `.checked` licenses any
+/// claim about being up to date.
+///
+/// Checking is per project because checking everything cost ~249 registry requests
+/// across 35 projects on every visit — for 34 projects nobody asked about.
+enum StackCheckState: Equatable {
+    /// The global switch is off. Nothing leaves the machine.
+    case off
+    /// Available, not yet asked for.
+    case unchecked
+    /// In flight.
+    case checking
+    /// We have real registry answers for this project.
+    case checked
+
+    /// True only when the card may state an update/advisory verdict.
+    var hasRealData: Bool { self == .checked }
+}
+
 // MARK: - Advisory link (a route to the writeup, never a summary of it)
 
 /// One advisory reduced to what a row needs to OPEN it.
@@ -336,10 +361,19 @@ private func resolve(
 
 /// The header summary line, built from enriched data when checking, or a plain
 /// count when update-checking is off.
-private func summaryLine(_ s: ProjectSummary, checking: Bool) -> String {
+private func summaryLine(_ s: ProjectSummary, state: StackCheckState) -> String {
     let depWord = s.total == 1 ? "dep" : "deps"
-    guard checking else {
+    switch state {
+    case .off:
         return "\(s.total) \(depWord) · update checking off"
+    case .unchecked:
+        // NOT "0 outdated". Nobody has looked, and saying nothing is wrong here
+        // would be a clean bill of health this app never earned.
+        return "\(s.total) \(depWord) · not checked"
+    case .checking:
+        return "\(s.total) \(depWord) · checking…"
+    case .checked:
+        break
     }
     var parts = ["\(s.total) \(depWord)"]
 
@@ -363,8 +397,10 @@ private func summaryLine(_ s: ProjectSummary, checking: Bool) -> String {
 /// The card's top accent, driven by the worst thing in it: any advisory →
 /// its severity color; else major/deprecated → orange; minor → yellow; all
 /// up-to-date → green; otherwise neutral. Order of the tests is load-bearing.
-private func cardAccent(_ s: ProjectSummary, checking: Bool) -> Color {
-    guard checking else { return .secondary }
+private func cardAccent(_ s: ProjectSummary, state: StackCheckState) -> Color {
+    // Only a checked project can earn a verdict colour. Off / unchecked / in-flight
+    // are all "we don't know", which is neutral — never green.
+    guard state.hasRealData else { return .secondary }
     if let worst = s.worstAdvisory { return worst.color }
     if s.major > 0 { return .orange }
     if s.minor > 0 { return .yellow }
@@ -630,9 +666,12 @@ struct StackHealthSection: View {
                             StackProjectCard(
                                 proj: proj,
                                 enrichment: enrichment,
-                                checking: store.stackCheckUpdates,
+                                state: checkState(for: proj),
                                 expanded: expandedProjects.contains(proj.id),
-                                onToggle: { toggleExpanded(proj.id) }
+                                onToggle: { toggleExpanded(proj.id) },
+                                onCheck: { force in
+                                    store.enrichStack(projectPath: proj.path, force: force)
+                                }
                             )
                         }
                     }
@@ -641,22 +680,44 @@ struct StackHealthSection: View {
         }
         .onAppear {
             if store.stackHealth.isEmpty, !store.approvedRoots.isEmpty { store.rescanStackHealth() }
-            store.enrichStack()
+            // Deliberately NOT checking anything here. Opening this section used to
+            // fire ~249 registry requests across 35 projects — for 34 you weren't
+            // asking about. You check the app you're working on.
         }
-        // A fresh scan invalidates enrichment — clear and re-fetch.
+        // A fresh scan invalidates enrichment: the versions it was computed against
+        // are gone, so keeping it would answer with stale comparisons.
         .onChange(of: store.stackUpdatedAt) { _, _ in
-            store.enrichStack(force: true)
+            store.clearStackEnrichment()
         }
-        // Toggling update-checking on kicks a fetch; off clears any live data.
+        // Turning update-checking off clears live data. Turning it ON checks
+        // nothing — it only unlocks the per-project buttons.
         .onChange(of: store.stackCheckUpdates) { _, isOn in
-            if isOn { store.enrichStack() } else { store.clearStackEnrichment() }
+            if !isOn { store.clearStackEnrichment() }
         }
     }
 
     // MARK: Enrichment
 
+    /// Where this project stands. The global switch wins: with it off, nothing
+    /// leaves the machine and no per-project button is offered.
+    private func checkState(for proj: ProjectStack) -> StackCheckState {
+        guard store.stackCheckUpdates else { return .off }
+        if store.isProjectEnriching(proj.path) { return .checking }
+        return store.isProjectChecked(proj.path) ? .checked : .unchecked
+    }
+
+
 
     // MARK: Toolbar
+
+    /// Projects that could be checked but haven't been. Drives the "Check all"
+    /// affordance and, deliberately, its count — so the cost is stated up front.
+    private var uncheckedProjectCount: Int {
+        store.stackHealth.filter {
+            !store.isProjectChecked($0.path) && !store.isProjectEnriching($0.path)
+                && !$0.dependencies.isEmpty
+        }.count
+    }
 
     private var toolbar: some View {
         HStack(spacing: 12) {
@@ -667,7 +728,22 @@ struct StackHealthSection: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .fixedSize()
-            .help("Query public registries (npm, crates.io, OSV) for latest versions and security advisories.")
+            .help("Allow StackPulse to query public registries (npm, crates.io, OSV). With this off nothing leaves your machine. Turning it on checks nothing by itself — each project has its own button.")
+
+            // Checking everything is now an explicit act, never automatic: it costs
+            // one registry request per distinct dependency (249 across 35 projects
+            // here) and used to fire on every visit to this section.
+            if store.stackCheckUpdates, uncheckedProjectCount > 0 {
+                Button {
+                    store.enrichAllProjects()
+                } label: {
+                    Label("Check all \(uncheckedProjectCount)", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.glass)
+                .help("Check every unchecked project. Slow by nature — one request per distinct dependency.")
+                .accessibilityLabel("Check updates for all \(uncheckedProjectCount) unchecked projects")
+            }
 
             if enriching {
                 HStack(spacing: 6) {
@@ -1052,9 +1128,14 @@ private struct StackDigestCard: View {
 /// Everything the body reads is a stored `let`; the body itself derives nothing.
 private struct StackProjectCard: View {
     let proj: ProjectStack
-    let checking: Bool
+    let state: StackCheckState
     let expanded: Bool
     let onToggle: () -> Void
+    /// `true` = re-check: force past the already-checked short-circuit.
+    let onCheck: (Bool) -> Void
+
+    /// Only a checked project has answers to render.
+    private var checking: Bool { state.hasRealData }
 
     private let notUpToDate: [Resolved]
     private let upToDate: [Resolved]
@@ -1064,15 +1145,18 @@ private struct StackProjectCard: View {
     init(
         proj: ProjectStack,
         enrichment: [String: StackHealthClient.DependencyEnrichment],
-        checking: Bool,
+        state: StackCheckState,
         expanded: Bool,
-        onToggle: @escaping () -> Void
+        onToggle: @escaping () -> Void,
+        onCheck: @escaping (Bool) -> Void
     ) {
         self.proj = proj
-        self.checking = checking
+        self.state = state
         self.expanded = expanded
         self.onToggle = onToggle
+        self.onCheck = onCheck
 
+        let checking = state.hasRealData
         let resolved = proj.dependencies.map { resolve($0, enrichment: enrichment, checking: checking) }
         // Same comparator over the same values as before, so the same order out.
         let sorted = resolved.sorted { $0.actionRank < $1.actionRank }
@@ -1087,7 +1171,7 @@ private struct StackProjectCard: View {
         self.notUpToDate = notUp
         self.upToDate = up
         self.summary = summary
-        self.accent = cardAccent(summary, checking: checking)
+        self.accent = cardAccent(summary, state: state)
     }
 
     var body: some View {
@@ -1132,18 +1216,15 @@ private struct StackProjectCard: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Image(systemName: "shippingbox.fill")
-                    .foregroundStyle(accent)
-                Text(proj.name)
-                    .font(.callout.weight(.semibold))
-                    .lineLimit(1)
-                Chip(text: proj.ecosystem, tint: .secondary)
-                if let pm = proj.package_manager, !pm.isEmpty {
-                    Chip(text: pm, systemImage: "shippingbox", tint: .secondary)
-                }
+                identity
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(proj.name), \(proj.ecosystem)")
                 Spacer(minLength: 0)
+                // Outside the combined element: `.combine` flattens its subtree and
+                // would leave this button unreachable to VoiceOver.
+                checkControl
             }
-            Text(summaryLine(summary, checking: checking))
+            Text(summaryLine(summary, state: state))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             ForEach(proj.notes, id: \.self) { note in
@@ -1154,7 +1235,55 @@ private struct StackProjectCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .accessibilityElement(children: .combine)
+    }
+
+    private var identity: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "shippingbox.fill")
+                .foregroundStyle(accent)
+            Text(proj.name)
+                .font(.callout.weight(.semibold))
+                .lineLimit(1)
+            Chip(text: proj.ecosystem, tint: .secondary)
+            if let pm = proj.package_manager, !pm.isEmpty {
+                Chip(text: pm, systemImage: "shippingbox", tint: .secondary)
+            }
+        }
+    }
+
+    /// Check THIS project. Per project on purpose: checking all 35 fired ~249
+    /// registry requests for the 34 you weren't looking at.
+    ///
+    /// Outside any `.accessibilityElement(children: .combine)` — combining flattens
+    /// the subtree and would leave the button unreachable to VoiceOver.
+    @ViewBuilder private var checkControl: some View {
+        switch state {
+        case .off:
+            EmptyView() // the global switch is the control; don't offer a dead button
+        case .unchecked:
+            Button { onCheck(false) } label: {
+                Label("Check updates", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption2.weight(.medium))
+            }
+            .buttonStyle(.glass)
+            .help("Look up \(proj.dependencies.count) dependenc\(proj.dependencies.count == 1 ? "y" : "ies") of \(proj.name) against its registry, and OSV for advisories.")
+            .accessibilityLabel("Check updates for \(proj.name)")
+        case .checking:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.small)
+                Text("Checking…").font(.caption2).foregroundStyle(.secondary)
+            }
+            .accessibilityLabel("Checking updates for \(proj.name)")
+        case .checked:
+            Button { onCheck(true) } label: {
+                Label("Re-check", systemImage: "arrow.clockwise")
+                    .font(.caption2.weight(.medium))
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help("Check \(proj.name) again.")
+            .accessibilityLabel("Re-check updates for \(proj.name)")
+        }
     }
 }
 
