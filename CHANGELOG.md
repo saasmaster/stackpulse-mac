@@ -18,6 +18,49 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Ask an AI about your dependencies (app 0.37.0)
+
+Stack Health could say "lodash 4.17.20 is behind, and OSV matched GHSA-…". It could
+never say the thing you actually want: **is that real, do I have to care, and will
+upgrading break me?** Answering needs judgement about the code, and StackPulse
+never reads the code — so rather than start summarizing advisories it hasn't read,
+it now hands the facts to something that can reason about them.
+
+**Copy AI prompt** on each project card builds a prompt from that card's findings:
+package, scope, required range, installed version, latest, interpreted status, and
+each advisory as an **id plus its own link** — never a summary of a writeup we
+didn't fetch. The prompt then asks for exactly three verdicts per package: is it
+real, is it required, is it safe.
+
+What makes it more than a data dump is what it refuses to let the reader assume:
+
+- **The readings have an age**, and the prompt says it in words ("read 3 hours
+  ago"), then instructs: *treat every version and advisory id below as a claim to
+  verify, not a fact to repeat*. A model asked "is lodash 4.17.20 vulnerable?" will
+  answer from memory; this tells it not to.
+- **Nothing read the source.** The prompt states the boundary — it doesn't know if
+  a package is even imported, which APIs are used, or whether a vulnerable path is
+  reachable — and asks for "what I'd need to check" instead of an assumption.
+- **An unchecked project says so**, and blocks the dangerous inference: *do not
+  assume a package is fine because no advisory is listed — none were fetched.*
+  Absence of evidence, again, reported as absence.
+- **`scope: dev` is carried**, because a build-only package's advisory usually
+  never reaches production, and that one fact decides "required" more often than
+  severity does.
+- **"Leave it" is offered as a real answer.** Without it, every list of outdated
+  deps reads as a to-do list, which is how dependency review becomes busywork.
+- **Fabrication is forbidden explicitly**: never invent a version, a CVE, a date,
+  or a breaking change — write "unverified" instead.
+
+`AdvisoryLink` now also carries OSV's own severity word next to our bucketed level.
+The level is an interpretation (it folds "medium" into moderate and paints unknown
+red so an unrated advisory can't read as harmless) — right for a colored dot, wrong
+to quote. Anything reporting what a source *said* passes on the source's word.
+
+The button is absent when a project has nothing to ask about, and the prompt is
+never truncated — a silent top-N would mean asking about 25 packages and getting
+advice on some subset, with nothing saying which. 10 new tests.
+
 ### One window, one refresh button, one honesty rule (app 0.36.0)
 
 Four separate reports, one shared root: a rule written on a *surface* instead of

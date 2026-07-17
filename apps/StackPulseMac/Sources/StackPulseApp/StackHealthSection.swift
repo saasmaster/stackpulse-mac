@@ -143,6 +143,14 @@ private struct AdvisoryLink: Identifiable, Equatable {
     let id: String
     let level: AdvisoryLevel
     let url: String
+    /// OSV's own severity word, kept verbatim alongside our bucketed `level`.
+    ///
+    /// `level` is an *interpretation* — it folds "medium" into `.moderate` and
+    /// paints `.unknown` red so an unrated advisory can't read as harmless. That
+    /// is the right call for a colored dot, and the wrong thing to quote: anything
+    /// that reports what the advisory *says* (the AI prompt) must pass on the
+    /// source's word, not ours.
+    let severityRaw: String
 
     /// `nil` when the advisory carries no URL — no address, no link. The core never
     /// populates advisories at all (it does no network), so in practice these come
@@ -151,6 +159,7 @@ private struct AdvisoryLink: Identifiable, Equatable {
         guard let url, !url.isEmpty, URL(string: url) != nil else { return nil }
         self.id = id
         self.level = AdvisoryLevel(severity)
+        self.severityRaw = severity
         self.url = url
     }
 }
@@ -1221,7 +1230,8 @@ private struct StackProjectCard: View {
                     .accessibilityLabel("\(proj.name), \(proj.ecosystem)")
                 Spacer(minLength: 0)
                 // Outside the combined element: `.combine` flattens its subtree and
-                // would leave this button unreachable to VoiceOver.
+                // would leave these buttons unreachable to VoiceOver.
+                advicePromptControl
                 checkControl
             }
             Text(summaryLine(summary, state: state))
@@ -1284,6 +1294,66 @@ private struct StackProjectCard: View {
             .help("Check \(proj.name) again.")
             .accessibilityLabel("Re-check updates for \(proj.name)")
         }
+    }
+
+    /// Copies a prompt that hands this card's findings to an AI for the judgement
+    /// StackPulse cannot make.
+    ///
+    /// The section deliberately stops at "this is behind" / "OSV matched this id" —
+    /// it never reads a changelog or the project's source, so it cannot say whether
+    /// a bump is safe, or whether an advisory reaches production here. Rather than
+    /// leave the user at that dead end (or start summarizing advisories we haven't
+    /// read), this exports the facts, stamped and bounded, for something that can
+    /// reason about them.
+    ///
+    /// Absent when there is nothing to ask about: an all-clear project would
+    /// produce a prompt with an empty table.
+    @ViewBuilder private var advicePromptControl: some View {
+        if !notUpToDate.isEmpty {
+            Button { copyAdvicePrompt() } label: {
+                Label("Copy AI prompt", systemImage: "doc.on.clipboard")
+                    .font(.caption2.weight(.medium))
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help(
+                state.hasRealData
+                    ? "Copy a prompt describing \(notUpToDate.count) dependenc\(notUpToDate.count == 1 ? "y" : "ies") that need attention — installed vs. latest, advisory ids and links, and when each was read — to paste into an AI for upgrade advice."
+                    : "Copy a prompt listing \(notUpToDate.count) dependenc\(notUpToDate.count == 1 ? "y" : "ies") with their installed versions. No update check has run, so the prompt says the latest versions are unknown and asks the AI to look them up."
+            )
+            .accessibilityLabel("Copy an AI upgrade-advice prompt for \(proj.name)")
+        }
+    }
+
+    private func copyAdvicePrompt() {
+        let text = DependencyAdvicePrompt.build(
+            project: .init(
+                name: proj.name,
+                path: proj.path,
+                ecosystem: proj.ecosystem,
+                packageManager: proj.package_manager,
+                // The newest reading on this card. `nil` when nothing was checked,
+                // which the prompt reports rather than passing off as current.
+                checkedAt: notUpToDate.compactMap(\.checkedAt).max()
+            ),
+            facts: notUpToDate.map { r in
+                DependencyAdvicePrompt.Fact(
+                    name: r.dep.name,
+                    ecosystem: r.dep.ecosystem,
+                    isDev: r.dep.is_dev,
+                    required: r.dep.required,
+                    installed: r.dep.installed,
+                    latest: r.latest,
+                    status: r.status.label,
+                    advisories: r.advisoryLinks.map {
+                        .init(id: $0.id, severity: $0.severityRaw, url: $0.url)
+                    }
+                )
+            }
+        )
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
     }
 }
 
