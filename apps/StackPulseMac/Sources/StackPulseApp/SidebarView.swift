@@ -102,24 +102,48 @@ struct SidebarView: View {
 
     // MARK: Content
 
+    /// Fixed head (totals + tab picker), a scrolling body that owns every
+    /// remaining point of the panel, then fixed feet (quick nav + meta).
+    ///
+    /// The panel is as tall as the screen's visible frame (see
+    /// ``EdgeSidebarController``), so the old single-ScrollView layout — totals,
+    /// tabs, list *and* quick nav all scrolling together, top-aligned — left a
+    /// few hundred points of dead glass under the content and floated the nav in
+    /// the middle of nowhere. Pinning the chrome lets the list-y tab body take the
+    /// height instead: the totals stay readable while you scroll providers, and
+    /// the nav never scrolls away.
     @ViewBuilder private var content: some View {
         if let snapshot = store.snapshot {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
+            VStack(spacing: 0) {
+                VStack(spacing: 10) {
                     summaryStrip(snapshot)
                     tabBar
-
-                    switch tab {
-                    case .cards: cardsTab(snapshot)
-                    case .activity: activityTab
-                    case .apps: appsTab
-                    }
-
-                    quickNav
                 }
-                .padding(12)
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
+                .padding(.bottom, 10)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        switch tab {
+                        case .cards: cardsTab(snapshot)
+                        case .activity: activityTab
+                        case .apps: appsTab
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
+                }
+                .frame(maxHeight: .infinity)
+
+                Divider().opacity(0.5)
+                quickNav
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                Divider().opacity(0.5)
+                footer
             }
-            footer
         } else if store.isLoading {
             VStack(spacing: 10) {
                 ProgressView()
@@ -138,46 +162,73 @@ struct SidebarView: View {
         }
     }
 
-    /// A compact two-cell totals strip: today's spend + volume across all
-    /// providers, and a live status (active sessions / items needing attention).
+    /// A compact three-cell totals strip: today's spend + volume across all
+    /// providers, the same for the 30-day window, and a live status (active
+    /// sessions / items needing attention).
+    ///
+    /// The 30-day cell is the third cell because the two-cell strip left the two
+    /// values swimming in ~138pt each — width the panel could spend on a fact it
+    /// already has. Both money cells are summed exactly as the Today cell always
+    /// was, and both keep its guard: a window nothing reported a cost for reads
+    /// "—", never a confident `$0.00`.
     private func summaryStrip(_ snapshot: UsageSnapshot) -> some View {
         let todayCost = snapshot.providers.compactMap { $0.today?.estimated_cost_usd }.reduce(0, +)
         let todayTokens = snapshot.providers.compactMap { $0.today?.tokens.grandTotal }.reduce(0, +)
+        let cost30 = snapshot.providers.compactMap { $0.last30?.estimated_cost_usd }.reduce(0, +)
+        let tokens30 = snapshot.providers.compactMap { $0.last30?.tokens.grandTotal }.reduce(0, +)
         let active = store.activeMissionCount
         let alerts = store.activeAlerts.count
         return HStack(spacing: 0) {
             sidebarStat(
-                "Today",
+                "Today (est.)",
                 Format.usd(todayCost == 0 ? nil : todayCost),
                 "\(Format.tokens(todayTokens)) tokens"
+            )
+            Divider().frame(height: 34)
+            sidebarStat(
+                "30d (est.)",
+                Format.usd(cost30 == 0 ? nil : cost30),
+                "\(Format.tokens(tokens30)) tokens",
+                leadingPad: 8
             )
             Divider().frame(height: 34)
             sidebarStat(
                 "Live",
                 active > 0 ? "▶ \(active)" : "—",
                 alerts > 0 ? "\(alerts) to check" : "all clear",
-                accent: active > 0 ? .green : .secondary
+                accent: active > 0 ? .green : .secondary,
+                leadingPad: 8
             )
         }
         .glassCard(padding: 10)
+        // The strip is the only place the sidebar shows money, and it showed it
+        // with nothing saying it was an estimate. "(est.)" is in the cell label
+        // itself — so it survives VoiceOver, which a tooltip would not — and the
+        // core's full sentence (local price table, list prices, verify against
+        // billing) is one hover away rather than three permanently pinned lines
+        // of footnote in a 320pt glanceable panel.
+        .help(snapshot.pricing_note)
     }
 
     private func sidebarStat(_ label: String, _ value: String, _ sub: String,
-                             accent: Color = .primary) -> some View {
+                             accent: Color = .primary,
+                             leadingPad: CGFloat = 0) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label.uppercased())
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
             Text(value)
                 .font(.callout.weight(.semibold).monospacedDigit())
                 .foregroundStyle(accent)
+                .lineLimit(1)
             Text(sub)
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, label == "Live" ? 12 : 0)
+        .padding(.leading, leadingPad)
     }
 
     // MARK: Tab bar
@@ -191,22 +242,34 @@ struct SidebarView: View {
             },
             selection: Binding(get: { tab }, set: { tab = $0 })
         )
-        .font(.caption)
     }
 
     // MARK: Tabs
 
     /// Cards: the rich condensed per-provider list (the default).
+    ///
+    /// Only providers with something concrete to say earn a card. A provider the
+    /// core merely *detected* has no usage, no limit and no balance, so its card
+    /// was a ~37pt slab carrying a dot and a name — and there are several of them
+    /// on a real Mac. Those collapse into one wrapped grid instead, which is both
+    /// shorter and denser. Scope is unchanged: installed providers only, exactly
+    /// as before (the popover, which shows undetected ones too, owns that view).
     @ViewBuilder private func cardsTab(_ snapshot: UsageSnapshot) -> some View {
-        if snapshot.installedProviders.isEmpty {
+        let installed = snapshot.installedProviders
+        let detailed = installed.filter(\.sidebarHasDetail)
+        let quiet = installed.filter { !$0.sidebarHasDetail }
+        if installed.isEmpty {
             Text("No providers detected on this Mac.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 6)
         } else {
-            ForEach(snapshot.installedProviders) { provider in
+            ForEach(detailed) { provider in
                 SidebarProviderRow(provider: provider)
+            }
+            if !quiet.isEmpty {
+                SidebarQuietProvidersCard(providers: quiet)
             }
         }
     }
@@ -307,7 +370,10 @@ struct SidebarView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 18)
+        // 18 here on top of glassCard's own 12 gave the empty state 30pt of
+        // padding a side — 60pt of nothing wrapped around ~70pt of content, the
+        // tallest thing on the tab when the tab has the least to say.
+        .padding(.vertical, 10)
         .glassCard(padding: 12)
     }
 
@@ -321,7 +387,6 @@ struct SidebarView: View {
             Text("OPEN IN APP")
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.tertiary)
-                .padding(.top, 4)
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 86), spacing: 6)],
                 spacing: 6
@@ -373,6 +438,77 @@ struct SidebarView: View {
     }
 }
 
+private extension ProviderUsage {
+    /// True when this provider has anything concrete to put in a sidebar card:
+    /// measured tokens or cost, observed sessions, a live limit, or a connected
+    /// balance. False ⇒ the core detected it and knows nothing else about it, so
+    /// a full card would be a name and a dot in 37pt of glass.
+    ///
+    /// Deliberately wider than ``SidebarProviderRow``'s `hasSpend`: that one picks
+    /// *which* metrics line to draw (spend vs sessions), this one asks whether
+    /// there is a line to draw at all.
+    var sidebarHasDetail: Bool {
+        (today?.tokens.grandTotal ?? 0) > 0
+            || (last30?.tokens.grandTotal ?? 0) > 0
+            || (today?.estimated_cost_usd ?? 0) > 0
+            || (last30?.estimated_cost_usd ?? 0) > 0
+            || (last30?.records ?? 0) > 0
+            || !limits.isEmpty
+            || balance != nil
+    }
+}
+
+/// The installed-but-quiet providers in one wrapped grid: detected on this Mac,
+/// with no usage, no limit and no balance to report. Same idea as the popover's
+/// `OtherProvidersCard`, but scoped to what the sidebar shows (installed only),
+/// so it never has to quote a "not found" count it wasn't given the data for.
+private struct SidebarQuietProvidersCard: View {
+    let providers: [ProviderUsage]
+    @EnvironmentObject private var store: SnapshotStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 5) {
+                Image(systemName: "circle.dotted")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                Text("Detected · nothing measured yet")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Text("\(providers.count)")
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 6)],
+                      alignment: .leading, spacing: 6) {
+                ForEach(providers) { p in
+                    HStack(spacing: 5) {
+                        // Health carries "detected" in words, not just in the
+                        // dot's colour — same contract as the popover's grid.
+                        StatusDot(color: SPStatus.healthColor(p.health), size: 7)
+                            .accessibilityLabel(SPStatus.healthLabel(p.health))
+                        Text(p.display_name)
+                            .font(.caption2)
+                            .lineLimit(1)
+                        if store.isAuthenticated(p) {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.green)
+                                .accessibilityLabel("Authenticated")
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(padding: 10)
+    }
+}
+
 /// One rich condensed provider row for the edge sidebar: health dot, name, spend
 /// (or a server-side note), a metrics line (tokens · turns · cache, or sessions ·
 /// model for activity-only providers like Antigravity), and the hottest live
@@ -404,6 +540,12 @@ private struct SidebarProviderRow: View {
                 }
             }
 
+            // A connected BYOK provider's real credit balance — already fetched
+            // and sitting in the snapshot, previously visible only in the popover.
+            if let balance = provider.balance {
+                ProviderBalanceLabel(balance: balance)
+            }
+
             metricsLine
 
             if let limit = provider.hottestLimit {
@@ -425,6 +567,12 @@ private struct SidebarProviderRow: View {
                              tint: SPStatus.limitColor(limit.used_percent),
                              height: 5,
                              glowsWhenHigh: true)
+                    // This panel is open all day, which is exactly how a reading
+                    // taken hours ago goes on reading as "right now". The popover
+                    // has labelled its limits' age since protocol 1.20.0; this row
+                    // rendered the same percentage bare. Draws nothing when the
+                    // reading is fresh, so it costs no height in the normal case.
+                    LimitAgeNote(limit: limit)
                 }
             }
         }
