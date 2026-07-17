@@ -18,6 +18,38 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Live limits actually work now (app 0.33.0)
+
+**Claude's percentage was wrong, and the fix was to read the right source.**
+StackPulse read only Claude **Code**'s CLI credential. That item is rewritten only
+when a *terminal* session refreshes it — so on a Desktop-only machine it ages out
+and stays expired forever. It had been frozen at 2026-07-13 for 70 hours while
+Claude Desktop's own cache was rewritten the same afternoon.
+
+The app was compensating by telling the user to run `claude` in Terminal every ~12
+hours. That was a chore imposed because it was reading the wrong place.
+
+Now it reads Claude Desktop's OAuth cache when the CLI has no valid token: derive
+Electron's `safeStorage` key from the Keychain, decrypt `config.json`, pick the
+entry for the active organization. Approach matches **OpenUsage**
+(`robinebers/openusage`, MIT), which solved this first — re-implemented, not
+copied, per ADR-0001.
+
+**The refresh token is never decoded.** Anthropic rotates refresh tokens, so using
+one would invalidate Claude Desktop's own copy and could sign the user out of the
+app they're working in. StackPulse borrows a currently-valid access token and
+otherwise waits — the rule it already applied to the CLI, now pointed at a source
+that stays fresh. It still never writes, refreshes, or rotates anything.
+
+Real result on this machine: **weekly 82% → 13%.** The 82% was a reading from
+before the window reset. The user said the percentage had reset and should not be
+displayed; they were right on both counts.
+
+Selection is the delicate part — a cache holds several logins, and picking the
+wrong one reports another organization's usage as yours. Org isolation and Desktop's
+own ranking (production client + full scope before raw expiry) are both
+mutation-checked: removing either fails exactly the test that names it.
+
 ### Advisories can be opened (app 0.32.0)
 
 **The address was in the data and nothing rendered it.** Enrichment carried

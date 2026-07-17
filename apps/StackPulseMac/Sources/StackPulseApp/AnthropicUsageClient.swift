@@ -113,6 +113,16 @@ enum AnthropicUsageClient {
             )
         case .parseFailed:
             return Outcome(limits: [], error: "Couldn't read the Claude login for live limits.")
+        case .expired:
+            // Every source we can read is aged out — including Claude Desktop's own
+            // cache, which normally renews itself. Opening Claude and using it once
+            // is what refreshes that; running `claude` in a terminal refreshes the
+            // CLI item. Both are things the user does anyway.
+            return Outcome(
+                limits: [],
+                error: "Claude's login has expired everywhere StackPulse can see it — use Claude (the app or `claude` in Terminal) once and it renews itself.",
+                recovery: .renewLoginInTerminal
+            )
         case .ok(let creds):
             if creds.isExpired {
                 // The saved access token has aged out. We deliberately do NOT

@@ -88,6 +88,12 @@ enum KeychainProbe {
         case accessDenied
         /// Found + readable, but the JSON payload wasn't in a shape we understand.
         case parseFailed
+        /// A login exists everywhere we look, but every token has aged out.
+        ///
+        /// Distinct from `notFound`: the user IS signed in, so "sign in" is the
+        /// wrong advice. Reached only when neither the CLI item nor Claude
+        /// Desktop's cache holds a live token.
+        case expired
     }
 
     /// Reads the Claude Code OAuth token from the macOS Keychain, falling back to
@@ -101,7 +107,7 @@ enum KeychainProbe {
     /// persists the token.
     static func readClaudeCredentialsResult() -> CredentialsResult {
         // File first — never prompts.
-        if let creds = readCredentialsFile() { return .ok(creds) }
+        if let creds = readCredentialsFile(), !creds.isExpired { return .ok(creds) }
 
         // Then Apple's `/usr/bin/security` tool. Granting its one-time
         // "Always Allow" is DURABLE: `security`'s code identity is stable, so the
@@ -110,18 +116,41 @@ enum KeychainProbe {
         // second (direct) read, so the user is never double-prompted.
         var pendingGrant = false
         var parseFail = false
+        var expired = false
         for service in claudeServices {
             switch readViaSecurityCLI(service: service) {
             case .data(let d):
-                if let creds = parseCredentialsJSON(d) { return .ok(creds) }
-                parseFail = true
+                guard let creds = parseCredentialsJSON(d) else {
+                    parseFail = true
+                    continue
+                }
+                // An expired CLI token is not an answer — it's the state a
+                // Desktop-only machine sits in permanently, because only a
+                // terminal session rewrites this item. Remember it and try
+                // Desktop rather than reporting "expired" as the verdict.
+                if creds.isExpired { expired = true } else { return .ok(creds) }
             case .timedOut:
                 pendingGrant = true // the "allow access" prompt is still unanswered
             case .missing:
                 continue
             }
         }
+
+        // Claude Desktop keeps its OWN cache current as a side effect of use. For a
+        // Desktop user that is the live login and the CLI item is a fossil; asking
+        // them to run `claude` in a terminal was the app compensating for reading
+        // the wrong source. Consulted only after the CLI has failed to produce a
+        // valid token, so a working terminal setup keeps its existing behavior.
+        switch ClaudeDesktopAuthStore.load() {
+        case .ok(let creds): return .ok(creds)
+        case .accessDenied: return .accessDenied
+        case .stale: expired = true          // Desktop will renew it on next use
+        case .invalid: parseFail = true
+        case .notFound: break
+        }
+
         if pendingGrant { return .accessDenied }
+        if expired { return .expired }
         if parseFail { return .parseFailed }
         return .notFound
     }

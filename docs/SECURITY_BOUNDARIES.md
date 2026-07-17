@@ -130,7 +130,15 @@ the most misleading claim in this document. Precisely:
   credential file or Keychain item, and `UsageSnapshot` carries no credential
   material — so the protocol, the CLI's `--json`, and the popover have nothing
   sensitive to leak. There is still **no telemetry**.
-- The **app** reads exactly one secret, with the user's explicit consent:
+- The **app** reads TWO credential sources, both opt-in with live limits and both
+  read-only. Claude Desktop's cache (`ClaudeDesktopAuthStore`) is consulted when the
+  CLI item has no valid token: it derives Electron's `safeStorage` key from the
+  Keychain (`Claude Safe Storage`) and decrypts `config.json`'s OAuth cache. The
+  **refresh token is never decoded** — Anthropic rotates them, so using one would
+  invalidate Claude Desktop's own copy. StackPulse borrows a currently-valid access
+  token and never writes, refreshes, or rotates anything.
+- The **app** reads exactly one secret from the CLI credential, with the user's
+  explicit consent:
   `KeychainProbe.readClaudeCredentialsResult()` fetches the Claude Code OAuth
   token (`/usr/bin/security find-generic-password -w`) so live limits can be
   requested. The sibling presence probe still passes `kSecReturnData: false`.

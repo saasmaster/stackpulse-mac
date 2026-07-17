@@ -52,8 +52,11 @@ enum StackPulseMain {
                 case .notFound: print("creds: notFound")
                 case .accessDenied: print("creds: accessDenied (Keychain read blocked)")
                 case .parseFailed: print("creds: parseFailed")
+                case .expired: print("creds: expired (CLI and Claude Desktop both aged out)")
                 case .ok: print("creds: ok (token read)")
                 }
+                // Which source answered — the whole point of reading Desktop too.
+                print("desktop: \(ClaudeDesktopAuthStore.describeForDiagnostics())")
                 let outcome = await AnthropicUsageClient.fetchClaudeLimits(claudeVersion: nil)
                 print("limits: \(outcome.limits.count)  error: \(outcome.error ?? "none")")
                 for l in outcome.limits {
