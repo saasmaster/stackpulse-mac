@@ -22,6 +22,7 @@ enum MainSection: String, CaseIterable, Identifiable {
     case projects
     // Configuration (sidebar, pinned below the primary rows)
     case integrations
+    case diagnostics
     case settings
     // Internal sub-panes / chrome
     case alerts
@@ -44,7 +45,7 @@ enum MainSection: String, CaseIterable, Identifiable {
 
     /// Configuration, pinned to the foot of the sidebar under the primary rows.
     /// Settings is last of everything: the least-used control belongs at the end.
-    static let configuration: [MainSection] = [.integrations, .settings]
+    static let configuration: [MainSection] = [.integrations, .diagnostics, .settings]
 
     var id: String { rawValue }
 
@@ -67,6 +68,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .canaries: return "Data Checks"
         case .services: return "Services"
         case .integrations: return "Integrations"
+        case .diagnostics: return "Diagnostics"
         case .settings: return "Settings"
         }
     }
@@ -90,6 +92,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .canaries: return "checkmark.shield"
         case .services: return "server.rack"
         case .integrations: return "puzzlepiece.extension"
+        case .diagnostics: return "stethoscope"
         case .settings: return "gearshape"
         }
     }
@@ -114,6 +117,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .canaries: return "Whether the numbers above can be trusted — what StackPulse read from your logs but could not fully understand."
         case .services: return "Dev servers and services running right now — their ports, which project they belong to, and quick actions."
         case .integrations: return "Detection, health, and the capability matrix for each provider."
+        case .diagnostics: return "Is StackPulse working — and if not, exactly why. Credentials, refresh, permissions, and data integrity, with a repair step for anything wrong."
         case .settings: return "Versions, refresh cadence, cost methodology, and accessibility."
         }
     }
@@ -357,6 +361,7 @@ struct MainWindowView: View {
         case .projects: ProjectsSection()
         // Configuration (sidebar foot).
         case .integrations: IntegrationsSection()
+        case .diagnostics: DiagnosticsSection()
         case .settings: SettingsSection()
         // Internal sub-panes (reached via a composite's sub-tabs) and chrome.
         case .alerts: AlertsSection()

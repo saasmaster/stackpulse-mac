@@ -18,6 +18,47 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Integration Diagnostics — is StackPulse working, and if not, why (app 0.39.0)
+
+The spec's `DIAGNOSTICS` screen (a Phase 1 exit criterion) was never built. The
+signal existed — scattered across Settings, Integrations, Data Checks, and the
+live-limits plumbing — but nowhere did the app answer, in one place, "is this
+working right now, and if not, what do I do." A new **Diagnostics** section
+(Advisor-adjacent, in the configuration nav group) does.
+
+It reads only state the app already gathered — **no new network call, no secret
+read** — and folds it into checks across Versions, Data refresh, Providers,
+Credentials, Data integrity, Notifications, Folder access, and Platform. The one
+genuinely new thing is the derived **"Needs attention"** list: every problem and
+warning, worst first, each with a concrete **repair step**. A diagnostics screen
+that only says "something is wrong" is a dead end; this one says "Claude's login
+expired → run `claude` in Terminal" and "notifications are on but macOS blocked
+them → allow in System Settings."
+
+Built on the same honesty rules as everything else:
+
+- **`N/A` is never folded into `OK`.** Live limits off, notifications off, no local
+  activity to verify, a compatibility manifest that isn't built — all report as
+  not-applicable, not as a clean bill. "Nothing to check" and "checked out fine"
+  are different claims. A no-data canary reading OK would be the exact failure the
+  canaries exist to prevent.
+- **Credential health is the actual outcome of using it** (the live-limits fetch),
+  not "a file exists" — presence is not a working token.
+- **What can't be verified says so.** The compatibility manifest reports "not built
+  in this version" rather than inventing a version; folder readability defers to
+  the real scan error rather than assuming each root is still readable.
+
+Plus a **sanitized support bundle** (the spec's other half): a copy-paste text
+report of versions, status tokens, and repair steps. It carries the guarantee by
+construction — assembled only from the report, which holds no secret, with the home
+directory collapsed to `~`, and no field through which a token, prompt, or log line
+could enter. It states its own guarantee at the top.
+
+21 new tests across the model and the bundle, each mutation-verified: folding a
+no-data canary into OK, and disabling path redaction, each fail exactly the named
+tests. Adding `MainSection.diagnostics` was the usual exhaustive-switch sweep;
+swiftc enumerated every site.
+
 ### Find one project in a long list (app 0.38.0)
 
 30 projects in Projects, 27 in Stack Health, and no way to find one — you scrolled.
