@@ -23,6 +23,31 @@ import Foundation
 /// than severity does.
 enum DependencyAdvicePrompt {
 
+    /// Whether StackPulse **knows** this dependency needs attention — the rule that
+    /// decides both whether the prompt may be offered and what may go in it.
+    ///
+    /// It lives here, next to the prompt, because it is a statement about what we
+    /// are entitled to ask: everything else is a view detail. The distinction that
+    /// matters is `unknown` vs. the rest. The offline core reports **every**
+    /// dependency as `unknown`, so before a registry check the whole manifest looks
+    /// "not up to date" — and a gate that only excluded `up_to_date` would offer to
+    /// describe what's outdated while knowing nothing was.
+    ///
+    /// Takes the raw wire value, not an interpreted case, so a status a newer core
+    /// invents is treated as unknown — never as a finding — until someone teaches
+    /// this function what it means.
+    static func isKnownOutdated(statusRaw: String, advisoryCount: Int) -> Bool {
+        // An advisory is knowledge of a problem no matter what the version says,
+        // including when `latest` never resolved.
+        if advisoryCount > 0 { return true }
+        switch statusRaw {
+        case "minor_behind", "major_behind", "deprecated": return true
+        // `up_to_date` has nothing to ask. `unknown` — and anything unrecognized —
+        // is the absence of an answer, which is not the same as a finding.
+        default: return false
+        }
+    }
+
     /// One dependency, flattened to the facts a reviewer needs. Mirrors what the
     /// row already displays — the prompt must never claim more than the UI does.
     struct Fact {
@@ -53,17 +78,28 @@ enum DependencyAdvicePrompt {
         let path: String
         let ecosystem: String
         let packageManager: String?
-        /// When the registry/OSV check ran. `nil` = it never did, and the prompt
-        /// says so rather than presenting unchecked rows as current.
-        let checkedAt: Date?
+        /// When the registry/OSV check ran.
+        ///
+        /// **Not optional, by construction.** A prompt can only be built once
+        /// StackPulse knows something is outdated, and it can only know that from
+        /// enrichment — the offline core reports every dependency as `unknown`. So
+        /// there is always a real reading behind this, and no "we never checked"
+        /// state to describe.
+        let checkedAt: Date
+        /// Dependencies the check could not resolve — the registry didn't answer
+        /// for them. They are absent from `facts`, and their absence is stated:
+        /// a package missing from this table is **not** a package known to be fine.
+        let unresolvedCount: Int
     }
 
     /// Build the prompt. Pure: every input is passed in, including `now`, so the
     /// output is reproducible and testable.
     ///
-    /// `facts` is expected to be pre-filtered to what the user wants advice on —
-    /// an up-to-date dependency with no advisory has nothing to ask about, and
-    /// padding the prompt with hundreds of clean rows buries the few that matter.
+    /// `facts` must be only what StackPulse actually knows to be outdated or
+    /// vulnerable. Two things it must never contain: an up-to-date dependency
+    /// (nothing to ask), and one whose status is unknown (asking an AI to advise
+    /// on an upgrade StackPulse never established is needed is how a review turns
+    /// into invented work — `unresolvedCount` carries those instead).
     static func build(project: Project, facts: [Fact], now: Date = Date()) -> String {
         var out: [String] = []
 
@@ -86,25 +122,25 @@ enum DependencyAdvicePrompt {
                 + (project.packageManager.map { " (\($0))" } ?? "")
         )
         out.append("- `required` = the range in the manifest. `installed` = the resolved version in the lockfile.")
-        if let checkedAt = project.checkedAt {
+        out.append(
+            "- `latest` and the advisories were read from the package registry and OSV "
+                + "**\(age(from: project.checkedAt, to: now))** (\(stamp(project.checkedAt)))."
+        )
+        if project.unresolvedCount > 0 {
+            let n = project.unresolvedCount
             out.append(
-                "- `latest` and the advisories were read from the package registry and OSV "
-                    + "**\(age(from: checkedAt, to: now))** (\(stamp(checkedAt)))."
-            )
-            out.append("")
-            out.append(
-                "> Those readings may already be stale, and registries move daily. "
-                    + "**Treat every version and advisory id below as a claim to verify, not a fact to repeat.** "
-                    + "If you can look them up, do; if you cannot, say which ones you could not confirm."
-            )
-        } else {
-            out.append(
-                "- **No update check has run**, so `latest` is unknown and no advisories were "
-                    + "looked up. The installed versions are real; everything about what is "
-                    + "current or vulnerable is for you to find out. Do not assume a package "
-                    + "is fine because no advisory is listed — none were fetched."
+                "- **\(n) other dependenc\(n == 1 ? "y is" : "ies are") missing from this table**: "
+                    + "the registry did not answer for \(n == 1 ? "it" : "them"), so whether "
+                    + "\(n == 1 ? "it is" : "they are") current is unknown. "
+                    + "Not listed ≠ known to be fine."
             )
         }
+        out.append("")
+        out.append(
+            "> Those readings may already be stale, and registries move daily. "
+                + "**Treat every version and advisory id below as a claim to verify, not a fact to repeat.** "
+                + "If you can look them up, do; if you cannot, say which ones you could not confirm."
+        )
         out.append("")
 
         // MARK: The boundary

@@ -18,6 +18,39 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### The AI prompt waits until it knows something (app 0.37.1)
+
+0.37.0 gated **Copy AI prompt** on "this project has dependencies that are not up
+to date". That bucket is not what it sounds like. The offline core reports **every**
+dependency as `unknown` — verified on a real project: all 15 of trencito's deps come
+back `unknown`, 0 advisories — so before a registry check the entire manifest counted
+as "not up to date" and the button appeared. It would have copied 15 packages with
+`latest: —` presented as findings, and asked an AI to advise on upgrades nobody had
+established were needed.
+
+The gate is now what it should have said: **at least one dependency StackPulse
+actually knows is outdated** — a resolved `minor_behind` / `major_behind` /
+`deprecated`, or a real advisory. An unrecognized status from a future core counts
+as unknown, not as a finding. `unknown` is the absence of an answer; it is neither a
+problem nor an all-clear, and it is now treated as neither.
+
+Two things follow from that:
+
+- **A known-outdated status can only come from enrichment**, so the prompt can no
+  longer be built without a registry reading behind it. `checkedAt` is non-optional,
+  and the "no update check has run" branch is deleted — it was unreachable, and it
+  was subtly wrong regardless: a check that *ran and failed* is not a check that
+  never ran.
+- **Dependencies the registry never answered for are counted and declared**:
+  *"N other dependencies are missing from this table … Not listed ≠ known to be
+  fine."* They are absent from the table because their status is unknown, and an
+  absence reads as an all-clear unless something says otherwise.
+
+The rule lives in one place (`DependencyAdvicePrompt.isKnownOutdated`) rather than
+in the view that happens to need it — the view is where the previous version of this
+mistake lived. 7 new tests; reintroducing the old gate makes exactly the named ones
+fail.
+
 ### Ask an AI about your dependencies (app 0.37.0)
 
 Stack Health could say "lodash 4.17.20 is behind, and OSV matched GHSA-…". It could

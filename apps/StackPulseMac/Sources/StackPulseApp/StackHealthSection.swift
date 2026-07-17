@@ -187,6 +187,11 @@ private struct Resolved: Identifiable {
     let changeLink: StackHealthClient.ChangeLink?
     /// When the registry answered for this dep. `nil` = it never did.
     let checkedAt: Date?
+    /// Whether StackPulse knows this row needs attention (vs. simply not having
+    /// asked yet). Decided by `DependencyAdvicePrompt.isKnownOutdated` — one rule,
+    /// one home — and stored for the same reason as `actionRank`: the card folds
+    /// it in a single pass.
+    let isKnownOutdated: Bool
     /// Each advisory that has a real URL, worst first.
     ///
     /// Carries the advisories themselves rather than a count, because a count is
@@ -213,6 +218,9 @@ private struct Resolved: Identifiable {
         self.status = status
         self.advisoryCount = advisoryCount
         self.worstAdvisory = worstAdvisory
+        self.isKnownOutdated = DependencyAdvicePrompt.isKnownOutdated(
+            statusRaw: statusRaw, advisoryCount: advisoryCount
+        )
         // Worst first, then by id so equal severities can't reshuffle between
         // renders. NOT truncated: `advisoryCount` and this list must agree, or the
         // chip would count something the row won't open.
@@ -1150,6 +1158,16 @@ private struct StackProjectCard: View {
     private let upToDate: [Resolved]
     private let summary: ProjectSummary
     private let accent: Color
+    /// What this card KNOWS needs attention: a resolved outdated status, or an
+    /// advisory. Deliberately excludes `.unknown` — an unchecked project resolves
+    /// every dependency to `.unknown`, and those land in `notUpToDate` too. Asking
+    /// for advice on them would be asking about an upgrade nobody established was
+    /// needed. Empty ⇒ StackPulse does not yet know anything is outdated.
+    private let actionable: [Resolved]
+    /// Checked, but the registry never answered — status still unknown. Counted,
+    /// not listed: their absence from the prompt is itself a claim, and it gets
+    /// stated rather than left to be read as "fine".
+    private let unresolvedCount: Int
 
     init(
         proj: ProjectStack,
@@ -1172,13 +1190,25 @@ private struct StackProjectCard: View {
         // One walk instead of the two order-preserving `filter`s it replaces.
         var notUp: [Resolved] = []
         var up: [Resolved] = []
+        var act: [Resolved] = []
+        var unresolved = 0
         for r in sorted {
             if r.status == .upToDate { up.append(r) } else { notUp.append(r) }
+            if r.isKnownOutdated {
+                act.append(r)
+            } else if r.status == .unknown {
+                // Asked, never answered. Not a finding, and not an all-clear.
+                unresolved += 1
+            }
         }
         let summary = ProjectSummary(resolved)
 
         self.notUpToDate = notUp
         self.upToDate = up
+        self.actionable = act
+        // Only meaningful once a check ran: with checking off, every row is
+        // `.unknown` by design (inventory only) and nothing went unanswered.
+        self.unresolvedCount = checking ? unresolved : 0
         self.summary = summary
         self.accent = cardAccent(summary, state: state)
     }
@@ -1306,37 +1336,54 @@ private struct StackProjectCard: View {
     /// read), this exports the facts, stamped and bounded, for something that can
     /// reason about them.
     ///
-    /// Absent when there is nothing to ask about: an all-clear project would
-    /// produce a prompt with an empty table.
+    /// Absent until StackPulse actually knows something is outdated.
+    ///
+    /// The gate is `actionable`, not `notUpToDate`. Those differ in exactly the
+    /// case that matters: before a check, every dependency resolves to `.unknown`
+    /// and lands in `notUpToDate`, so gating on that offered to describe what's
+    /// outdated while knowing nothing was — the prompt would have been a list of
+    /// packages with `latest: —`, dressed as findings. A known-outdated status can
+    /// only come from enrichment (the offline core reports `unknown` for
+    /// everything), so a non-empty `actionable` IS "the check ran and found
+    /// something", and `checkedAt` below is guaranteed to exist.
     @ViewBuilder private var advicePromptControl: some View {
-        if !notUpToDate.isEmpty {
-            Button { copyAdvicePrompt() } label: {
+        if let data = advicePrompt {
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(data, forType: .string)
+            } label: {
                 Label("Copy AI prompt", systemImage: "doc.on.clipboard")
                     .font(.caption2.weight(.medium))
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
             .help(
-                state.hasRealData
-                    ? "Copy a prompt describing \(notUpToDate.count) dependenc\(notUpToDate.count == 1 ? "y" : "ies") that need attention — installed vs. latest, advisory ids and links, and when each was read — to paste into an AI for upgrade advice."
-                    : "Copy a prompt listing \(notUpToDate.count) dependenc\(notUpToDate.count == 1 ? "y" : "ies") with their installed versions. No update check has run, so the prompt says the latest versions are unknown and asks the AI to look them up."
+                "Copy a prompt describing the \(actionable.count) dependenc\(actionable.count == 1 ? "y" : "ies") "
+                    + "found outdated or vulnerable — installed vs. latest, advisory ids and links, "
+                    + "and when they were read — to paste into an AI for upgrade advice."
             )
             .accessibilityLabel("Copy an AI upgrade-advice prompt for \(proj.name)")
         }
     }
 
-    private func copyAdvicePrompt() {
-        let text = DependencyAdvicePrompt.build(
+    /// The prompt text, or `nil` when there is nothing StackPulse knows to ask
+    /// about. `checkedAt` is taken from the findings themselves rather than
+    /// assumed: if somehow nothing carries a reading time, there is no provenance
+    /// to state, and a prompt without provenance is the thing this must not emit.
+    private var advicePrompt: String? {
+        guard !actionable.isEmpty,
+              let checkedAt = actionable.compactMap(\.checkedAt).max()
+        else { return nil }
+        return DependencyAdvicePrompt.build(
             project: .init(
                 name: proj.name,
                 path: proj.path,
                 ecosystem: proj.ecosystem,
                 packageManager: proj.package_manager,
-                // The newest reading on this card. `nil` when nothing was checked,
-                // which the prompt reports rather than passing off as current.
-                checkedAt: notUpToDate.compactMap(\.checkedAt).max()
+                checkedAt: checkedAt,
+                unresolvedCount: unresolvedCount
             ),
-            facts: notUpToDate.map { r in
+            facts: actionable.map { r in
                 DependencyAdvicePrompt.Fact(
                     name: r.dep.name,
                     ecosystem: r.dep.ecosystem,
@@ -1351,9 +1398,6 @@ private struct StackProjectCard: View {
                 )
             }
         )
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(text, forType: .string)
     }
 }
 
