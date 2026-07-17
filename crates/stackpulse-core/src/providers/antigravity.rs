@@ -25,10 +25,19 @@ use stackpulse_protocol::{
 
 pub struct AntigravityProvider;
 
-/// Only read this many bytes of a conversation DB when recovering the model id —
-/// the identifier appears within the first records, so we never read the whole
-/// (multi-MB) file.
-const MODEL_SCAN_BYTES: usize = 256 * 1024;
+/// Only read this many bytes of a conversation DB when recovering the model id,
+/// so a multi-MB trajectory never has to be read in full.
+///
+/// This was 256 KiB, which was **too small to be correct**. A conversation DB
+/// holds both truncated per-step refs (`gemini-3-flash-a`) and the full id
+/// (`gemini-3-flash-agent`); `extract_model` keeps the longest run, so it only
+/// reports the real name if the full form is inside the window. Measured across
+/// a real 30-conversation corpus, the first *complete* id sat as deep as
+/// **412 KiB** — outside the old window — so the newest conversation reported
+/// `gemini-3-flash-a`, a string that is not a model. 1 MiB clears the observed
+/// worst case by ~2.5×, and a short window fails toward the generic fallback
+/// label rather than toward a fabricated name (see `extract_model`).
+const MODEL_SCAN_BYTES: u64 = 1024 * 1024;
 
 /// `~/.gemini/antigravity` — the shared Gemini home holds Antigravity's data.
 pub fn base_dir() -> Option<PathBuf> {
@@ -120,10 +129,13 @@ fn step_count(_path: &Path) -> Option<u64> {
 /// found (then we fall back to a generic label).
 fn extract_model(path: &Path) -> Option<String> {
     use std::io::Read;
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut buf = vec![0u8; MODEL_SCAN_BYTES];
-    let n = file.read(&mut buf).ok()?;
-    let hay = &buf[..n];
+    let file = std::fs::File::open(path).ok()?;
+    // `Read::read` fills the buffer with however much *one* syscall returns,
+    // which is not required to be the whole request. Reading through a bounded
+    // `take` loops until the cap or EOF, so the window is the size we said.
+    let mut hay: Vec<u8> = Vec::new();
+    file.take(MODEL_SCAN_BYTES).read_to_end(&mut hay).ok()?;
+
     let needle = b"gemini-";
     let mut best: Option<&[u8]> = None;
     let mut i = 0usize;
@@ -138,9 +150,16 @@ fn extract_model(path: &Path) -> Option<String> {
             }
             end += 1;
         }
-        let run = &hay[start..end];
-        if best.map(|b| run.len() > b.len()).unwrap_or(true) {
-            best = Some(run);
+        // A run touching the end of the window may have been cut by the window
+        // rather than by the data. We cannot tell a real id from a severed one
+        // — both are plausible ASCII — so this candidate is discarded rather
+        // than risk reporting a name the user never used.
+        let clipped = end == hay.len();
+        if !clipped {
+            let run = &hay[start..end];
+            if best.map(|b| run.len() > b.len()).unwrap_or(true) {
+                best = Some(run);
+            }
         }
         i = end.max(start + 1);
     }
@@ -361,6 +380,50 @@ mod tests {
         let tmp = std::env::temp_dir().join("sp_ag_nomodel_test.db");
         std::fs::write(&tmp, b"no model marker here, just bytes").unwrap();
         assert_eq!(extract_model(&tmp), None);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// The field failure, pinned. On a real 30-conversation corpus the *newest*
+    /// DB carried the truncated per-step ref at byte 27_422 and its first
+    /// complete id at byte 412_816 — outside the old 256 KiB window. So the scan
+    /// saw only `gemini-3-flash-a` and StackPulse displayed it as the model. It
+    /// is not a model; it is a severed string.
+    #[test]
+    fn extract_model_finds_a_full_id_deeper_than_the_old_window() {
+        let mut data = Vec::with_capacity(500 * 1024);
+        data.extend_from_slice(b"\x00\x14header ");
+        data.extend_from_slice(b"gemini-3-flash-a\x00"); // truncated ref, early
+        data.resize(412_816, 0x11); // binary filler past the old 256 KiB bound
+        data.extend_from_slice(b"gemini-3-flash-agent\x00");
+        data.extend_from_slice(b"\x10trailing\x00");
+        let tmp = std::env::temp_dir().join("sp_ag_deep_model_test.db");
+        std::fs::write(&tmp, &data).unwrap();
+        assert_eq!(
+            extract_model(&tmp),
+            Some("gemini-3-flash-agent".to_string()),
+            "the complete id sits past 256 KiB in real data and must still be found"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// A run touching the window's edge may have been severed by the window
+    /// rather than by the data, and the two are indistinguishable. Reporting it
+    /// would mean printing a model the user never ran, so it must be discarded —
+    /// the caller then falls back to a generic label, which is honest.
+    #[test]
+    fn extract_model_discards_a_run_clipped_by_the_window() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"\x00pad\x00");
+        // Fill so that a `gemini-…` run runs off the end of the scan window.
+        data.resize(MODEL_SCAN_BYTES as usize - 10, 0x11);
+        data.extend_from_slice(b"gemini-3-flash-agent-and-more-beyond-the-edge");
+        let tmp = std::env::temp_dir().join("sp_ag_clipped_model_test.db");
+        std::fs::write(&tmp, &data).unwrap();
+        assert_eq!(
+            extract_model(&tmp),
+            None,
+            "a run cut by the buffer edge must never be reported as a model"
+        );
         let _ = std::fs::remove_file(&tmp);
     }
 

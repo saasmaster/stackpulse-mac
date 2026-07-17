@@ -18,6 +18,97 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### One window, one refresh button, one honesty rule (app 0.36.0)
+
+Four separate reports, one shared root: a rule written on a *surface* instead of
+on the *thing it describes*, then not carried to the other surfaces.
+
+**Windows: 4 → 3.** The Settings window was a shell hosting `SettingsSection` and
+`IntegrationsSection` — views its own doc comment admitted "the main window used
+to host". Configuration had been moved out of the one window that owns
+everything, so settings and features ended up scattered across surfaces. Folded
+back: Settings and Integrations are main-window sections again, `⌘,` routes
+there, and `SettingsWindowController`/`SettingsWindowView`/`SettingsTab` are
+gone. The remaining windows each have a distinct job — the main window (do
+things), the Command Center (watch a second display), the edge sidebar (glance) —
+plus the menu-bar popover (peek).
+
+**The gear is last.** It sat 2nd of 5 in the popover header; it is now rightmost,
+and last in the main window's nav. Settings is the least-used control.
+
+**The refresh icon was dancing.** Four hand-rolled copies of:
+
+```swift
+.rotationEffect(.degrees(isLoading ? 360 : 0))
+.animation(isLoading ? .linear(duration: 1).repeatForever(…) : .default, value: isLoading)
+```
+
+`.animation(_:value:)` fires on *every* change of `isLoading`, including
+true→false — so a **completed** refresh animated the rotation 360°→0°: a full
+turn backwards, on every refresh, including the automatic ones nobody asked for.
+Now one `RefreshButton` owns its angle and cancels the repeating animation in a
+transaction with animations disabled, so it halts instead of unwinding. A second
+mover was `SnapshotMetaBar` inserting a "refreshing" indicator on each auto-
+refresh and reflowing the layout; it no longer changes footprint.
+
+**Antigravity was described in units it never reported.** Google meters
+Antigravity's tokens and cost server-side; searching `~/.gemini` and
+`~/Library/Application Support/Antigravity` finds no quota, credit, or percentage
+data at all. There is no percentage to show, and inventing one is out.
+
+`PopoverView` knew this and rendered sessions + model instead of a spend row —
+via **private** `hasLocalSpend`/`hasActivity` helpers. No other surface had them,
+so the Command Center, Overview and Sidebar rendered Antigravity as a
+spend-reporting provider with a missing figure. The dollars already read `—`
+(honest), but the token cell printed **`0 tok`** — `TokenTotals::default()` shown
+as a *measured* zero, when the truth is the count was never published here.
+
+The rule now lives on `ProviderUsage` (`hasLocalSpend`, `hasLocalActivity`,
+`isActivityOnly`), so a new surface inherits it instead of re-deriving it, and
+`ProviderActivityRow`/`NoLocalSpendNote` are shared views.
+
+**A turns total was mixing units.** The protocol defines `SpendWindow.records` as
+assistant turns, but a provider with no local token accounting reuses the field
+for whatever it *can* count — Antigravity puts *conversations* there. A tile
+labelled "Turns (30d)" summed both into a number that was neither. Activity-only
+providers are now excluded from `total30Turns`.
+
+**The Command Center had no icon of its own** — it borrowed
+`gauge.with.dots.needle.67percent`, the app's brand mark and menu-bar glyph, so
+the button that opened it looked exactly like the button that opened StackPulse.
+An icon identical to another icon identifies nothing. It now has a drawn mark: a
+radar scope over a bright center.
+
+**Antigravity was naming a model that does not exist (core).** The card showed
+`gemini-3-flash-a`. That is not a model — it is a severed string. The model id is
+recovered by scanning a bounded prefix of the conversation DB for a `gemini-…`
+run; the DB stores both truncated per-step refs (`gemini-3-flash-a`) and the full
+id (`gemini-3-flash-agent`), and the scan keeps the longest run it sees. The
+window was 256 KiB. In the real corpus the newest conversation carried the
+truncated ref at byte 27_422 and its first complete id at byte **412_816** —
+outside the window — so the truncated form was the longest run present, won, and
+was displayed. The window is now 1 MiB, and a run touching the window's edge is
+discarded rather than reported, since a severed id and a real one are
+indistinguishable; the scan now fails toward the generic label instead of toward
+a fabricated name. Also fixed a latent short-read: `Read::read` returns one
+syscall's worth, not the whole request, so the window was only nominally its
+stated size.
+
+**The app could silently ship a stale core (build).** SwiftPM pulls the Rust
+staticlib in through linker flags, not a declared dependency, so when only the
+core changes `swift build` considers the executable up to date and re-links the
+**old** core. The model fix above was green in `cargo test` and correct via the
+CLI while the packaged app still returned the old value — the tree looked fully
+rebuilt and was not. `build-app.sh` now drops the executable when the staticlib
+is newer, forcing a re-link. Any past "verified" app build that touched only the
+core is suspect for this reason.
+
+Twelve new tests pin these rules (8 Swift, 4 Rust), each verified by
+reintroducing the bug it claims to catch: removing the `total30Turns` filter
+yields 337 instead of 310, and restoring the 256 KiB window reproduces
+`gemini-3-flash-a` exactly — each failing exactly one named test. Gate:
+**230 Rust tests, 53 Swift tests**, clippy and fmt clean.
+
 ### Live limits actually work now (app 0.33.0)
 
 **Claude's percentage was wrong, and the fix was to read the right source.**

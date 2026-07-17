@@ -31,7 +31,6 @@ enum CommandCenterPreset: Hashable, CaseIterable {
 struct CommandCenterView: View {
     @EnvironmentObject var store: SnapshotStore
     @EnvironmentObject var theme: ThemeManager
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var onMoveToScreen: (Int) -> Void
     var onToggleFullScreen: () -> Void
@@ -57,8 +56,7 @@ struct CommandCenterView: View {
     private var toolbar: some View {
         HStack(spacing: 16) {
             HStack(spacing: 8) {
-                Image(systemName: "gauge.with.dots.needle.67percent")
-                    .font(.title3)
+                CommandCenterIcon(size: 17)
                     .foregroundStyle(.tint)
                 Text("Command Center")
                     .font(.title3.weight(.bold))
@@ -78,16 +76,8 @@ struct CommandCenterView: View {
             .buttonStyle(.borderless)
             .help("Toggle full screen")
 
-            Button(action: { store.refresh() }) {
-                Image(systemName: "arrow.clockwise")
-                    .rotationEffect(.degrees(store.isLoading && !reduceMotion ? 360 : 0))
-                    .animation(store.isLoading && !reduceMotion
-                        ? .linear(duration: 1).repeatForever(autoreverses: false)
-                        : .default, value: store.isLoading)
-            }
-            .buttonStyle(.borderless)
-            .help("Refresh now")
-            .disabled(store.isLoading)
+            RefreshButton(isLoading: store.isLoading) { store.refresh() }
+                .buttonStyle(.borderless)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
@@ -220,10 +210,17 @@ private struct BigUsageCard: View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
-            HStack(alignment: .top, spacing: 0) {
-                spendCell("Today", provider.today)
-                Divider().frame(height: 40)
-                spendCell("30 days", provider.last30).padding(.leading, 14)
+            // A server-metered provider has no local token or dollar figure: the
+            // spend cells would print "0 tok" for a count never reported here.
+            if provider.isActivityOnly {
+                ProviderActivityRow(provider: provider)
+                NoLocalSpendNote()
+            } else {
+                HStack(alignment: .top, spacing: 0) {
+                    spendCell("Today", provider.today)
+                    Divider().frame(height: 40)
+                    spendCell("30 days", provider.last30).padding(.leading, 14)
+                }
             }
 
             if let limit = provider.hottestLimit {
@@ -238,7 +235,10 @@ private struct BigUsageCard: View {
                 DailyBarChart(daily: daily, tint: .blue, height: 64)
             }
 
-            if let top = provider.models.max(by: { ($0.estimated_cost_usd ?? -1) < ($1.estimated_cost_usd ?? -1) }) {
+            // Ranking models by cost requires measured cost; an activity-only
+            // card already names its model in the activity row's chip.
+            if provider.hasLocalSpend,
+               let top = provider.models.max(by: { ($0.estimated_cost_usd ?? -1) < ($1.estimated_cost_usd ?? -1) }) {
                 Divider().opacity(0.4)
                 HStack(spacing: 6) {
                     Image(systemName: "cpu").imageScale(.small).foregroundStyle(.secondary)
@@ -484,7 +484,11 @@ private struct TopModelsPanel: View {
     }
 
     private var rows: [Row] {
-        let all = snapshot.installedProviders.flatMap { p in
+        // Only locally metered providers can be ranked by cost: a server-metered
+        // row would read "0 tok · —", a zero that was never reported rather than
+        // one that was measured. A priced provider's unpriceable model still
+        // belongs — its "—" sits next to a real token count.
+        let all = snapshot.installedProviders.filter(\.hasLocalSpend).flatMap { p in
             p.models.map { Row(provider: p.display_name, model: $0) }
         }
         return all

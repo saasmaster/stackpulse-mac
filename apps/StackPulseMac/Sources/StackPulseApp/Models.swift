@@ -242,6 +242,33 @@ struct ProviderUsage: Codable, Sendable, Identifiable {
         !models.isEmpty || !limits.isEmpty || (last30?.records ?? 0) > 0
     }
 
+    /// True when the core measured real token/cost usage **locally** (Claude,
+    /// Codex). False for providers whose accounting happens server-side.
+    ///
+    /// This lives on the model, not on a view, because it is a fact about the
+    /// data rather than a rendering preference — and because the one surface
+    /// that owned a private copy of it (the popover) was the only surface that
+    /// rendered Antigravity honestly. Every other card showed `$0.00 · 0 tokens`
+    /// for a provider that had simply never reported tokens locally.
+    var hasLocalSpend: Bool {
+        let tokens = (today?.tokens.grandTotal ?? 0) + (last30?.tokens.grandTotal ?? 0)
+        let cost = (today?.estimated_cost_usd ?? 0) + (last30?.estimated_cost_usd ?? 0)
+        return tokens > 0 || cost > 0
+    }
+
+    /// True when there is local activity to show even without token accounting
+    /// (e.g. Antigravity conversation counts).
+    var hasLocalActivity: Bool {
+        (last30?.records ?? 0) > 0 || (today?.records ?? 0) > 0
+    }
+
+    /// A detected provider that reports activity but whose tokens and dollars are
+    /// accounted for server-side. Such a provider must **never** be given a spend
+    /// row: `$0.00` would read as "you spent nothing", when the truth is "this
+    /// number was never published to your Mac". Absence of evidence, reported as
+    /// absence — not as zero.
+    var isActivityOnly: Bool { installed && !hasLocalSpend && hasLocalActivity }
+
     /// Two-letter code for the compact menu-bar readout.
     var shortCode: String {
         switch provider {

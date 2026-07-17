@@ -8,12 +8,11 @@ struct PopoverView: View {
     var onToggleSidebar: (() -> Void)? = nil
     /// Invoked to open the Command Center monitoring window (wired to `AppDelegate`).
     var onOpenCommandCenter: (() -> Void)? = nil
-    /// Invoked to open the dedicated Settings window (wired to `AppDelegate`).
+    /// Invoked to open the main window on its Settings section (wired to `AppDelegate`).
     var onOpenSettings: (() -> Void)? = nil
 
     @EnvironmentObject var store: SnapshotStore
     @EnvironmentObject var theme: ThemeManager
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,17 +50,9 @@ struct PopoverView: View {
                 .help("Toggle edge sidebar (⌥⌘S)")
                 .accessibilityLabel("Toggle edge sidebar")
             }
-            if onOpenSettings != nil {
-                Button(action: { onOpenSettings?() }) {
-                    Image(systemName: "gearshape")
-                }
-                .buttonStyle(.borderless)
-                .help("Open Settings (⌘,)")
-                .accessibilityLabel("Open Settings")
-            }
             if onOpenMainWindow != nil {
                 Button(action: {
-                    // "Open" lands on the Overview dashboard (the useful info),
+                    // "Open" lands on the Home dashboard (the useful info),
                     // not wherever the window was last left (e.g. Settings).
                     store.pendingSection = .home
                     onOpenMainWindow?()
@@ -74,23 +65,24 @@ struct PopoverView: View {
             }
             if onOpenCommandCenter != nil {
                 Button(action: { onOpenCommandCenter?() }) {
-                    Image(systemName: "rectangle.on.rectangle.angled")
+                    CommandCenterIcon()
                 }
                 .buttonStyle(.borderless)
                 .help("Open Command Center (⌘⇧C)")
                 .accessibilityLabel("Open Command Center")
             }
-            Button(action: { store.refresh() }) {
-                Image(systemName: "arrow.clockwise")
-                    .rotationEffect(.degrees(store.isLoading && !reduceMotion ? 360 : 0))
-                    .animation(store.isLoading && !reduceMotion
-                        ? .linear(duration: 1).repeatForever(autoreverses: false)
-                        : .default, value: store.isLoading)
+            RefreshButton(isLoading: store.isLoading) { store.refresh() }
+                .buttonStyle(.borderless)
+            // Settings sits last, at the right edge: it is the least-used control
+            // in this row.
+            if onOpenSettings != nil {
+                Button(action: { onOpenSettings?() }) {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .help("Open Settings (⌘,)")
+                .accessibilityLabel("Open Settings")
             }
-            .buttonStyle(.borderless)
-            .help("Refresh now")
-            .accessibilityLabel("Refresh now")
-            .disabled(store.isLoading)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -297,19 +289,21 @@ struct ProviderCard: View {
             }
             if provider.installed {
                 // Providers the core prices locally (Claude/Codex) get the spend
-                // row; activity-only providers whose cost is server-side
-                // (Antigravity) show a session/model row instead of a misleading
-                // "$0 · 0 tokens".
-                if hasLocalSpend {
+                // row. Activity-only providers (Antigravity) get a session/model
+                // row: a spend cell would print "0 tok", and a zero read as
+                // measured is a fabrication — the count was never published here.
+                // The server-side reason arrives with `provider.notes` below, so
+                // no `NoLocalSpendNote` here.
+                if provider.hasLocalSpend {
                     spendRow
                     if let a = provider.analytics { analyticsRow(a) }
-                } else if hasActivity {
-                    activityRow
+                } else if provider.hasLocalActivity {
+                    ProviderActivityRow(provider: provider)
                 }
                 if !provider.limits.isEmpty { limitsSection }
                 liveLimitsNote
                 if let cache = cacheFraction { cacheRow(cache) }
-                if hasLocalSpend, let top = provider.models.first { topModelRow(top) }
+                if provider.hasLocalSpend, let top = provider.models.first { topModelRow(top) }
             } else if provider.balance == nil {
                 Text("Not detected on this Mac.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -349,45 +343,11 @@ struct ProviderCard: View {
         }
     }
 
-    /// True when the core measured real token/cost usage locally (Claude/Codex).
-    /// False for activity-only providers (Antigravity) whose accounting is
-    /// server-side — showing them a `$0 · 0 tokens` spend row would misread.
-    private var hasLocalSpend: Bool {
-        let tokens = (provider.today?.tokens.grandTotal ?? 0) + (provider.last30?.tokens.grandTotal ?? 0)
-        let cost = (provider.today?.estimated_cost_usd ?? 0) + (provider.last30?.estimated_cost_usd ?? 0)
-        return tokens > 0 || cost > 0
-    }
-
-    /// True when there's local activity to show even without token accounting
-    /// (e.g. Antigravity conversation counts).
-    private var hasActivity: Bool {
-        (provider.last30?.records ?? 0) > 0 || (provider.today?.records ?? 0) > 0
-    }
-
     private var spendRow: some View {
         HStack(spacing: 0) {
             spendCell("Today", provider.today)
             Divider().frame(height: 30)
             spendCell("30 days", provider.last30)
-        }
-    }
-
-    /// Activity summary for providers without local token/cost accounting: the
-    /// session count (today + 30-day) and the model, instead of a spend row.
-    private var activityRow: some View {
-        let total = provider.last30?.records ?? 0
-        let today = provider.today?.records ?? 0
-        return HStack(spacing: 8) {
-            Image(systemName: "bubble.left.and.text.bubble.right")
-                .imageScale(.small)
-                .foregroundStyle(.secondary)
-            Text("\(total) session\(total == 1 ? "" : "s") · \(today) today")
-                .font(.subheadline.weight(.medium))
-                .monospacedDigit()
-            Spacer()
-            if let model = provider.models.first?.model {
-                Chip(text: model, systemImage: "cpu", tint: .cyan)
-            }
         }
     }
 

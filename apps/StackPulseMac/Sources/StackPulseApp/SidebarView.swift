@@ -72,21 +72,17 @@ struct SidebarView: View {
                     .accessibilityLabel("Keep Awake is on")
             }
             // Quick toggle: flip the sidebar to the other screen edge live.
-            // These three are icon-only, so each needs an explicit label — the
-            // `.help` beside it is AX *help* (supplemental, hint-gated), not a name.
+            // These are icon-only, so each needs an explicit label — the `.help`
+            // beside it is AX *help* (supplemental, hint-gated), not a name.
+            // ``RefreshButton`` carries its own label and disabled state.
             Button(action: { store.sidebarOnLeft.toggle() }) {
                 Image(systemName: store.sidebarOnLeft ? "arrow.right.to.line" : "arrow.left.to.line")
             }
             .buttonStyle(.borderless)
             .help(store.sidebarOnLeft ? "Move sidebar to the right edge" : "Move sidebar to the left edge")
             .accessibilityLabel(store.sidebarOnLeft ? "Move sidebar to the right edge" : "Move sidebar to the left edge")
-            Button(action: { store.refresh() }) {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.borderless)
-            .help("Refresh now")
-            .accessibilityLabel("Refresh now")
-            .disabled(store.isLoading)
+            RefreshButton(isLoading: store.isLoading) { store.refresh() }
+                .buttonStyle(.borderless)
             if onClose != nil {
                 Button(action: { onClose?() }) {
                     Image(systemName: "xmark")
@@ -444,15 +440,13 @@ private extension ProviderUsage {
     /// balance. False ⇒ the core detected it and knows nothing else about it, so
     /// a full card would be a name and a dot in 37pt of glass.
     ///
-    /// Deliberately wider than ``SidebarProviderRow``'s `hasSpend`: that one picks
-    /// *which* metrics line to draw (spend vs sessions), this one asks whether
-    /// there is a line to draw at all.
+    /// Deliberately wider than ``ProviderUsage/hasLocalSpend``: that one picks
+    /// *which* line to draw (spend vs sessions), this one asks whether there is a
+    /// line to draw at all. `hasLocalActivity` is what keeps an activity-only
+    /// provider out of the "nothing measured yet" grid — its sessions are measured.
     var sidebarHasDetail: Bool {
-        (today?.tokens.grandTotal ?? 0) > 0
-            || (last30?.tokens.grandTotal ?? 0) > 0
-            || (today?.estimated_cost_usd ?? 0) > 0
-            || (last30?.estimated_cost_usd ?? 0) > 0
-            || (last30?.records ?? 0) > 0
+        hasLocalSpend
+            || hasLocalActivity
             || !limits.isEmpty
             || balance != nil
     }
@@ -510,19 +504,11 @@ private struct SidebarQuietProvidersCard: View {
 }
 
 /// One rich condensed provider row for the edge sidebar: health dot, name, spend
-/// (or a server-side note), a metrics line (tokens · turns · cache, or sessions ·
-/// model for activity-only providers like Antigravity), and the hottest live
-/// limit as a meter.
+/// (omitted entirely when none was measured locally), a metrics line (tokens ·
+/// turns · cache, or the compact session count for activity-only providers like
+/// Antigravity), and the hottest live limit as a meter.
 private struct SidebarProviderRow: View {
     let provider: ProviderUsage
-
-    /// True when the core measured real token/cost usage locally (Claude/Codex).
-    private var hasSpend: Bool {
-        (provider.today?.tokens.grandTotal ?? 0) > 0
-            || (provider.last30?.tokens.grandTotal ?? 0) > 0
-            || (provider.today?.estimated_cost_usd ?? 0) > 0
-            || (provider.last30?.estimated_cost_usd ?? 0) > 0
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -533,7 +519,7 @@ private struct SidebarProviderRow: View {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 Spacer()
-                if hasSpend {
+                if provider.hasLocalSpend {
                     Text("\(Format.usd(provider.today?.estimated_cost_usd)) / \(Format.usd(provider.last30?.estimated_cost_usd))")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -581,9 +567,10 @@ private struct SidebarProviderRow: View {
     }
 
     /// The at-a-glance metrics: tokens · turns · cache for measured providers, or
-    /// sessions · model for activity-only ones (server-side cost, e.g. Antigravity).
+    /// the shared activity row for activity-only ones (server-side cost, e.g.
+    /// Antigravity). `compact` drops the model chip — this panel is 320pt wide.
     @ViewBuilder private var metricsLine: some View {
-        if hasSpend {
+        if provider.hasLocalSpend {
             HStack(spacing: 10) {
                 if let t = provider.today?.tokens.grandTotal, t > 0 {
                     metric("bolt.fill", "\(Format.tokens(t)) today")
@@ -596,14 +583,8 @@ private struct SidebarProviderRow: View {
                 }
                 Spacer(minLength: 0)
             }
-        } else if let sessions = provider.last30?.records, sessions > 0 {
-            HStack(spacing: 10) {
-                metric("bubble.left.and.text.bubble.right", "\(sessions) session\(sessions == 1 ? "" : "s")")
-                if let model = provider.models.first?.model {
-                    metric("cpu", model)
-                }
-                Spacer(minLength: 0)
-            }
+        } else if provider.isActivityOnly {
+            ProviderActivityRow(provider: provider, compact: true)
         }
     }
 

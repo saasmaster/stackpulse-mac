@@ -116,13 +116,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// theme switch drives the whole app (popover, window, edge sidebar).
     private let theme = ThemeManager()
     private var mainWindowController: MainWindowController?
-    private var settingsWindow: SettingsWindowController?
     private var commandCenter: CommandCenterController?
     private var edgeSidebar: EdgeSidebarController?
     private var sidebarMenuItem: NSMenuItem?
     private var keepAwakeMenuItem: NSMenuItem?
     private var commandCenterObserver: (any NSObjectProtocol)?
-    private var settingsObserver: (any NSObjectProtocol)?
     private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -151,13 +149,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.showCommandCenter() }
         }
 
-        // Any surface (main-window footer gear, etc.) can request Settings.
-        settingsObserver = NotificationCenter.default.addObserver(
-            forName: .stackPulseOpenSettings, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.openSettings() }
-        }
-
         // Reflect snapshot / loading / alert changes in the menu-bar button.
         store.$snapshot
             .receive(on: RunLoop.main)
@@ -177,12 +168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         // A click on a delivered notification opens the app on needs-attention.
-        // Set the target section first, then open — matching the popover's
-        // navigation pattern so both the first-open and already-open paths route.
         store.notifications.onOpen = { [weak self] in
-            guard let self else { return }
-            self.store.pendingSection = .alerts
-            self.openMainWindow()
+            self?.showSection(.alerts)
         }
 
         store.start()
@@ -191,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--open-window") {
             openMainWindow()
         }
-        // Optional: open straight to the Settings window (testing).
+        // Optional: open straight to the main window's Settings section (testing).
         if CommandLine.arguments.contains("--open-settings") {
             openSettings()
         }
@@ -203,6 +190,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: Main window
+
+    /// Open (or focus) the main window on a specific section. The target is set
+    /// before the window opens so both paths route: a window opening for the
+    /// first time reads it on appear, a live one observes the change.
+    func showSection(_ section: MainSection) {
+        store.pendingSection = section
+        openMainWindow()
+    }
 
     /// Open (or re-focus) the main application window. Flips the activation
     /// policy to `.regular` so the window can take focus and gets a real menu
@@ -227,33 +222,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: Settings window
+    // MARK: Settings
 
-    /// Open (or focus) the dedicated Settings window — configuration lives here,
-    /// separate from the dashboards in the main window. Menu / ⌘, target.
+    /// Settings is a section of the main window, not a window of its own — one
+    /// window holds the configuration and the data it configures. Menu / ⌘, target.
     @objc func openSettings() {
-        showSettings(tab: nil)
-    }
-
-    /// Open Settings on a specific tab (e.g. Integrations).
-    func showSettings(tab: SettingsTab?) {
-        popover.performClose(nil)
-        if settingsWindow == nil {
-            settingsWindow = SettingsWindowController(store: store, theme: theme) { [weak self] in
-                self?.settingsWindowDidClose()
-            }
-        }
-        NSApp.setActivationPolicy(.regular)
-        settingsWindow?.show(tab: tab)
-    }
-
-    private func settingsWindowDidClose() {
-        // Return to accessory only if no other real window is still open.
-        let mainOpen = mainWindowController?.window?.isVisible ?? false
-        let ccOpen = commandCenter?.isVisible ?? false
-        if !mainOpen && !ccOpen {
-            NSApp.setActivationPolicy(.accessory)
-        }
+        showSection(.settings)
     }
 
     // MARK: Command Center window
@@ -508,3 +482,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return nil
     }
 }
+

@@ -2,15 +2,16 @@ import SwiftUI
 
 // MARK: - Sections
 
-/// The top-level destinations in the main window sidebar.
-/// A routable pane. The five **primary** sections (`home`, `usage`, `missions`,
-/// `advisor`, `projects`) are what the sidebar shows — each a deep surface that
-/// answers one user question. The rest are **internal sub-panes** reused by those
-/// composites (e.g. `insights`/`discover`/`stackHealth` live under Advisor;
-/// `usage`'s breakdown/`trends`/`reports` under Usage) or reached from chrome
-/// (`alerts` from the toolbar bell; `integrations`/`settings` in the Settings
-/// window). Keeping them as cases lets each existing view stay the single owner
-/// of its own rendering (information hiding) while the nav stays small.
+/// A routable pane of the one window.
+///
+/// **primary** sections are the deep surfaces, each answering one user question.
+/// **configuration** sections (`integrations`, `settings`) are pinned below them,
+/// Settings last — it is the least-used control here. The rest are **internal
+/// sub-panes** reused by those composites (e.g. `insights`/`discover`/`stackHealth`
+/// live under Advisor; `usage`'s breakdown/`trends`/`reports` under Usage) or
+/// reached from chrome (`alerts` from the sidebar bell). Keeping them as cases
+/// lets each existing view stay the single owner of its own rendering
+/// (information hiding) while the nav stays small.
 enum MainSection: String, CaseIterable, Identifiable {
     // Primary (sidebar)
     case home
@@ -19,6 +20,9 @@ enum MainSection: String, CaseIterable, Identifiable {
     case missions
     case advisor
     case projects
+    // Configuration (sidebar, pinned below the primary rows)
+    case integrations
+    case settings
     // Internal sub-panes / chrome
     case alerts
     case insights
@@ -30,8 +34,6 @@ enum MainSection: String, CaseIterable, Identifiable {
     case stackHealth
     case services
     case canaries
-    case integrations
-    case settings
 
     /// The deep sections shown in the sidebar, ordered so related surfaces sit
     /// together: what's happening now (Home), your apps (Launcher → Projects),
@@ -39,6 +41,10 @@ enum MainSection: String, CaseIterable, Identifiable {
     /// Launcher and Projects are adjacent because they're two views of the same
     /// thing — run it vs. manage it.
     static let primary: [MainSection] = [.home, .launcher, .projects, .missions, .usage, .advisor]
+
+    /// Configuration, pinned to the foot of the sidebar under the primary rows.
+    /// Settings is last of everything: the least-used control belongs at the end.
+    static let configuration: [MainSection] = [.integrations, .settings]
 
     var id: String { rawValue }
 
@@ -188,30 +194,14 @@ struct MainWindowView: View {
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 6) {
                 Divider().opacity(0.4)
-                Button {
-                    NotificationCenter.default.post(name: .stackPulseOpenSettings, object: nil)
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 20)
-                        Text("Settings")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 4)
-                        Text("⌘,")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.tertiary)
+                // Configuration lives here as ordinary nav rows — the same rows,
+                // the same selection, one way to reach each pane.
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(MainSection.configuration) { section in
+                        navRow(section, hint: section == .settings ? "⌘," : nil)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
                 .padding(.horizontal, 10)
-                .help("Open the Settings window (⌘,)")
 
                 sidebarFooter
             }
@@ -223,7 +213,8 @@ struct MainWindowView: View {
     /// capsule with a colored glow; the glow slides between rows on selection
     /// (matchedGeometryEffect, spring — skipped under Reduce Motion). Unselected
     /// rows stay quiet.
-    @ViewBuilder private func navRow(_ section: MainSection) -> some View {
+    /// `hint` is a trailing keyboard-shortcut affordance; a badge supersedes it.
+    @ViewBuilder private func navRow(_ section: MainSection, hint: String? = nil) -> some View {
         let isSelected = selection == section
         let badge = badge(for: section)
         Button {
@@ -251,6 +242,10 @@ struct MainWindowView: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
                         .background(Capsule().fill(badge.color))
+                } else if let hint {
+                    Text(hint)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
                 }
             }
             .padding(.horizontal, 10)
@@ -360,6 +355,9 @@ struct MainWindowView: View {
         case .missions: MissionsSection()
         case .advisor: AdvisorSection()
         case .projects: ProjectsSection()
+        // Configuration (sidebar foot).
+        case .integrations: IntegrationsSection()
+        case .settings: SettingsSection()
         // Internal sub-panes (reached via a composite's sub-tabs) and chrome.
         case .alerts: AlertsSection()
         case .insights: InsightsSection()
@@ -371,8 +369,6 @@ struct MainWindowView: View {
         case .stackHealth: StackHealthSection()
         case .canaries: CanarySection(section: .canaries)
         case .services: ServicesSection()
-        case .integrations: IntegrationsSection()
-        case .settings: SettingsSection()
         }
     }
 }
@@ -466,7 +462,6 @@ struct SectionHeader: View {
     let title: String
     let summary: String
     @EnvironmentObject var store: SnapshotStore
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -479,16 +474,8 @@ struct SectionHeader: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(action: { store.refresh() }) {
-                    Image(systemName: "arrow.clockwise")
-                        .rotationEffect(.degrees(store.isLoading && !reduceMotion ? 360 : 0))
-                        .animation(store.isLoading && !reduceMotion
-                            ? .linear(duration: 1).repeatForever(autoreverses: false)
-                            : .default, value: store.isLoading)
-                }
-                .controlSize(.large)
-                .help("Refresh now")
-                .disabled(store.isLoading)
+                RefreshButton(isLoading: store.isLoading) { store.refresh() }
+                    .controlSize(.large)
             }
             SnapshotMetaBar()
                 .padding(.top, 2)
@@ -508,13 +495,16 @@ struct SnapshotMetaBar: View {
                 Text("·").foregroundStyle(.tertiary)
                 Label("UTC \(snapshot.bucket_date_utc)", systemImage: "calendar")
             }
-            if store.isLoading {
+            // Always laid out, only faded: refreshes are automatic and frequent,
+            // so inserting this on each one would resize the bar and reflow the
+            // section under it. The footprint is reserved; only opacity changes.
+            HStack(spacing: 4) {
                 Text("·").foregroundStyle(.tertiary)
-                HStack(spacing: 4) {
-                    ProgressView().controlSize(.small)
-                    Text("refreshing")
-                }
+                ProgressView().controlSize(.small)
+                Text("refreshing")
             }
+            .opacity(store.isLoading ? 1 : 0)
+            .accessibilityHidden(!store.isLoading)
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -720,8 +710,17 @@ extension UsageSnapshot {
     }
 
     /// Total turns (records) over the last 30 days across providers.
+    ///
+    /// Activity-only providers are excluded because their `records` are a
+    /// *different unit*. The protocol defines `records` as assistant turns, but
+    /// a provider with no local token accounting reuses the field for whatever
+    /// it can actually count — Antigravity puts conversations there. Summing the
+    /// two produces a number that is neither, under a label that claims one.
     var total30Turns: UInt64 {
-        providers.compactMap { $0.last30?.records }.reduce(0, +)
+        providers
+            .filter { !$0.isActivityOnly }
+            .compactMap { $0.last30?.records }
+            .reduce(0, +)
     }
 
     /// Combined 30-day cache-hit rate across providers, or nil if no cache use.

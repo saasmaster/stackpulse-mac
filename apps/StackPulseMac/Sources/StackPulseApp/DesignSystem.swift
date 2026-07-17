@@ -306,6 +306,172 @@ struct StatusDot: View {
     }
 }
 
+// MARK: - Refresh
+
+/// The one refresh button in the app.
+///
+/// Four surfaces each hand-rolled this, all with the same defect:
+///
+/// ```swift
+/// .rotationEffect(.degrees(isLoading ? 360 : 0))
+/// .animation(isLoading ? .linear(duration: 1).repeatForever(…) : .default, value: isLoading)
+/// ```
+///
+/// `.animation(_:value:)` fires on every *change* of `isLoading` — including the
+/// true→false one. So when a refresh **finished**, the rotation animated from
+/// 360° back to 0° with `.default`: a full turn **backwards**, every single
+/// refresh, including the ones on the automatic cadence that nobody asked for.
+/// That is the icon "dancing".
+///
+/// Here the angle is owned state, driven explicitly. Stopping cancels the
+/// repeating animation inside a transaction with animations disabled, so the
+/// icon halts instead of unwinding. Under Reduce Motion it never rotates at all.
+struct RefreshButton: View {
+    var isLoading: Bool
+    var help: String = "Refresh now"
+    var action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var angle: Double = 0
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.clockwise")
+                .rotationEffect(.degrees(angle))
+        }
+        .disabled(isLoading)
+        .help(help)
+        .accessibilityLabel(help)
+        // Announce work in progress; the spin alone is not an accessible signal.
+        .accessibilityValue(isLoading ? "Refreshing" : "")
+        .onAppear { apply(isLoading) }
+        .onChange(of: isLoading) { _, now in apply(now) }
+        .onChange(of: reduceMotion) { _, _ in apply(isLoading) }
+    }
+
+    private func apply(_ loading: Bool) {
+        guard loading, !reduceMotion else { return stop() }
+        withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
+            angle = 360
+        }
+    }
+
+    /// Cancel the repeating animation. Assigning inside a transaction with
+    /// animations disabled is what actually detaches `repeatForever` — a plain
+    /// assignment would inherit it and keep spinning toward the new value.
+    private func stop() {
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { angle = 0 }
+    }
+}
+
+// MARK: - Command Center mark
+
+/// The Command Center's own icon.
+///
+/// The window previously borrowed `gauge.with.dots.needle.67percent` — the same
+/// glyph as the app's brand mark and the menu-bar item — so the button that
+/// opened the Command Center looked exactly like the button that opened
+/// StackPulse itself. An icon that is identical to another icon does not
+/// identify anything.
+///
+/// This draws a distinct mark: concentric radar sweeps behind a bright center —
+/// many signals, one place watching them. It reads at 12pt and inherits the
+/// current foreground style, so it works tinted in a toolbar or as a template.
+struct CommandCenterIcon: View {
+    var size: CGFloat = 15
+
+    var body: some View {
+        Canvas { ctx, canvas in
+            let c = CGPoint(x: canvas.width / 2, y: canvas.height / 2)
+            let r = min(canvas.width, canvas.height) / 2
+
+            // Two sweep arcs, opening to the upper-right — a scope, not a dial.
+            for scale in [0.92, 0.62] {
+                var p = Path()
+                p.addArc(center: c, radius: r * scale,
+                         startAngle: .degrees(-35), endAngle: .degrees(215),
+                         clockwise: false)
+                ctx.stroke(p, with: .foreground,
+                           style: StrokeStyle(lineWidth: r * 0.16, lineCap: .round))
+            }
+
+            // The watched signal at the center.
+            let dot = r * 0.26
+            ctx.fill(
+                Path(ellipseIn: CGRect(x: c.x - dot, y: c.y - dot, width: dot * 2, height: dot * 2)),
+                with: .foreground
+            )
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Activity-only providers
+
+/// The activity summary for a provider whose tokens and dollars are accounted
+/// for **server-side** (Antigravity: Google keeps the accounting; nothing about
+/// quota, credits or percentage is written to this Mac — verified by searching
+/// `~/.gemini` and `~/Library/Application Support/Antigravity`).
+///
+/// Such a provider gets this row *instead of* a spend row. `$0.00 · 0 tokens` is
+/// not a smaller truth than "not published locally" — it is a different and
+/// false claim, and it is the one every surface except the popover was making.
+struct ProviderActivityRow: View {
+    let provider: ProviderUsage
+    /// `.compact` trades the model *chip* for plain inline text and a smaller
+    /// type ramp — for the always-open edge sidebar, where vertical space is the
+    /// scarce resource. It must not drop the model name: on a narrow surface the
+    /// model is the single most identifying fact about the session, and dropping
+    /// it to save a chip's padding would cost more information than height.
+    var compact = false
+
+    private var model: String? { provider.models.first?.model }
+
+    var body: some View {
+        let total = provider.last30?.records ?? 0
+        let today = provider.today?.records ?? 0
+        HStack(spacing: compact ? 5 : 8) {
+            Image(systemName: "bubble.left.and.text.bubble.right")
+                .imageScale(.small)
+                .foregroundStyle(.secondary)
+            Text("\(total) session\(total == 1 ? "" : "s") · \(today) today")
+                .font(compact ? .system(size: 10, weight: .medium) : .subheadline.weight(.medium))
+                .monospacedDigit()
+            Spacer(minLength: 4)
+            if let model {
+                if compact {
+                    Text(model)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Chip(text: model, systemImage: "cpu", tint: .cyan)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(total) session\(total == 1 ? "" : "s") in the last 30 days, \(today) today"
+                + (model.map { ", model \($0)" } ?? "")
+        )
+    }
+}
+
+/// The one-line reason an activity-only provider shows no money.
+/// Stated plainly, where the number would otherwise be.
+struct NoLocalSpendNote: View {
+    var body: some View {
+        Text("Cost is metered server-side — not published to this Mac.")
+            .font(.system(size: 9))
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// A small labeled pill (used for auth / plan / installed chips). Glassier
 /// capsule: a thin frosted base under a tint wash, with a bright rim.
 struct Chip: View {

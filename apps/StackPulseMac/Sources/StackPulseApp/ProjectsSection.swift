@@ -122,16 +122,11 @@ struct ProjectsSection: View {
                 .buttonStyle(.glass(tint: .accentColor, prominent: true))
                 .help("Choose a folder (or a parent folder of several projects)")
                 if !store.approvedRoots.isEmpty {
-                    Button(action: { store.rescanProjects() }) {
-                        Image(systemName: "arrow.clockwise")
-                            .rotationEffect(.degrees(store.isScanningProjects && !reduceMotion ? 360 : 0))
-                            .animation(store.isScanningProjects && !reduceMotion
-                                ? .linear(duration: 1).repeatForever(autoreverses: false)
-                                : .default, value: store.isScanningProjects)
+                    RefreshButton(isLoading: store.isScanningProjects,
+                                  help: "Rescan project folders") {
+                        store.rescanProjects()
                     }
                     .controlSize(.large)
-                    .help("Rescan project folders")
-                    .disabled(store.isScanningProjects)
                 }
             }
             metaBar

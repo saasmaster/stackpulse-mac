@@ -111,18 +111,31 @@ struct OverviewProviderCard: View {
         VStack(alignment: .leading, spacing: 10) {
             header
 
-            anomalyBadge
+            // A provider whose tokens and dollars are metered server-side gets its
+            // measured activity and the reason for the missing money — never the
+            // spend grid. Its windows carry `records` with zeroed tokens and no
+            // cost, so the money UI would render "—" over "0 tok", asserting a zero
+            // this Mac was never told.
+            if provider.isActivityOnly {
+                ProviderActivityRow(provider: provider)
+                NoLocalSpendNote()
+            } else {
+                anomalyBadge
 
-            HStack(alignment: .top, spacing: 0) {
-                spendCell("Today", provider.today)
-                Divider().frame(height: 38)
-                spendCell("30 days", provider.last30)
-                    .padding(.leading, 12)
+                HStack(alignment: .top, spacing: 0) {
+                    spendCell("Today", provider.today)
+                    Divider().frame(height: 38)
+                    spendCell("30 days", provider.last30)
+                        .padding(.leading, 12)
+                }
             }
 
             limitRow
 
-            if let top = topModel {
+            // The per-model cost row prices tokens. With none measured locally it
+            // can only restate the model name ``ProviderActivityRow`` already
+            // carries, against an empty cost.
+            if !provider.isActivityOnly, let top = topModel {
                 Divider().opacity(0.4)
                 HStack(spacing: 6) {
                     Image(systemName: "cpu").imageScale(.small).foregroundStyle(.secondary)
