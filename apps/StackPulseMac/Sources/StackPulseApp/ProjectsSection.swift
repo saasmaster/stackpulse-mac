@@ -19,6 +19,13 @@ struct ProjectsSection: View {
     @State private var activeSession: CaptureSession?
     /// A past run whose captured output is being viewed, if any.
     @State private var viewingRun: CommandRun?
+    @State private var query = ""
+
+    private var filteredProjects: [Project] {
+        store.projects.filter {
+            ProjectFilter.matches(query: query, name: $0.name, path: $0.path)
+        }
+    }
 
     /// A command plus how it should run once confirmed.
     private struct PendingRun: Identifiable {
@@ -290,16 +297,39 @@ struct ProjectsSection: View {
                 )
             }
         } else {
-            // Lazy + two-column so a 20+ project list stays short and only the
-            // visible cards (and their subviews) are ever built — the fix for the
-            // scroll stutter.
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 420, maximum: 680), spacing: 14, alignment: .top)],
-                alignment: .leading,
-                spacing: 14
-            ) {
-                ForEach(store.projects) { project in
-                    ProjectCard(project: project, onRun: requestRun, onCapture: requestCapture)
+            VStack(alignment: .leading, spacing: 14) {
+                if store.projects.count > 1 {
+                    HStack(spacing: 10) {
+                        FilterField(placeholder: "Filter projects by name or folder", text: $query)
+                            .frame(maxWidth: 380)
+                        FilterCountNote(shown: filteredProjects.count, total: store.projects.count)
+                        Spacer(minLength: 0)
+                    }
+                }
+                if filteredProjects.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("No project matches “\(query)”.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Button("Clear filter") { query = "" }
+                            .buttonStyle(.glass)
+                            .controlSize(.small)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 12)
+                } else {
+                    // Lazy + two-column so a 20+ project list stays short and only the
+                    // visible cards (and their subviews) are ever built — the fix for the
+                    // scroll stutter.
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 420, maximum: 680), spacing: 14, alignment: .top)],
+                        alignment: .leading,
+                        spacing: 14
+                    ) {
+                        ForEach(filteredProjects) { project in
+                            ProjectCard(project: project, onRun: requestRun, onCapture: requestCapture)
+                        }
+                    }
                 }
             }
         }

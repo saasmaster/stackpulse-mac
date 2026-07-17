@@ -306,6 +306,78 @@ struct StatusDot: View {
     }
 }
 
+// MARK: - Finding one project in a long list
+
+/// The rule for "does this project match what I typed".
+///
+/// One rule, shared, because three surfaces list the same 30 projects and a filter
+/// that means something different on each is worse than no filter at all.
+///
+/// Matches against the name **and** the path: this portfolio keeps projects under
+/// several roots (`App Privadas`, `Documents/Claude/Projects`, `Desktop`), so the
+/// folder is often how you say which one you mean. Every whitespace-separated term
+/// must match somewhere — `zeder erp` finds it, and typing more always narrows,
+/// never widens.
+enum ProjectFilter {
+    /// `true` when `query` is blank — a blank filter hides nothing.
+    static func matches(query: String, name: String, path: String) -> Bool {
+        let terms = query.split(whereSeparator: \.isWhitespace)
+        guard !terms.isEmpty else { return true }
+        let hay = name + " " + path
+        return terms.allSatisfy { hay.localizedCaseInsensitiveContains($0) }
+    }
+}
+
+/// The one filter field.
+///
+/// Extracted from the Launcher, which owned the only copy. Two other surfaces list
+/// the same projects with no way to find one, and a second hand-rolled copy is how
+/// two fields end up with different clear-button behaviour and different
+/// placeholder grammar.
+struct FilterField: View {
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .accessibilityLabel(placeholder)
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear the filter")
+                .accessibilityLabel("Clear the filter")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .liquidGlass(cornerRadius: 10, prominence: .low, padding: 0)
+    }
+}
+
+/// "Showing 3 of 27" — the count a filtered list owes the reader.
+///
+/// A filtered list that only shows its matches looks exactly like a short list.
+/// Without this, narrowing to 3 of 27 projects and reading the result as the whole
+/// portfolio is a mistake the UI invited.
+struct FilterCountNote: View {
+    let shown: Int
+    let total: Int
+    var noun: String = "project"
+
+    var body: some View {
+        if shown < total {
+            Text("Showing \(shown) of \(total) \(noun)\(total == 1 ? "" : "s")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 // MARK: - Refresh
 
 /// The one refresh button in the app.

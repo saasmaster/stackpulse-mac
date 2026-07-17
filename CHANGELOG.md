@@ -18,6 +18,38 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Find one project in a long list (app 0.38.0)
+
+30 projects in Projects, 27 in Stack Health, and no way to find one — you scrolled.
+The Launcher had a filter; the two longest lists did not.
+
+All three now share one field and, more importantly, **one rule**. The Launcher's
+own rule matched the project *name* only, which silently disagreed with what the
+other two would have needed: this portfolio keeps projects under several roots
+(`App Privadas`, `Documents/Claude/Projects`, `Desktop`), and the folder is often
+how you say which one you mean. `ProjectFilter.matches` now matches name **and**
+path, every whitespace-separated term must hit, and terms are order-independent —
+so `privadas remotion` finds `remotion-video`, and typing more always narrows,
+never widens. Verified against the live scan: `tren` → 1 of 30, `scout` → 5,
+`zeder` → 1.
+
+Two things a filtered list owes the reader, both included:
+
+- **"Showing 3 of 27."** A filtered list that only shows its matches looks exactly
+  like a short list. Without the count, narrowing to 3 projects and reading it as
+  the whole portfolio is a mistake the UI invited.
+- **An empty result names the query** — "No project matches “xyz”" with a Clear
+  button — rather than rendering the same blank as "you have no projects".
+
+Stack Health's cross-project digest is deliberately **not** filtered. It answers
+"is anything on fire across everything", and its subtitle states the scope it
+folded ("27 projects · 537 deps"); narrowing it would leave the same words
+describing a different set. The filter narrows the cards below it.
+
+A whitespace-only query matches everything, so a stray space can't empty the list
+and read as "no projects". 11 new tests; restoring the old name-only rule fails
+five of them.
+
 ### The AI prompt waits until it knows something (app 0.37.1)
 
 0.37.0 gated **Copy AI prompt** on "this project has dependencies that are not up

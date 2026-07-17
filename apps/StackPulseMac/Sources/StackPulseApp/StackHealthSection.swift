@@ -647,6 +647,17 @@ struct StackHealthSection: View {
     private var enriching: Bool { store.isEnrichingStack }
     /// Projects whose "up to date" rows are expanded.
     @State private var expandedProjects: Set<String> = []
+    @State private var query = ""
+
+    /// The project cards to render. The digest above them is deliberately NOT
+    /// filtered — it answers "is anything on fire across everything", and its
+    /// subtitle states the scope it folded ("27 projects · 537 deps"). Narrowing it
+    /// to the filter would leave the same words describing a different set.
+    private var filteredProjects: [ProjectStack] {
+        store.stackHealth.filter {
+            ProjectFilter.matches(query: query, name: $0.name, path: $0.path)
+        }
+    }
 
     var body: some View {
         SectionScaffold(section: .stackHealth) { _ in
@@ -678,18 +689,30 @@ struct StackHealthSection: View {
                     // is `.unknown`, i.e. every row is a visible row. A plain
                     // VStack built and laid out all of them on every body
                     // evaluation, including the cards nowhere near the viewport.
-                    LazyVStack(alignment: .leading, spacing: 18) {
-                        ForEach(store.stackHealth) { proj in
-                            StackProjectCard(
-                                proj: proj,
-                                enrichment: enrichment,
-                                state: checkState(for: proj),
-                                expanded: expandedProjects.contains(proj.id),
-                                onToggle: { toggleExpanded(proj.id) },
-                                onCheck: { force in
-                                    store.enrichStack(projectPath: proj.path, force: force)
-                                }
-                            )
+                    if store.stackHealth.count > 1 {
+                        HStack(spacing: 10) {
+                            FilterField(placeholder: "Filter projects by name or folder", text: $query)
+                                .frame(maxWidth: 380)
+                            FilterCountNote(shown: filteredProjects.count, total: store.stackHealth.count)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    if filteredProjects.isEmpty {
+                        noMatchState
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 18) {
+                            ForEach(filteredProjects) { proj in
+                                StackProjectCard(
+                                    proj: proj,
+                                    enrichment: enrichment,
+                                    state: checkState(for: proj),
+                                    expanded: expandedProjects.contains(proj.id),
+                                    onToggle: { toggleExpanded(proj.id) },
+                                    onCheck: { force in
+                                        store.enrichStack(projectPath: proj.path, force: force)
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -784,6 +807,21 @@ struct StackHealthSection: View {
             .buttonStyle(.glass(tint: .accentColor))
             .disabled(store.isScanningStack)
         }
+    }
+
+    /// Names the query, so an empty list reads as "your filter matched nothing"
+    /// rather than "you have no projects".
+    private var noMatchState: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("No project matches “\(query)”.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Button("Clear filter") { query = "" }
+                .buttonStyle(.glass)
+                .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 12)
     }
 
     private var updateCheckOffNote: some View {

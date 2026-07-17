@@ -16,9 +16,13 @@ struct LauncherSection: View {
     private var allApps: [Project] { store.projects.filter(WebPreview.isLaunchable) }
 
     /// Filtered by the search text + favorites toggle, favorites pinned on top.
+    ///
+    /// Uses the shared `ProjectFilter` so typing the same thing here, in Projects,
+    /// and in Stack Health selects the same projects. This surface's own rule
+    /// matched the name only, which silently disagreed with the other two.
     private var launchable: [Project] {
         store.favoritesFirst(allApps.filter { p in
-            (query.isEmpty || p.name.localizedCaseInsensitiveContains(query))
+            ProjectFilter.matches(query: query, name: p.name, path: p.path)
                 && (!favoritesOnly || store.isFavorite(p.path))
         })
     }
@@ -88,19 +92,8 @@ struct LauncherSection: View {
     /// A search field + favorites-only toggle for the app grid.
     private var filterBar: some View {
         HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Filter apps by name", text: $query)
-                    .textFieldStyle(.plain)
-                if !query.isEmpty {
-                    Button { query = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .liquidGlass(cornerRadius: 10, prominence: .low, padding: 0)
+            FilterField(placeholder: "Filter apps by name or folder", text: $query)
+                .frame(maxWidth: 380)
 
             Button { favoritesOnly.toggle() } label: {
                 Label("Favorites", systemImage: favoritesOnly ? "star.fill" : "star")
