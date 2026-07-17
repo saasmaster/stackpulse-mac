@@ -18,6 +18,56 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Forecast your limits, and price Codex correctly (app 0.41.0)
+
+Two depth improvements on the core promise — trust the numbers, and act on them
+before they bite — plus the fixes from a bug-check pass over both.
+
+**Limit forecasting.** StackPulse showed a live percentage and a burn rate but
+never connected them. Now it watches each Claude limit's percentage *over time*
+(`limit_samples.json`), fits the observed rate, and says "at this pace, ~5 hr to
+the limit — before it resets" under the meter, plus a **proactive notification**
+while you're still in the 40–80% band and there's room to react — the threshold
+alerts only fire at 80%/95%, often too late. The whole engine is built to refuse
+to make things up: too little history forecasts nothing ("need a few more
+readings"); a window reset is a discontinuity, so pre-reset samples are dropped
+rather than fitted across the cliff into a garbage rate; a flat pace honestly says
+"you won't reach it"; and a hit projected past the reset is reported as clearing
+the window. It never converts token spend into a limit percentage — it can't see a
+hidden limit's accounting, so it only extrapolates the number the provider
+actually reports.
+
+**Codex costs were understated ~3–4×.** The OpenAI rate card was self-flagged as
+unverified and used the same loose substring matching that once mispriced Opus 3×.
+Verified against OpenAI's published list (developers.openai.com/api/docs/pricing,
+2026-07-17) and matched strictly by tier: the real models in local Codex logs —
+`gpt-5.5` (the most-used), `gpt-5.6-sol`, `gpt-5.4`, `gpt-5.3-codex` — now price at
+their true rates ($5/$30, not the old flat $1.25/$10), correcting a real Codex
+30-day figure from a large undercount up to its actual value. Any *unrecognized*
+GPT/Codex id now returns unpriced (the canary reports it) instead of borrowing a
+sibling's rate, and the internal `codex-*` tooling ids (`codex-auto-review`,
+`codex-security-scans-…`) are honestly left unpriced — they aren't published API
+models. The verified rates are pinned in a test, the protection the Opus card
+lacked.
+
+**Bug-check fixes (found reviewing the above before commit):**
+- The forecast alert is now **latched per reset-cycle**. A forecast is a noisy
+  signal, and `NotificationGate` re-fires any alert that clears and returns — so an
+  un-latched forecast alert would have pinged repeatedly as the fitted rate
+  wobbled. It now fires once per cycle.
+- Samples are recorded **before** the notification pass, so the alert forecasts
+  from the reading just fetched rather than lagging one sample.
+- Sample pruning is **per-window**, so a frequently-sampled 5h window can't evict
+  the weekly window's history and starve its forecast.
+- The 1-hour staleness bound is one shared constant (`LimitWindow.liveStaleAfter`)
+  instead of a `60 * 60` literal repeated across three files.
+
+10 new forecast tests (mutation-verified: disabling reset handling, or the
+min-span guard, each fails exactly the named test) and the pinned OpenAI rate
+table. Gate: 116 Swift tests, 230 Rust, clippy + fmt clean. Verified live: Codex
+30-day cost corrected, `gpt-5.5` priced at $5/$30, `codex-auto-review` flagged
+unpriced by the canary.
+
 ### Launch at login, honest BYOK, fuller onboarding (app 0.40.0)
 
 Working the "what's left" shortlist — and the honest first finding was that **two

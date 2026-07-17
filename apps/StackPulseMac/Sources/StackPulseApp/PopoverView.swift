@@ -411,6 +411,15 @@ struct ProviderCard: View {
                     MeterBar(fraction: limit.used_percent / 100,
                              tint: SPStatus.limitColor(limit.used_percent),
                              glowsWhenHigh: true)
+                    // "at this pace, ~X to the limit" — only for a Claude live
+                    // reading (the only provider whose % we sample over time), and
+                    // only when it's fresh (a forecast off a stale % is two guesses
+                    // stacked; LimitAgeNote below explains the staleness instead).
+                    if provider.provider == "claude",
+                       limit.provenance == AnthropicUsageClient.liveProvenance {
+                        LimitForecastNote(forecast: store.limitForecast(for: limit),
+                                          isStale: limit.isStale(staleAfter: LimitWindow.liveStaleAfter))
+                    }
                 }
             }
             // When Claude's limits are the last-known cached value (the saved

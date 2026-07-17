@@ -74,6 +74,11 @@ struct ProviderAnalytics: Codable, Sendable {
 }
 
 struct LimitWindow: Codable, Sendable, Identifiable {
+    /// A live reading older than this stops being "live" — the single source of
+    /// that bound for every surface (age note, forecast note, the store's own
+    /// staleness check), so they can't silently disagree about what "fresh" means.
+    static let liveStaleAfter: TimeInterval = 60 * 60
+
     let label: String
     let used_percent: Double
     let window_minutes: Int

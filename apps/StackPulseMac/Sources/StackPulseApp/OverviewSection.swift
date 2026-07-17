@@ -222,6 +222,11 @@ struct OverviewProviderCard: View {
                 MeterBar(fraction: limit.used_percent / 100,
                          tint: SPStatus.limitColor(limit.used_percent),
                          glowsWhenHigh: true)
+                if provider.provider == "claude",
+                   limit.provenance == AnthropicUsageClient.liveProvenance {
+                    LimitForecastNote(forecast: store.limitForecast(for: limit),
+                                      isStale: limit.isStale(staleAfter: LimitWindow.liveStaleAfter))
+                }
                 // Every provider's limit can be old, not just Claude's. Codex's
                 // come from whatever its logs last recorded — measured at 18.5
                 // hours on this machine while the card rendered the % as "now".

@@ -232,6 +232,133 @@ final class SnapshotStore: ObservableObject {
         lastGoodLiveLimitsAt = Date(timeIntervalSince1970: cache.at)
     }
 
+    // MARK: Limit forecasting (the %-trajectory over time)
+
+    /// The observed history of each live limit's consumption, kept so the app can
+    /// forecast when a limit will be hit — the only honest basis for that, since
+    /// StackPulse can't see a hidden limit's internal accounting.
+    @Published private(set) var limitSamples: [LimitSample] = []
+
+    /// Samples kept **per window**. Pruning is per-window, not global, so a
+    /// frequently-sampled short window (5h) can't evict a slow window's (weekly)
+    /// early-cycle history and starve its forecast. At a ~2-minute cadence this is
+    /// ~13 hours of readings — ample to fit a rate for either window.
+    private static let limitSamplesPerWindowCap = 400
+
+    private var limitSamplesURL: URL {
+        URL(fileURLWithPath: historyDataDir).appendingPathComponent("limit_samples.json")
+    }
+
+    private func loadLimitSamples() {
+        guard let data = try? Data(contentsOf: limitSamplesURL),
+              let decoded = try? JSONDecoder().decode([LimitSample].self, from: data)
+        else { return }
+        limitSamples = decoded
+    }
+
+    private func persistLimitSamples() {
+        if let data = try? JSONEncoder().encode(limitSamples) {
+            try? data.write(to: limitSamplesURL, options: .atomic)
+        }
+    }
+
+    /// Append a reading per live limit — but only a genuinely new one. The fetch
+    /// runs every couple of minutes and often returns the same numbers; recording
+    /// duplicates would fake a longer, denser history than actually exists and bias
+    /// the slope. A sample is new when its window's percentage or its capture time
+    /// changed from the last one we stored.
+    private func recordLimitSamples(_ limits: [LimitWindow]) {
+        let capturedAt = (lastGoodLiveLimitsAt ?? Date()).timeIntervalSince1970
+        var appended = false
+        for limit in limits where limit.provenance == AnthropicUsageClient.liveProvenance {
+            let last = limitSamples.last { $0.windowKey == limit.label }
+            // Same percentage at (effectively) the same capture time → not new.
+            if let last, abs(last.usedPercent - limit.used_percent) < 0.001,
+               abs(last.capturedAtUnix - capturedAt) < 1 {
+                continue
+            }
+            limitSamples.append(LimitSample(
+                windowKey: limit.label, capturedAtUnix: capturedAt,
+                usedPercent: limit.used_percent))
+            appended = true
+        }
+        guard appended else { return }
+        pruneLimitSamplesPerWindow()
+        persistLimitSamples()
+    }
+
+    /// Keep only the most-recent `limitSamplesPerWindowCap` samples of each window,
+    /// preserving overall chronological order. Per-window so one window's cadence
+    /// never evicts another's history.
+    private func pruneLimitSamplesPerWindow() {
+        var counts: [String: Int] = [:]
+        for s in limitSamples { counts[s.windowKey, default: 0] += 1 }
+        guard counts.values.contains(where: { $0 > Self.limitSamplesPerWindowCap }) else { return }
+        // Walk newest→oldest, keeping up to the cap per window, then restore order.
+        var kept: [String: Int] = [:]
+        var keep: [LimitSample] = []
+        for s in limitSamples.reversed() {
+            let n = kept[s.windowKey, default: 0]
+            if n < Self.limitSamplesPerWindowCap {
+                kept[s.windowKey] = n + 1
+                keep.append(s)
+            }
+        }
+        limitSamples = keep.reversed()
+    }
+
+    /// The forecast for one live limit, from its samples and current reading.
+    func limitForecast(for limit: LimitWindow) -> LimitForecast.Result {
+        LimitForecast.project(
+            samples: limitSamples.filter { $0.windowKey == limit.label },
+            currentPercent: limit.used_percent,
+            resetAtUnix: limit.resets_at_unix.map(Double.init),
+            windowMinutes: limit.window_minutes,
+            now: Date().timeIntervalSince1970)
+    }
+
+    /// Windows (`label|resetAt`) for which a forecast warning is currently latched.
+    ///
+    /// A forecast is a *noisy* signal — the fitted rate wobbles as each reading
+    /// lands, so `willHitBeforeReset` can flip true/false between refreshes. The
+    /// alert list and the notification gate both react to an alert appearing and
+    /// disappearing (the gate re-fires a cleared-then-returning alert), so an
+    /// un-latched forecast alert would ping the user repeatedly. Once a window is
+    /// judged on-track within a cycle, it stays latched until the cycle resets or
+    /// the reading leaves the forecast band — so the warning fires once per cycle,
+    /// not once per wobble. Ephemeral: a relaunch may warn once more, which is fine.
+    private var forecastLatchedCycles: Set<String> = []
+
+    /// Stable key for a limit's current reset cycle. When the window resets, its
+    /// `resets_at_unix` changes, so the old key drops out and a new cycle can warn.
+    private func forecastCycleKey(_ limit: LimitWindow) -> String {
+        "\(limit.label)|\(limit.resets_at_unix ?? 0)"
+    }
+
+    /// Update the latch from the freshly-merged live limits. Called inside
+    /// `applyLiveLimits`, after the current sample is recorded, before notifying.
+    private func refreshForecastLatch(_ live: [LimitWindow]) {
+        let liveWindows = live.filter { $0.provenance == AnthropicUsageClient.liveProvenance }
+        for limit in liveWindows {
+            let key = forecastCycleKey(limit)
+            // Only the 40–80% band is the forecast's to own: below 40% it's too
+            // speculative, at/above 80% the threshold alert takes over. Outside the
+            // band, drop any latch so the two never both fire.
+            guard limit.used_percent >= 40, limit.used_percent < 80 else {
+                forecastLatchedCycles.remove(key)
+                continue
+            }
+            let forecast = limitForecast(for: limit)
+            if forecast.confidence == .ok, forecast.willHitBeforeReset == true {
+                forecastLatchedCycles.insert(key)
+            }
+        }
+        // Drop latches whose cycle is no longer present (window reset → new key, or
+        // the window vanished). Keeps the set from growing across resets.
+        let liveKeys = Set(liveWindows.map(forecastCycleKey))
+        forecastLatchedCycles.formIntersection(liveKeys)
+    }
+
     // MARK: BYOK provider connections (API-key balances)
 
     /// Provider ids with a saved API key (loaded from `APIKeyStore` on launch,
@@ -441,6 +568,8 @@ final class SnapshotStore: ObservableObject {
         loadHistory()
         // Load captured command-run history so outcomes are there on launch.
         loadCommandRuns()
+        // Load the limit %-trajectory so forecasts survive a relaunch.
+        loadLimitSamples()
         // Auto-scan remembered project roots on launch (off the main thread).
         if !approvedRoots.isEmpty {
             rescanProjects()
@@ -1140,9 +1269,13 @@ final class SnapshotStore: ObservableObject {
                 self.lastGoodLiveLimitsAt = Date()
                 self.liveLimitsError = nil
                 self.liveLimitsRecovery = nil
-                self.applyLiveLimits(outcome.limits)
                 // Persist so the % survives a relaunch / an expired saved token.
                 self.persistLiveLimits()
+                // Record the reading into the %-trajectory FIRST, so the forecast
+                // computed inside applyLiveLimits (for its notification pass) sees
+                // the reading just fetched rather than lagging one sample behind.
+                self.recordLimitSamples(outcome.limits)
+                self.applyLiveLimits(outcome.limits)
             } else {
                 // Fetch failed. Stay quiet only while the failure is still
                 // plausibly transient (a 429 or a moment offline).
@@ -1248,6 +1381,10 @@ final class SnapshotStore: ObservableObject {
             return p.replacingLimits(Self.mergeLimits(core: core, live: live))
         }
         snapshot = snap.copy(providers: providers)
+        // Latch which windows are on track to run out this cycle, so the forecast
+        // alert is sticky (fires once per cycle, not once per rate wobble) before
+        // notifications are evaluated below.
+        refreshForecastLatch(live)
         // Live limits just landed — reconsider notifications so a Claude weekly/
         // session limit crossing its threshold can alert (the offline core never
         // sees these, so its own alert set can't cover them).
@@ -1432,7 +1569,56 @@ final class SnapshotStore: ObservableObject {
     /// alerts. Core alerts keep their most-severe-first order; synthesized ones
     /// follow. Drives every needs-attention surface and the notification gate.
     var allAlerts: [Alert] {
-        (snapshot?.alerts ?? []) + liveLimitAlerts + budgetAlerts + demoAlerts
+        (snapshot?.alerts ?? []) + liveLimitAlerts + limitForecastAlerts + budgetAlerts + demoAlerts
+    }
+
+    /// Early-warning alerts: a limit you are **not near yet** but are on pace to
+    /// hit before it resets. This is the whole point of forecasting — the
+    /// threshold alerts fire at 80%/95%, when it may already be too late to change
+    /// course; this fires while there's still room to react.
+    ///
+    /// Deliberately narrow, so it warns rather than nags:
+    /// - only for a window **latched** on-track this cycle (see
+    ///   `forecastLatchedCycles`) — so a wobbling rate can't flap the alert and
+    ///   re-fire the notification;
+    /// - only in the 40–80% band — below 40% the projection is too speculative to
+    ///   act on, and at/above 80% `liveLimitAlerts` already owns it, so the two
+    ///   never double-fire for the same window.
+    ///
+    /// The latch is the presence gate; this only formats. Once latched the alert
+    /// stays present even if a single reading's forecast dips, which is exactly
+    /// what stops the notification gate from treating a wobble as a new event.
+    private var limitForecastAlerts: [Alert] {
+        guard let snap = snapshot,
+              let claude = snap.providers.first(where: { $0.provider == "claude" })
+        else { return [] }
+        return claude.limits.compactMap { limit -> Alert? in
+            guard limit.provenance == AnthropicUsageClient.liveProvenance,
+                  limit.used_percent >= 40, limit.used_percent < 80,
+                  forecastLatchedCycles.contains(forecastCycleKey(limit))
+            else { return nil }
+            let pct = Int(limit.used_percent.rounded())
+            var detail = "Your Claude \(limit.label) limit is at \(pct)% and, at your current pace, is on track to reach the cap"
+            // Use the current projection's hours when it still has one; when a
+            // wobble briefly flattens the rate the latch keeps the alert, just
+            // without a fresh number.
+            if let hours = limitForecast(for: limit).hoursToLimit {
+                detail += " in about \(LimitForecast.humanHours(hours))"
+            }
+            detail += " before it resets."
+            if let reset = limit.resets_at_unix, let countdown = Format.resetCountdown(reset) {
+                detail += " It \(countdown)."
+            }
+            return Alert(
+                id: "forecast:claude:\(limit.label)",
+                provider: "claude",
+                severity: "warning",
+                kind: "usage_threshold",
+                title: "Claude \(limit.label) limit on track to run out",
+                detail: detail,
+                created_at_unix: snap.generated_at_unix
+            )
+        }
     }
 
     /// Needs-attention alerts derived from Claude's live limits. The core is

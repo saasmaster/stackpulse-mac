@@ -41,9 +41,16 @@
 //!
 //! ## Known inaccuracies (stated, not hidden)
 //!
-//! 1. **OpenAI rates are unverified.** The Claude rates below were read off
-//!    Anthropic's published price list; the GPT/Codex cards were not, and are
-//!    inherited from an earlier revision.
+//! 1. **OpenAI rates: the observed models are now verified; the long tail is not.**
+//!    The GPT-5 tiers and `gpt-5.3-codex` — the models that actually appear in local
+//!    Codex logs — were read off OpenAI's published list
+//!    (developers.openai.com/api/docs/pricing) on 2026-07-17 and are matched
+//!    strictly, so an *unrecognized* GPT/Codex model now returns `None` (the canary
+//!    reports it) instead of borrowing the old flat card. This retired a real 3-4×
+//!    understatement: every `gpt-5.x` had been priced at $1.25/$10 while `gpt-5.5`
+//!    bills $5/$30. The internal `codex-*` tooling ids (`codex-auto-review`,
+//!    `codex-security-scans-…`) are intentionally unpriced — they are not published
+//!    API models and their rate is genuinely unknown.
 //! 2. **Data-residency and fast-mode multipliers are not modelled** (`inference_geo:
 //!    "us"` is 1.1×; fast mode has its own card). Nothing local says which a turn
 //!    used, so applying either would be a guess.
@@ -61,7 +68,7 @@ use stackpulse_protocol::TokenTotals;
 /// It dates when the price list was **read**, not how long the table stays right:
 /// a change already published with a future effective date (see
 /// [`SONNET_5_INTRO_ENDS`]) is encoded below and does not make this stale.
-pub const PRICING_AS_OF: &str = "2026-07-16";
+pub const PRICING_AS_OF: &str = "2026-07-17";
 
 /// Rates in USD per **million** tokens.
 #[derive(Debug, Clone, Copy)]
@@ -169,20 +176,73 @@ pub const SONNET_5_INTRO_ENDS: CivilDate = CivilDate {
     month: 8,
     day: 31,
 };
-// OpenAI GPT-5 / Codex family. cached input priced at the read column.
-const GPT5: ModelRates = ModelRates {
-    input: 1.25,
-    output: 10.0,
-    cache_write: 1.25,
-    cache_write_1h: 1.25,
-    cache_read: 0.125,
-};
-const GPT41: ModelRates = ModelRates {
-    input: 2.0,
-    output: 8.0,
-    cache_write: 2.0,
-    cache_write_1h: 2.0,
+// OpenAI GPT-5 family + Codex. Verified against OpenAI's published API price list
+// (developers.openai.com/api/docs/pricing) on 2026-07-17 — see the module header's
+// "Known inaccuracies", which this change retires for the models actually observed
+// in local Codex logs (gpt-5.5, gpt-5.6-sol/terra, gpt-5.4, gpt-5.3-codex).
+//
+// OpenAI has no separate cache-*write* charge the way Anthropic does: automatic
+// prompt caching bills fresh input at the input rate and cached input at a
+// discounted "cached input" rate. So `cache_write` == `input` (writing costs
+// nothing extra) and `cache_read` is the cached-input price. Codex's local records
+// carry no cache-creation tokens anyway, so the write columns never bill.
+//
+// $5 / $30, cached $0.50 — GPT-5.5 flagship, GPT-5.6-sol.
+const GPT5_HIGH: ModelRates = ModelRates {
+    input: 5.0,
+    output: 30.0,
+    cache_write: 5.0,
+    cache_write_1h: 5.0,
     cache_read: 0.50,
+};
+// $2.50 / $15, cached $0.25 — GPT-5.4, GPT-5.6-terra.
+const GPT5_MID: ModelRates = ModelRates {
+    input: 2.5,
+    output: 15.0,
+    cache_write: 2.5,
+    cache_write_1h: 2.5,
+    cache_read: 0.25,
+};
+// $1.00 / $6, cached $0.10 — GPT-5.6-luna.
+const GPT5_LUNA: ModelRates = ModelRates {
+    input: 1.0,
+    output: 6.0,
+    cache_write: 1.0,
+    cache_write_1h: 1.0,
+    cache_read: 0.10,
+};
+// $0.75 / $4.50, cached $0.075 — GPT-5.4-mini.
+const GPT5_MINI: ModelRates = ModelRates {
+    input: 0.75,
+    output: 4.50,
+    cache_write: 0.75,
+    cache_write_1h: 0.75,
+    cache_read: 0.075,
+};
+// $0.20 / $1.25, cached $0.02 — GPT-5.4-nano.
+const GPT5_NANO: ModelRates = ModelRates {
+    input: 0.20,
+    output: 1.25,
+    cache_write: 0.20,
+    cache_write_1h: 0.20,
+    cache_read: 0.02,
+};
+// $30 / $180 — GPT-5.5-pro, GPT-5.4-pro. No cached-input discount is published, so
+// cache reads bill at the full input rate rather than inventing a discount.
+const GPT5_PRO: ModelRates = ModelRates {
+    input: 30.0,
+    output: 180.0,
+    cache_write: 30.0,
+    cache_write_1h: 30.0,
+    cache_read: 30.0,
+};
+// $1.75 / $14, cached $0.175 — GPT-5.3-codex (the Codex-specialized card).
+const CODEX_53: ModelRates = ModelRates {
+    input: 1.75,
+    output: 14.0,
+    cache_write: 1.75,
+    cache_write_1h: 1.75,
+    cache_read: 0.175,
 };
 
 /// Resolve a model string to the rate card in effect **on `date`** — the date of
@@ -248,20 +308,71 @@ pub fn rates_for(model: &str, date: CivilDate) -> Option<ModelRates> {
             _ => None,
         };
     }
-    // OpenAI. Left as coarse family matching: unlike the Claude rates above,
-    // these have NOT been verified against OpenAI's current price list, so
-    // tightening them would only trade one unverified answer for another.
-    if m.contains("codex")
-        || m.contains("gpt-5")
-        || m.contains("gpt5")
-        || m.contains("o4")
-        || m.contains("o3")
-    {
-        return Some(GPT5);
+    // OpenAI GPT-5 family + Codex. Now matched to VERIFIED cards by tier, with the
+    // same strictness as Claude: a model we don't recognize returns `None` (the
+    // canary reports it) rather than borrowing a sibling's rate. This retired a
+    // real 3-4× UNDERSTATEMENT — every gpt-5.x was priced at the old flat $1.25/$10
+    // card while `gpt-5.5` (the most-used model in local Codex logs) actually bills
+    // $5/$30.
+    if let Some(card) = openai_rates(&m) {
+        return Some(card);
     }
-    if m.contains("gpt-4") || m.contains("gpt4") {
-        return Some(GPT41);
+    None
+}
+
+/// Resolve an OpenAI model id to its verified rate card, or `None` for anything
+/// unrecognized. Kept explicit (not a formula) because OpenAI's tier is a property
+/// of the variant name (sol/terra/luna/mini/nano/pro/codex), not a clean function
+/// of the version number.
+///
+/// The `codex-*` **tooling** ids that appear in logs (`codex-auto-review`,
+/// `codex-security-scans-…`, `codex-primary-runtime`, …) are deliberately NOT
+/// priced: they are not published API models, so their rate is genuinely unknown.
+/// Guessing one would be the exact dishonesty this module refuses; the canary
+/// surfaces "tokens counted, no known price" instead.
+fn openai_rates(m: &str) -> Option<ModelRates> {
+    // Not an OpenAI id at all.
+    if !(m.contains("gpt") || m.contains("codex")) {
+        return None;
     }
+    // Codex-specialized model. Only the published `gpt-5.3-codex` is priced; the
+    // internal `codex-*` tooling ids fall through to `None`.
+    if m.contains("codex") {
+        if m.contains("5.3") || m.contains("5-3") {
+            return Some(CODEX_53);
+        }
+        // A gpt-5.x-codex we don't have a verified card for — unpriced, not guessed.
+        return None;
+    }
+    // GPT-5.x standard tiers, by variant name first (the tier lives in the name).
+    if m.contains("pro") {
+        return Some(GPT5_PRO);
+    }
+    if m.contains("nano") {
+        return Some(GPT5_NANO);
+    }
+    if m.contains("mini") {
+        return Some(GPT5_MINI);
+    }
+    if m.contains("luna") {
+        return Some(GPT5_LUNA);
+    }
+    if m.contains("sol") {
+        return Some(GPT5_HIGH);
+    }
+    if m.contains("terra") {
+        return Some(GPT5_MID);
+    }
+    // Bare versioned flagships without a variant suffix: 5.5 is the $5/$30 tier,
+    // 5.4 is the $2.50/$15 tier.
+    if m.contains("gpt-5.5") || m.contains("gpt-5-5") {
+        return Some(GPT5_HIGH);
+    }
+    if m.contains("gpt-5.4") || m.contains("gpt-5-4") {
+        return Some(GPT5_MID);
+    }
+    // Any other GPT id (older gpt-4/gpt-5.0/o-series, or a version newer than this
+    // card set) is unpriced rather than mispriced — the canary reports the gap.
     None
 }
 
@@ -324,8 +435,19 @@ mod tests {
         assert!(rates_for("claude-opus-4-8-20260101", AS_OF).is_some());
         assert!(rates_for("claude-sonnet-5", AS_OF).is_some());
         assert!(rates_for("claude-haiku-4-5-20251001", AS_OF).is_some());
-        assert!(rates_for("gpt-5-codex", AS_OF).is_some());
-        assert!(rates_for("gpt-5", AS_OF).is_some());
+        // The GPT-5 models actually seen in local Codex logs are priceable…
+        assert!(rates_for("gpt-5.5", AS_OF).is_some());
+        assert!(rates_for("gpt-5.6-sol", AS_OF).is_some());
+        assert!(rates_for("gpt-5.3-codex", AS_OF).is_some());
+        // …but a bare/older/unverified GPT id is UNPRICED, not mispriced — the same
+        // strictness as Claude, so the canary reports it instead of the app
+        // borrowing a wrong sibling rate.
+        assert!(rates_for("gpt-5", AS_OF).is_none());
+        assert!(rates_for("gpt-5-codex", AS_OF).is_none());
+        assert!(rates_for("gpt-4o", AS_OF).is_none());
+        // Internal Codex tooling ids have no published rate → unpriced, never guessed.
+        assert!(rates_for("codex-auto-review", AS_OF).is_none());
+        assert!(rates_for("codex-security-scans-fox", AS_OF).is_none());
         assert!(rates_for("totally-unknown-model", AS_OF).is_none());
     }
 
@@ -351,6 +473,20 @@ mod tests {
             ("claude-sonnet-4-6", 3.0, 15.0, 3.75, 0.30),
             ("claude-haiku-4-5-20251001", 1.0, 5.0, 1.25, 0.10),
             ("claude-haiku-3-5-20241022", 0.80, 4.0, 1.00, 0.08),
+            // OpenAI GPT-5 family + Codex, verified 2026-07-17. Source:
+            // developers.openai.com/api/docs/pricing. These are the models observed
+            // in real local Codex logs; pinning them is what keeps the 3-4×
+            // understatement (gpt-5.5 was billed $1.25/$10) from silently returning.
+            // cache_write == input (OpenAI has no separate write charge).
+            ("gpt-5.5", 5.0, 30.0, 5.0, 0.50),
+            ("gpt-5.6-sol", 5.0, 30.0, 5.0, 0.50),
+            ("gpt-5.4", 2.5, 15.0, 2.5, 0.25),
+            ("gpt-5.6-terra", 2.5, 15.0, 2.5, 0.25),
+            ("gpt-5.6-luna", 1.0, 6.0, 1.0, 0.10),
+            ("gpt-5.4-mini", 0.75, 4.50, 0.75, 0.075),
+            ("gpt-5.4-nano", 0.20, 1.25, 0.20, 0.02),
+            ("gpt-5.5-pro", 30.0, 180.0, 30.0, 30.0),
+            ("gpt-5.3-codex", 1.75, 14.0, 1.75, 0.175),
         ];
         for (model, input, output, write, read) in cases {
             assert_eq!(card(model, AS_OF), (input, output, write, read), "{model}");
@@ -439,7 +575,10 @@ mod tests {
             ("claude-sonnet-4-6", (3.0, 15.0, 3.75, 0.30)),
             ("claude-haiku-4-5-20251001", (1.0, 5.0, 1.25, 0.10)),
             ("claude-haiku-3-5-20241022", (0.80, 4.0, 1.00, 0.08)),
-            ("gpt-5-codex", (1.25, 10.0, 1.25, 0.125)),
+            // OpenAI cards carry no announced expiry (unlike Sonnet 5's intro), so a
+            // real GPT model must price identically on every date.
+            ("gpt-5.3-codex", (1.75, 14.0, 1.75, 0.175)),
+            ("gpt-5.5", (5.0, 30.0, 5.0, 0.50)),
         ];
         for (model, expected) in cases {
             for date in dates {
@@ -547,18 +686,18 @@ mod tests {
         assert_eq!(rates.cost(&bogus), 100.0 * 10.0 / 1_000_000.0);
     }
 
-    /// Codex never sets the field, so its costs must be byte-identical to before
-    /// 1.19.0 existed.
+    /// Codex never sets the 1-hour-TTL field, so its cache-write split is a no-op
+    /// and its cost is a plain input+output+read sum at the verified card.
     #[test]
     fn a_provider_without_the_ttl_concept_prices_unchanged() {
-        let rates = rates_for("gpt-5-codex", AS_OF).unwrap();
+        let rates = rates_for("gpt-5.3-codex", AS_OF).unwrap();
         let t = TokenTotals {
             input_tokens: 1_000_000,
             output_tokens: 1_000_000,
             cache_read_tokens: 1_000_000,
             ..Default::default()
         };
-        assert_eq!(rates.cost(&t), 1.25 + 10.0 + 0.125);
+        assert_eq!(rates.cost(&t), 1.75 + 14.0 + 0.175);
     }
 
     /// A date stamp is not a minor version: `claude-opus-4-20250514` is Opus 4

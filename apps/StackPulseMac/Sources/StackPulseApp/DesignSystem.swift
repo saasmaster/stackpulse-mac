@@ -653,6 +653,49 @@ struct ProviderBalanceLabel: View {
 /// Draws nothing when the reading is recent, and nothing when the source didn't
 /// timestamp it (unknown is not a claim of staleness either — but note
 /// `LimitWindow.isStale` also refuses to call an untimestamped reading fresh).
+/// A one-line forecast under a live-limit meter: "at this pace, ~5 hr to the
+/// limit — before it resets," or the honest "watching / need more readings" while
+/// there isn't a trend yet.
+///
+/// Only shown for a **fresh** live reading — forecasting from a stale percentage
+/// would compound one uncertain number with another. The tint escalates only when
+/// the limit is actually on track to be hit before its reset; otherwise it stays
+/// quiet (secondary), so a reassuring "you'll clear it" doesn't shout.
+struct LimitForecastNote: View {
+    let forecast: LimitForecast.Result
+    /// Suppress when the underlying reading is stale (paired with `LimitAgeNote`,
+    /// which explains the staleness instead).
+    var isStale: Bool = false
+
+    var body: some View {
+        if !isStale, let text = LimitForecast.label(forecast) {
+            HStack(spacing: 4) {
+                Image(systemName: icon).imageScale(.small)
+                Text(text)
+            }
+            .font(.system(size: 9))
+            .foregroundStyle(tint)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(text)
+        }
+    }
+
+    /// Orange only when it will actually hit before reset; a projected miss or a
+    /// still-gathering state stays neutral.
+    private var tint: Color {
+        forecast.willHitBeforeReset == true ? .orange : .secondary
+    }
+
+    private var icon: String {
+        switch forecast.confidence {
+        case .none: return "hourglass"
+        case .low, .ok:
+            return forecast.willHitBeforeReset == true ? "gauge.with.needle" : "checkmark.circle"
+        }
+    }
+}
+
 struct LimitAgeNote: View {
     let limit: LimitWindow
     /// Anything older than this stops being "live". Matches the live-limits
