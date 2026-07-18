@@ -189,6 +189,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            let section = MainSection(rawValue: CommandLine.arguments[i + 1]) {
             showSection(section)
         }
+        // Optional (scripted screenshot capture): show the edge sidebar / open the
+        // menu-bar popover on launch. A tiny delay lets the status item lay out
+        // first so the popover anchors to it.
+        if CommandLine.arguments.contains("--show-sidebar") {
+            toggleSidebar()
+        }
+        if CommandLine.arguments.contains("--show-popover") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.togglePopover()
+            }
+        }
     }
 
     /// Menu-bar app: never quit just because the window closed.

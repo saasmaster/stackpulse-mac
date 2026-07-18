@@ -19,17 +19,21 @@
 </p>
 
 <p align="center">
+  <a href="https://saasmaster.net/extensions/stackpulse">Website</a> ·
   <a href="#build">Build</a> ·
   <a href="docs/USAGE.md">Usage guide</a> ·
   <a href="#read-this-before-you-trust-a-number">Why you can trust the numbers</a> ·
+  <a href="https://saasmaster.net/extensions/stackpulse/privacy">Privacy</a> ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 <p align="center">
-  <img src="docs/images/hero.png" alt="StackPulse Home: today's spend, live limits, active AI coding sessions, and anything needing attention" width="820">
+  <img src="docs/images/popover.png" alt="StackPulse menu-bar popover: live limits with a usage forecast, today's and 30-day spend, cache savings, and active AI coding sessions" width="360">
+  &nbsp;
+  <img src="docs/images/sidebar.png" alt="StackPulse edge sidebar: a slim always-on panel with per-provider spend and live limits" width="300">
 </p>
 
-<p align="center"><sub><i>Shown with sample data (StackPulse's built-in demo mode) — every surface labels it as such.</i></sub></p>
+<p align="center"><sub><i>The menu-bar popover and the always-on edge sidebar. Shown with sample data — StackPulse's built-in demo mode labels it on every surface.</i></sub></p>
 
 ---
 
@@ -56,6 +60,10 @@ opt-in exceptions.
 > where it came from, it refuses to guess a price it does not know, and it
 > documents its gaps instead of hiding them. The rest of this README is mostly
 > about *when not to trust a number* — which is exactly the point.
+
+<p align="center">
+  <img src="docs/images/home.png" alt="StackPulse main window, Home: today's and 30-day spend, cache savings, burn rate, live limits, and active sessions" width="880">
+</p>
 
 <table>
   <tr>
