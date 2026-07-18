@@ -1468,4 +1468,4 @@ differentiators. This starts closing that gap with two new main-window sections.
 - No code signing, notarization, DMG, or Sparkle auto-update yet.
 - Cost figures are list-price **estimates**, not billed amounts.
 
-[Unreleased]: https://github.com/stackpulse/stackpulse-mac
+[Unreleased]: https://github.com/saasmaster/stackpulse-mac

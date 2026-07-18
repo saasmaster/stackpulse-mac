@@ -7,7 +7,7 @@ body:
       value: |
         StackPulse stays local-first, read-only, and honest about the provenance
         of every number. Proposals that keep those properties are easiest to
-        accept — see the [guiding principles](https://github.com/stackpulse/stackpulse-mac/blob/main/CONTRIBUTING.md#guiding-principles).
+        accept — see the [guiding principles](https://github.com/saasmaster/stackpulse-mac/blob/main/CONTRIBUTING.md#guiding-principles).
   - type: textarea
     id: problem
     attributes:

@@ -11,6 +11,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/saasmaster/stackpulse-mac/actions/workflows/ci.yml"><img src="https://github.com/saasmaster/stackpulse-mac/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license">
   <img src="https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey" alt="macOS 14+">
   <img src="https://img.shields.io/badge/local--first-no%20telemetry-brightgreen" alt="Local-first, no telemetry">

@@ -13,7 +13,7 @@ edition = "2021"
 rust-version = "1.80"
 license = "MIT"
 authors = ["StackPulse contributors"]
-repository = "https://github.com/stackpulse/stackpulse-mac"
+repository = "https://github.com/saasmaster/stackpulse-mac"
 
 # Portability guard: the shared core and protocol must build for non-macOS
 # targets. Keep platform-specific code out of these crates (see ADR-0005).
