@@ -15,6 +15,27 @@ struct SPVersion: Codable, Sendable {
     var text: String { "\(major).\(minor).\(patch)" }
 }
 
+/// Wraps a `Decodable` so a failure decodes to `nil` instead of throwing —
+/// the building block for `decodeLossyArray`.
+private struct Lossy<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws {
+        value = try? T(from: decoder)
+    }
+}
+
+extension KeyedDecodingContainer {
+    /// Decode an array element-by-element, keeping the elements that decode and
+    /// dropping only those that don't — so one malformed item can't collapse the
+    /// whole array to empty. An absent key, an explicit null, or a non-array value
+    /// all yield `[]` (same as `decodeIfPresent`). Use where an all-or-nothing
+    /// decode would turn a single bad element into a dangerous empty result.
+    func decodeLossyArray<T: Decodable>(_ type: T.Type, forKey key: Key) -> [T] {
+        guard let wrapped = try? decode([Lossy<T>].self, forKey: key) else { return [] }
+        return wrapped.compactMap(\.value)
+    }
+}
+
 struct TokenTotals: Codable, Sendable {
     var input_tokens: UInt64 = 0
     var output_tokens: UInt64 = 0
@@ -185,9 +206,8 @@ struct ProviderUsage: Codable, Sendable, Identifiable {
     let analytics: ProviderAnalytics?   // nil for detection-only providers
     /// Credit balance (protocol ≥ 1.7.0). `nil` by default — the core never sets
     /// it; the Swift layer folds one in after the user connects an API key (see
-    /// `replacingBalance`). Decodes to `nil` when the key is absent because this
-    /// type has no custom `init(from:)`, so the synthesized decoder treats the
-    /// optional as decode-if-present.
+    /// `replacingBalance`). Decodes to `nil` when the key is absent (the custom
+    /// decoder below uses `decodeIfPresent`).
     let balance: ProviderBalance?
     var id: String { provider }
 
@@ -290,6 +310,47 @@ struct ProviderUsage: Codable, Sendable, Identifiable {
         case "gemini": return "Ge"
         default: return String(display_name.prefix(2))
         }
+    }
+}
+
+extension ProviderUsage {
+    /// Defensive decoder: a leaner or future core that omits one of the collection
+    /// fields for a provider degrades **that provider** to "no data for that
+    /// dimension" instead of throwing and failing the ENTIRE snapshot to "No data".
+    ///
+    /// This is the one collection type that lacked such tolerance — every sibling
+    /// (`Project`, `Worktree`, `Checkpoint`, …) already defaults its arrays. It is
+    /// safe here, and specifically NOT the mistake `SchemaCanary` warns against:
+    /// an empty `windows`/`models`/`limits` is a *truthful absence* (this provider
+    /// reported nothing), whereas a defaulted canary `status` would be a *false
+    /// claim of health*. The load-bearing scalars — the provider id and its
+    /// detection state — stay required, because a provider without them is
+    /// genuinely malformed, not merely leaner.
+    ///
+    /// Declared in an extension so the memberwise initializer (used by
+    /// `replacingLimits` / `replacingBalance` / `copy`) is still synthesized.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        provider = try c.decode(String.self, forKey: .provider)
+        display_name = try c.decode(String.self, forKey: .display_name)
+        health = try c.decode(String.self, forKey: .health)
+        installed = try c.decode(Bool.self, forKey: .installed)
+        authenticated = try c.decode(Bool.self, forKey: .authenticated)
+        detected_version = try c.decodeIfPresent(String.self, forKey: .detected_version)
+        plan_hint = try c.decodeIfPresent(String.self, forKey: .plan_hint)
+        windows = (try? c.decodeIfPresent([SpendWindow].self, forKey: .windows) ?? nil) ?? []
+        models = (try? c.decodeIfPresent([ModelUsage].self, forKey: .models) ?? nil) ?? []
+        limits = (try? c.decodeIfPresent([LimitWindow].self, forKey: .limits) ?? nil) ?? []
+        capabilities = (try? c.decodeIfPresent([[String]].self, forKey: .capabilities) ?? nil) ?? []
+        notes = (try? c.decodeIfPresent([String].self, forKey: .notes) ?? nil) ?? []
+        analytics = try? c.decodeIfPresent(ProviderAnalytics.self, forKey: .analytics) ?? nil
+        balance = try? c.decodeIfPresent(ProviderBalance.self, forKey: .balance) ?? nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider, display_name, health, installed, authenticated
+        case detected_version, plan_hint, windows, models, limits
+        case capabilities, notes, analytics, balance
     }
 }
 
@@ -604,9 +665,16 @@ struct UsageSnapshot: Codable, Sendable {
         providers = try c.decode([ProviderUsage].self, forKey: .providers)
         pricing_note = try c.decode(String.self, forKey: .pricing_note)
         // Absent (older core) or explicit null → empty, never a decode failure.
-        alerts = ((try? c.decodeIfPresent([Alert].self, forKey: .alerts)) ?? nil) ?? []
-        missions = ((try? c.decodeIfPresent([Mission].self, forKey: .missions)) ?? nil) ?? []
-        insights = ((try? c.decodeIfPresent([Insight].self, forKey: .insights)) ?? nil) ?? []
+        // Element-tolerant, not all-or-nothing. The previous `try?` swallowed the
+        // WHOLE array on a single malformed element — for alerts that turns one bad
+        // field into an empty inbox, which the bell renders as "all clear": a decode
+        // error dressed as a clean bill of health, the exact failure this app
+        // refuses. Decoding element-by-element keeps every alert we CAN read and
+        // drops only the unreadable one, so a real alert is never hidden by a
+        // sibling's bad field.
+        alerts = c.decodeLossyArray(Alert.self, forKey: .alerts)
+        missions = c.decodeLossyArray(Mission.self, forKey: .missions)
+        insights = c.decodeLossyArray(Insight.self, forKey: .insights)
         // Absent (pre-1.18.0 core) ⇒ this core runs no schema checks. That is a
         // real, honest answer and the UI says so; it is NOT an all-clear, and
         // nothing downstream may read it as one.

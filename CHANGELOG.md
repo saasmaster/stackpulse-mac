@@ -18,6 +18,33 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Decoder resilience — a leaner core or one bad element can't break the app (app 0.44.0)
+
+The last robustness gaps before launch, from the earlier review's "chase the last
+point" list. All three are about a snapshot surviving imperfect input gracefully
+instead of failing loudly or — worse — falsely.
+
+- **A leaner/future core no longer fails the whole snapshot.** `ProviderUsage` was
+  the one collection type without a defensive decoder: if a provider omitted any of
+  `windows`/`models`/`limits`/`capabilities`/`notes`, the entire snapshot threw and
+  the app showed "No data". It now defaults those to empty, degrading that one
+  provider to "no data for that dimension" while the rest survives. Its load-bearing
+  scalars (id, detection state) stay required — a provider without them is genuinely
+  malformed, not merely lean. Kept honest: this is safe precisely where a defaulted
+  `SchemaCanary` would not be, because an empty list is a truthful absence, not a
+  false claim of health.
+- **One malformed alert no longer empties the inbox.** `alerts`/`missions`/`insights`
+  decoded all-or-nothing: a single bad element collapsed the whole array to `[]` —
+  and for alerts, an empty inbox reads as "all clear", a decode error masquerading as
+  a clean bill of health. They now decode element-by-element (`decodeLossyArray`),
+  keeping every item that parses and dropping only the unreadable one, so a real
+  alert can't be hidden by a sibling's bad field.
+- **Documented the Claude live-limits invariant.** The live-limit merge assumes the
+  offline core never reports a Claude limit (Claude's limits are network-only);
+  spelled out why that holds and where to revisit it if the protocol ever changes.
+
+4 new tests. Gate: 233 Rust tests, 132 Swift tests, clippy + fmt clean.
+
 ### Launch polish: one clear IA, a great first run, GitHub-ready (app 0.43.0)
 
 Preparing StackPulse for a public GitHub launch — and fixing the "too many menus"

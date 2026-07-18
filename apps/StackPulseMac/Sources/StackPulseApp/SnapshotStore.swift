@@ -1418,6 +1418,15 @@ final class SnapshotStore: ObservableObject {
         guard let snap = snapshot else { return }
         let providers = snap.providers.map { p -> ProviderUsage in
             guard p.provider == "claude" else { return p }
+            // INVARIANT: the offline core never emits a limit for Claude — Claude's
+            // limits exist only here, fetched live over the network, so every
+            // `liveProvenance` limit on the Claude provider is one WE added on a
+            // previous merge. Dropping them before re-merging is therefore safe: it
+            // discards our own stale copies, not a core reading. (Codex is the
+            // opposite — its limits come FROM the core with this same provenance —
+            // which is exactly why this is scoped to `provider == "claude"`.) If the
+            // core ever did report a Claude limit, this filter would strip it; that
+            // would be a protocol change, and this is the line to revisit.
             let core = p.limits.filter { $0.provenance != AnthropicUsageClient.liveProvenance }
             return p.replacingLimits(Self.mergeLimits(core: core, live: live))
         }
