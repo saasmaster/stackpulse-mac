@@ -8,6 +8,11 @@ struct UsageSection: View {
     var body: some View {
         SectionScaffold(section: .usage) { snapshot in
             VStack(alignment: .leading, spacing: 20) {
+                // Nothing detected yet: guide the reader instead of leading with a
+                // stack of "not detected" cards and an estimate footnote for zero data.
+                if snapshot.installedProviders.isEmpty {
+                    NoProvidersDetectedNote()
+                }
                 ForEach(snapshot.providers) { provider in
                     if provider.installed {
                         UsageProviderBlock(provider: provider)

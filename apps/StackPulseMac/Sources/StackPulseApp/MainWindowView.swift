@@ -204,6 +204,11 @@ struct MainWindowView: View {
                     ForEach(MainSection.configuration) { section in
                         navRow(section, hint: section == .settings ? "⌘," : nil)
                     }
+                    // The Command Center opens a SEPARATE window (a second-display
+                    // monitor), so it isn't a nav row — a distinct affordance here
+                    // makes it discoverable from the workspace, where it otherwise
+                    // wasn't reachable at all (only the popover / menu / ⌘⇧C knew it).
+                    commandCenterLaunch
                 }
                 .padding(.horizontal, 10)
 
@@ -323,6 +328,40 @@ struct MainWindowView: View {
         .textCase(nil)
     }
 
+    /// Opens the Command Center window (a dense monitor meant for a second
+    /// display). Styled to read as "opens a window", not "selects a pane": a
+    /// subtitle names what it is, and the ⌘⇧C hint sits at the trailing edge.
+    private var commandCenterLaunch: some View {
+        Button {
+            NotificationCenter.default.post(name: .stackPulseOpenCommandCenter, object: nil)
+        } label: {
+            HStack(spacing: 10) {
+                CommandCenterIcon(size: 14)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Command Center")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Text("Full-screen monitor for a second display")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 4)
+                Text("⌘⇧C")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open the Command Center — a dense, read-only monitor you can leave running on a second display (⌘⇧C)")
+        .accessibilityHint("Opens a separate monitoring window")
+    }
+
     private var sidebarFooter: some View {
         VStack(alignment: .leading, spacing: 3) {
             Divider().opacity(0.4)
@@ -432,6 +471,9 @@ struct SectionScaffold<Content: View>: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 SectionHeader(title: section.title, summary: section.summary)
+                // One placement covers every section: while demo mode is on, no
+                // pane can show sample data without this banner above it.
+                DemoBanner()
                 stateBody
             }
             .padding(22)
@@ -446,7 +488,7 @@ struct SectionScaffold<Content: View>: View {
                 EmptyStateView(
                     icon: "tray",
                     title: "No providers detected",
-                    message: "StackPulse didn't find any supported AI tools on this Mac yet."
+                    message: "StackPulse didn't find any supported AI coding tools on this Mac yet. Start a session in one — Claude Code, Codex, Cursor and more — and it appears here automatically, read locally. Or open Projects to add a folder and get started."
                 )
             } else {
                 content(snapshot)

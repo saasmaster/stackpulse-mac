@@ -18,6 +18,48 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Launch polish: one clear IA, a great first run, GitHub-ready (app 0.43.0)
+
+Preparing StackPulse for a public GitHub launch — and fixing the "too many menus"
+feeling. The surfaces stay (the popover for a glance, the always-on edge sidebar,
+the main window, and the Command Center for a second display), but each now has a
+clearer job and a clearer way in.
+
+**The Command Center was unreachable from the main window** — only the popover, a
+menu, and ⌘⇧C knew it existed. Added a clearly-labeled entry in the main-window
+sidebar ("Command Center — full-screen monitor for a second display · ⌘⇧C"),
+styled to read as "opens a window", not a nav pane. It's optional, and now easy to
+find.
+
+**A great first 60 seconds.** A stranger who clones and runs StackPulse with no
+AI-tool logs used to land on a wall of grey "not detected" cards. Now a warm
+**cold-start hero** on Home explains the two truthful ways data arrives (use an AI
+tool → it reads the logs; add a folder → it fills Projects/Advisor) with the one
+next action. Several empty states got specific, actionable copy instead of "No
+data".
+
+**See it with sample data.** A new opt-in demo mode fills the app with fabricated
+activity so a first-run visitor can see the real product — Claude/Codex spend,
+live limits (one on track to run out, to show the forecast), sessions. The hard
+guard, because this app's whole value is honest reporting: it's **off by default**,
+does no scanning or network, the sample is built through the real decoder (so it
+can't render something malformed), and **every surface shows a prominent "Sample
+data — not from your Mac" banner** while it's on. One tap in the cold-start hero to
+try it, one tap to leave, plus a Settings toggle.
+
+**GitHub-ready.** README got a hero-image layout, a scannable "What it shows you"
+feature list, and static badges — and its "known inaccuracies" section was
+corrected: three of the caveats it listed described bugs *fixed this session*
+(cache-write TTL split, OpenAI rate verification, the Sonnet-5 clock), and the
+protocol version was stale at 1.18.0. Added GitHub issue templates (with a provider
+dropdown and a required "no raw logs/tokens pasted" confirmation matching the
+honesty ethos), a PR template mirroring the real CI gates, and a `docs/` index.
+
+5 new tests (demo-data decode + honesty invariants). Gate: 233 Rust tests, 128
+Swift tests, clippy + fmt clean. Verified: demo mode launches populated without a
+crash. **Screenshots are yours to capture** (`docs/images/` documents the exact
+three shots); the README references them.
+
 ### Bug-check pass: fix what a 6-agent review found (app 0.42.0)
 
 A parallel adversarial review (six agents over the Rust core and Swift app) plus a

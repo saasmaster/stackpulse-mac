@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest a capability or improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        StackPulse stays local-first, read-only, and honest about the provenance
+        of every number. Proposals that keep those properties are easiest to
+        accept — see the [guiding principles](https://github.com/stackpulse/stackpulse-mac/blob/main/CONTRIBUTING.md#guiding-principles).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do, and where does StackPulse fall short today?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What you'd like StackPulse to do.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you weighed, or how you work around this now.
+    validations:
+      required: false

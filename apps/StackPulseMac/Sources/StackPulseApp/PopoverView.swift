@@ -105,6 +105,7 @@ struct PopoverView: View {
             let others = snapshot.providers.filter { !$0.hasUsageData && $0.balance == nil }
             ScrollView {
                 VStack(spacing: 10) {
+                    DemoBanner()
                     ActiveNowBlock(missions: store.activeMissions, maxItems: 3) {
                         // Jump the main window straight to the Missions section.
                         store.pendingSection = .missions

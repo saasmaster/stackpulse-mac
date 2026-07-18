@@ -23,6 +23,13 @@ struct OverviewDashboard: View {
         VStack(alignment: .leading, spacing: 18) {
             aggregateHeader(snapshot)
 
+            // Folders added but no AI tool detected yet: the aggregate above is all
+            // dashes and every card below reads "not detected". Say why, and what
+            // fills it, rather than leaving the reader to infer it.
+            if snapshot.installedProviders.isEmpty {
+                NoProvidersDetectedNote()
+            }
+
             LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                 ForEach(snapshot.providers) { provider in
                     OverviewProviderCard(provider: provider)

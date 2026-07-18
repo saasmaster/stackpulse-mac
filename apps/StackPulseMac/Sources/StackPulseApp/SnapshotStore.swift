@@ -90,6 +90,30 @@ final class SnapshotStore: ObservableObject {
         }
     }
 
+    /// "See it with sample data" — off by default, opt-in, persisted. When on, the
+    /// store publishes a fabricated `DemoData` snapshot instead of scanning, so a
+    /// first-run user with no AI-tool logs can see the real product. **Every
+    /// surface that shows data must display `DemoBanner` while this is on** — fake
+    /// data must never be mistaken for real, which is this app's whole point.
+    @Published var demoMode: Bool = SnapshotStore.loadBool(SnapshotStore.demoModeKey, default: false) {
+        didSet {
+            guard demoMode != oldValue else { return }
+            UserDefaults.standard.set(demoMode, forKey: Self.demoModeKey)
+            if demoMode { applyDemoData() } else { refresh() }
+        }
+    }
+    private static let demoModeKey = "demoMode"
+
+    /// Publish the sample snapshot. Re-applied on each refresh tick while demo mode
+    /// is on, so its now-relative timestamps (limits, sessions) stay current.
+    private func applyDemoData() {
+        isLoading = false
+        lastError = nil
+        lastUpdated = Date()
+        keychainAuthed = ["claude"] // so the sample Claude card reads "authenticated"
+        snapshot = DemoData.snapshot(now: Date())
+    }
+
     /// Which screen edge the floating edge-sidebar pins to. `false` = right
     /// (default, original behavior), `true` = left. Persisted; the
     /// `EdgeSidebarController` observes this and re-pins the panel live.
@@ -1091,6 +1115,8 @@ final class SnapshotStore: ObservableObject {
 
     func refresh() {
         guard !isLoading else { return }
+        // Demo mode publishes sample data and never scans or hits the network.
+        if demoMode { applyDemoData(); return }
         isLoading = true
         lastError = nil
 

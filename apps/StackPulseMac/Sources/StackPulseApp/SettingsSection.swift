@@ -35,6 +35,7 @@ struct SettingsSection: View {
                 budgetCard
                 liveLimitsCard
                 startupCard
+                demoCard
                 powerCard
                 ProviderConnectionsCard()
                 SecurityPrivacyCard()
@@ -437,6 +438,31 @@ struct SettingsSection: View {
     /// flips the login item in System Settings.
     private var startupCard: some View {
         StartupCard()
+    }
+
+    /// Sample-data mode — off by default. A first-run visitor with no logs can flip
+    /// it on to see the product; a prominent banner marks every surface while it's on.
+    private var demoCard: some View {
+        SettingsCard(title: "Sample data", systemImage: "wand.and.stars") {
+            Toggle(isOn: $store.demoMode) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Show sample data instead of your own")
+                        .font(.callout)
+                    Text("Fills StackPulse with fabricated activity so you can see how it looks. Every surface shows a \u{201C}Sample data\u{201D} banner while this is on, and no scanning or network happens. Off by default.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.switch)
+            if store.demoMode {
+                Label("Sample data is on — turn it off to see your own machine.",
+                      systemImage: "wand.and.stars")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .labelStyle(.titleAndIcon)
+            }
+        }
     }
 
     private var powerCard: some View {

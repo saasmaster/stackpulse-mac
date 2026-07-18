@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & ideas
+    url: https://github.com/stackpulse/stackpulse-mac/discussions
+    about: Ask a question, share how you use StackPulse, or float an idea before filing an issue.
+  - name: Report a security vulnerability (private)
+    url: https://github.com/stackpulse/stackpulse-mac/security/advisories/new
+    about: Do not open a public issue for vulnerabilities. Report privately here or by email — see SECURITY.md.

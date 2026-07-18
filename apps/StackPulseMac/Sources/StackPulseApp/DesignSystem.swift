@@ -306,6 +306,50 @@ struct StatusDot: View {
     }
 }
 
+// MARK: - Demo-mode banner
+
+/// The "this isn't real" guarantee for demo mode. Shown on every surface that
+/// renders sample data, so fabricated numbers can never be mistaken for the
+/// user's own — the one hard rule of a demo mode in an app whose whole value is
+/// honest reporting. Includes a one-tap way out.
+struct DemoBanner: View {
+    @EnvironmentObject var store: SnapshotStore
+
+    var body: some View {
+        if store.demoMode {
+            HStack(spacing: 8) {
+                Image(systemName: "wand.and.stars")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Sample data — not from your Mac")
+                        .font(.caption.weight(.semibold))
+                    Text("So you can see how StackPulse looks with activity. Nothing here is real.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button("Turn off") { store.demoMode = false }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.orange.opacity(0.14))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.orange.opacity(0.35), lineWidth: 0.8)
+                    )
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Sample data, not from your Mac. Button: turn off.")
+        }
+    }
+}
+
 // MARK: - Finding one project in a long list
 
 /// The rule for "does this project match what I typed".

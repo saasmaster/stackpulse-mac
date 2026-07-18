@@ -509,8 +509,8 @@ struct MissionsSection: View {
             if missions.isEmpty {
                 EmptyStateView(
                     icon: "moon.zzz",
-                    title: "No active sessions",
-                    message: "No AI coding sessions in the last 2 hours."
+                    title: "No AI sessions right now",
+                    message: "StackPulse hasn't seen an AI coding session on this Mac in the last 2 hours. Start one in Claude Code, Codex, Cursor or another supported tool and it shows up here live — what it's working on, its tokens per hour, and its branch."
                 )
             } else {
                 let verifications = verificationIndex(missions, store.commandRuns)

@@ -1,17 +1,62 @@
-# StackPulse
+<h1 align="center">StackPulse</h1>
 
-**A local-first command center for AI-assisted development on macOS.**
+<p align="center">
+  <strong>A local-first command center for AI-assisted development on macOS.</strong>
+</p>
 
-StackPulse reads the logs your AI coding tools already write to disk and tells you
-where your tokens went, how close you are to your limits, which projects are
-burning spend, and what needs your attention — in a native menu-bar app.
+<p align="center">
+  Reads the logs your AI coding tools already write to disk — and tells you where
+  your tokens went, how close you are to your limits, and what needs your attention.
+  <br>No account. No API key. Nothing leaves your Mac.
+</p>
 
-It needs no account and no API key. Its defining constraint is **honest
-reporting**: it labels every number with where it came from, it refuses to guess
-a price it does not know, and it documents its gaps instead of hiding them.
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license">
+  <img src="https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/local--first-no%20telemetry-brightgreen" alt="Local-first, no telemetry">
+  <img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20Swift%206-orange" alt="Built with Rust and Swift 6">
+</p>
 
-📖 **[Usage guide →](docs/USAGE.md)** — build, run, read the numbers, and know
-when not to trust them.
+<p align="center">
+  <a href="#build">Build</a> ·
+  <a href="docs/USAGE.md">Usage guide</a> ·
+  <a href="#read-this-before-you-trust-a-number">Why you can trust the numbers</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
+
+<p align="center">
+  <img src="docs/images/hero.png" alt="StackPulse menu-bar popover: live limits with a usage forecast, today's spend, active AI coding sessions, and anything needing attention" width="760">
+</p>
+
+---
+
+## What it shows you
+
+- **Live limits, before you're blocked.** Your Claude 5-hour and weekly limits,
+  with a forecast — *"at this pace, ~5 hr to the limit"* — and a heads-up while
+  there's still room to react, not at 95%.
+- **Where the money went.** Per-model, per-window token and cost breakdowns for
+  Claude Code and Codex, read from local logs. Every figure is a labeled estimate,
+  never presented as your bill.
+- **What your agents are doing.** Live Claude / Codex / Antigravity sessions
+  observed on this Mac — what each is working on, right now.
+- **Your projects.** Launch a dev server in one tap, run remembered commands, see
+  which projects your spend went to, and whether each stack is current and secure.
+- **Is it working?** A Diagnostics screen that answers "is StackPulse healthy, and
+  if not, exactly what to fix" — plus a redacted, secret-free support bundle.
+
+It lives in your menu bar. Everything is read locally; the Rust core makes no
+network calls at all, and the app is offline by default with three named,
+opt-in exceptions.
+
+> **Its defining constraint is honest reporting:** it labels every number with
+> where it came from, it refuses to guess a price it does not know, and it
+> documents its gaps instead of hiding them. The rest of this README is mostly
+> about *when not to trust a number* — which is exactly the point.
+
+<p align="center">
+  <img src="docs/images/dashboard.png" alt="StackPulse main window: per-provider spend, live limits, and usage trends" width="820">
+</p>
 
 ---
 
@@ -21,7 +66,7 @@ Working and used daily against real Claude Code and Codex CLI logs. Built from
 source; there is no signed release.
 
 Four independent version lines ([ADR-0006](docs/decisions/0006-independent-version-lines.md)):
-protocol **1.18.0**, core **0.1.0**, the app (see [`CHANGELOG.md`](CHANGELOG.md)),
+protocol **1.20.0**, core **0.1.0**, the app (see [`CHANGELOG.md`](CHANGELOG.md)),
 and a compatibility manifest that does not exist yet. `stackpulse ping` is
 authoritative for the first two.
 
@@ -33,7 +78,7 @@ Three things, stated plainly.
 
 Every dollar figure is computed on your machine by multiplying local token counts
 against an **embedded table of approximate public list prices**
-(`crates/stackpulse-core/src/pricing.rs`, as of `2026-07-16`). Costs are always
+(`crates/stackpulse-core/src/pricing.rs`, as of `2026-07-17`). Costs are always
 tagged `LocalEstimate`.
 
 StackPulse cannot see your invoice, plan, discounts, or credits. On a
@@ -63,20 +108,24 @@ one. `rates_for()` now parses the version instead.
 
 ### The price table's known inaccuracies
 
-Stated in `pricing.rs`, not hidden. All three are live today:
+Stated in `pricing.rs`, not hidden. Both are live today:
 
-1. **Cache writes are priced at the 5-minute rate.** Anthropic bills a 1-hour
-   write at 2× input, and `TokenTotals` carries a single `cache_creation_tokens`,
-   so the split is lost before pricing. On a real machine **86% of cache writes
-   were 1-hour** — this **understates**.
-2. **OpenAI/Codex rates are unverified.** The Claude cards were read off
-   Anthropic's published list; the GPT/Codex cards were inherited from an earlier
-   revision and not checked.
-3. **Sonnet 5 is on introductory pricing** through **2026-08-31**. `rates_for()`
-   has no clock, so on that date the table silently becomes wrong until updated.
+1. **A GPT/Codex model we have not verified is left *unpriced*, not guessed.**
+   The Claude cards and the GPT-5 / Codex models actually seen in local logs
+   (`gpt-5.5`, `gpt-5.6-sol`, `gpt-5.3-codex`, …) were read off each vendor's
+   published list. Any GPT/Codex id we do **not** recognize — a later generation,
+   or the internal `codex-*` tooling ids — returns `None`, so its tokens count but
+   its cost is dropped and the **canary reports the gap** rather than borrowing a
+   sibling's rate.
+2. **Data-residency and fast-mode multipliers are not modelled.** A `us`
+   data-residency turn bills 1.1×, and fast mode has its own card; nothing local
+   says which a turn used, so applying either would be a guess.
 
-Rates are hand-maintained (`PRICING_AS_OF = "2026-07-16"`). There is no remote
-price feed.
+Rates are hand-maintained (`PRICING_AS_OF = "2026-07-17"`) and pinned in tests.
+Announced future changes with an effective date (e.g. Sonnet 5's introductory
+price through 2026-08-31) are **date-aware** — `rates_for()` prices each record by
+*its own* date, so the table doesn't silently go wrong on the switch-over day.
+There is no remote price feed.
 
 ### 3. Eleven providers are registered. Two have a full usage scan.
 
