@@ -485,11 +485,16 @@ fn codex_mission(path: &Path, now_unix: i64) -> Option<Mission> {
                                 .get("output_tokens")
                                 .and_then(Value::as_u64)
                                 .unwrap_or(0);
-                            let reasoning = last
+                            // `output_tokens` already includes reasoning (OpenAI
+                            // completion-token semantics), so adding `reasoning` on
+                            // top would double-count it — the same bug fixed in the
+                            // codex cost scanner. `reasoning` is read only to keep
+                            // the field documented at the parse site.
+                            let _reasoning = last
                                 .get("reasoning_output_tokens")
                                 .and_then(Value::as_u64)
                                 .unwrap_or(0);
-                            tokens_last_hour += input + output + reasoning;
+                            tokens_last_hour += input + output;
                         }
                     }
                 }

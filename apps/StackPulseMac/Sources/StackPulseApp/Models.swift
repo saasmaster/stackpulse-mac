@@ -790,7 +790,21 @@ struct Dependency: Codable, Sendable, Identifiable {
     let is_dev: Bool
     let advisories: [Advisory]
 
+    /// Row identity — name-scoped, so the same package reads as "one dependency"
+    /// across the UI regardless of which version a project resolved.
     var id: String { ecosystem + "\u{1}" + name }
+
+    /// **Enrichment-cache identity — version-scoped.** Network enrichment holds a
+    /// package's `latest` (version-independent) but also its **advisories**, which
+    /// OSV answers *per version*. Caching that record by `id` (name only) let a
+    /// project reuse a different project's advisories, queried at a different
+    /// installed version — a false positive (a patched project shows a fixed
+    /// advisory) or, worse, a false negative (a vulnerable project shows "0
+    /// advisories" because a patched sibling was checked first). The cache key must
+    /// therefore match what the record is actually *about*: this exact resolved
+    /// version. Deps with no lockfile version fall back to sharing by name — their
+    /// status is `unknown` and they carry no version-specific claim anyway.
+    var enrichmentKey: String { id + "\u{1}" + (installed ?? "") }
 }
 
 /// Roll-up counts for a project's stack health.

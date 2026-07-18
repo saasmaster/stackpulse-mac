@@ -18,6 +18,65 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
 
+### Bug-check pass: fix what a 6-agent review found (app 0.42.0)
+
+A parallel adversarial review (six agents over the Rust core and Swift app) plus a
+design pass. Nine real bugs fixed, two of them honesty-critical, plus two design
+improvements that stop a class of bug recurring.
+
+**Codex output cost was overstated ~36% (HIGH).** OpenAI's `output_tokens` already
+includes `reasoning_output_tokens` as a subset, but the scanner stored both and the
+cost billed both — double-counting reasoning in cost AND the token total. Fixed to
+store exclusive visible output; the fixture test now pins the exact cost (it only
+asserted `> 0` before, which is how this slipped). Combined with the 0.41.0 rate
+fix, Codex 30-day is now correct in both directions.
+
+**Advisories could be shown for the wrong version (HIGH honesty).** Enrichment was
+cached by package *name*, but OSV advisories are per-*version*. Two projects using
+the same package at different versions shared one record — a false positive (a
+patched project showing a fixed advisory) or, worse, a false negative (a vulnerable
+project showing "0 advisories" because a patched sibling was checked first). Root
+cause was a design one: `dep.id` was overloaded as both the UI row identity and the
+cache identity. Split them — a new version-scoped `enrichmentKey` caches what the
+record is actually about.
+
+**OpenAI pricing was version-blind (MEDIUM, my own 0.41.0 code).** The new matcher
+keyed on the variant name alone (`sol`/`mini`/…), so a future `gpt-6-sol` would have
+been priced at the 5.6 card with no canary drift — the exact Opus-3× mistake,
+reintroduced. Now version-strict like the Claude path; an unrecognized generation is
+unpriced, not mispriced.
+
+**A subprocess timeout that couldn't fire (MEDIUM).** `readViaSecurityCLI` and the
+Desktop-cache `sqliteQuery` bounded their reads with a poll loop over
+`FileHandle.availableData` — which blocks with no output, so the deadline check was
+never re-reached while a Keychain "Allow" prompt or a locked DB held stdout open.
+The live-limits fetch could hang until restart. Both now use one `BoundedProcess`
+helper that terminates the process at the deadline.
+
+**System daemons leaked into the services list (MEDIUM).** macOS `lsof` truncates
+the COMMAND column to 9 chars, so the noise filter's longer needles
+(`mdnsresponder`, `nsurlsessiond`, …) never matched — daemons showed as your dev
+servers, and Docker got no kind. Added `+c 0` for full names, and unescape lsof's
+`\x20` so names read cleanly.
+
+**A nested npm dep could shadow the resolved version (MEDIUM).** A transitive copy
+whose lockfile key sorts first (BTreeMap order) overwrote the top-level version —
+lodash reported 3.10.1 when the project resolved 4.17.21. Now the shallowest
+`node_modules/` depth wins.
+
+Also: the menu-bar percentage is now aged like every card (a stale Codex reading no
+longer shows as live in the one always-visible surface); live-limits fetches back
+off on sustained failure instead of hammering the API every tick; the Claude
+expired-credential state reports "waiting for renewal" not "sign in"; the Codex
+dedup key includes reasoning so distinct turns aren't collapsed.
+
+**Design (leave it better):** the duplicated subprocess-timeout logic became one
+deep `BoundedProcess` module (the tricky `availableData` knowledge now lives once);
+the overloaded `dep.id` was split into row-identity vs. version-scoped cache key.
+
+23 new tests. Gate: 233 Rust tests, 124 Swift tests, clippy + fmt clean. Verified
+live: Codex 30-day corrected, daemons gone from services, service names clean.
+
 ### Forecast your limits, and price Codex correctly (app 0.41.0)
 
 Two depth improvements on the core promise — trust the numbers, and act on them

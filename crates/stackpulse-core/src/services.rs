@@ -20,8 +20,13 @@ const MAX_SERVICES: usize = 200;
 /// panics: if `lsof` is missing or errors, returns an empty vector.
 pub fn detect(roots: &[String]) -> Vec<RunningService> {
     // 1. Enumerate listening TCP sockets.
+    // `+c 0` disables the COMMAND-column truncation macOS `lsof` applies by
+    // default (9 chars). Without it `ControlCenter`→`ControlCe`, `mDNSResponder`
+    // →`mDNSRespo`, `com.docker.backend`→`com.docke`, so the system-daemon noise
+    // filter's longer needles never matched (leaking daemons into the dev-server
+    // view) and Docker got no kind/URL. Full names make both correct.
     let stdout = match Command::new("lsof")
-        .args(["-nP", "-iTCP", "-sTCP:LISTEN"])
+        .args(["+c", "0", "-nP", "-iTCP", "-sTCP:LISTEN"])
         .output()
     {
         Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -91,6 +96,31 @@ fn parse_cwd_output(text: &str) -> Option<String> {
         .filter(|p| !p.is_empty())
 }
 
+/// Decode lsof's `\xNN` hex escapes (spaces, control chars) back to their
+/// characters. Anything that isn't a well-formed `\xNN` escape is passed through
+/// verbatim, so a literal backslash in a name is never mangled.
+fn unescape_lsof(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // `.get()` is bounds-safe, so a trailing `\x` or `\xN` just falls through.
+        if bytes[i] == b'\\' && bytes.get(i + 1) == Some(&b'x') {
+            if let (Some(h), Some(l)) = (
+                bytes.get(i + 2).and_then(|b| (*b as char).to_digit(16)),
+                bytes.get(i + 3).and_then(|b| (*b as char).to_digit(16)),
+            ) {
+                out.push(char::from((h * 16 + l) as u8));
+                i += 4;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
 /// Parse the default `lsof -iTCP -sTCP:LISTEN` table into `(pid, command, port)`.
 ///
 /// Each LISTEN row looks like:
@@ -127,7 +157,10 @@ fn parse_lsof_listen(text: &str) -> Vec<(i32, String, u16)> {
         let Ok(pid) = fields[pid_idx].parse::<i32>() else {
             continue;
         };
-        let command = fields[..pid_idx].join(" ");
+        // With `+c 0`, lsof escapes spaces and other non-printables in the COMMAND
+        // field as `\xNN` (so a name with spaces stays a single whitespace-split
+        // field). Decode them back, or the UI shows `GitHub\x20Desktop\x20Helper`.
+        let command = unescape_lsof(&fields[..pid_idx].join(" "));
         if command.is_empty() {
             continue;
         }
@@ -409,5 +442,32 @@ node    102 jorge   3u  IPv4 0x3  0t0  TCP 127.0.0.1:6000 (LISTEN)
             Some("/Users/jorge/projects/myapp")
         );
         assert_eq!(parse_cwd_output("p1\nfcwd\n"), None);
+    }
+
+    #[test]
+    fn unescapes_lsof_hex_escapes() {
+        // `+c 0` emits spaces as `\x20`; decode them so the UI shows real names.
+        assert_eq!(
+            unescape_lsof("GitHub\\x20Desktop\\x20Helper"),
+            "GitHub Desktop Helper"
+        );
+        // A well-formed name is passed through unchanged.
+        assert_eq!(unescape_lsof("com.docker.backend"), "com.docker.backend");
+        // A stray/backslash that isn't a valid `\xNN` escape is left verbatim.
+        assert_eq!(unescape_lsof("a\\xZZb"), "a\\xZZb");
+        assert_eq!(unescape_lsof("trailing\\x"), "trailing\\x");
+    }
+
+    #[test]
+    fn system_daemon_full_names_are_filtered() {
+        // The bug: default lsof truncates COMMAND to 9 chars, so these 13-char
+        // needles never matched. With `+c 0` the full name arrives and the filter
+        // works — pin that so a truncation regression is caught.
+        assert!(is_system_noise("mDNSResponder"));
+        assert!(is_system_noise("identityservicesd"));
+        assert!(is_system_noise("nsurlsessiond"));
+        // A real dev server is NOT noise.
+        assert!(!is_system_noise("node"));
+        assert!(!is_system_noise("com.docker.backend"));
     }
 }

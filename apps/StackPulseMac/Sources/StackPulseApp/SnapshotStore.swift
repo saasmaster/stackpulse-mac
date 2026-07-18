@@ -165,6 +165,10 @@ final class SnapshotStore: ObservableObject {
     /// instead — see `cachedLiveLimitsUsable`.
     private var lastGoodLiveLimits: [LimitWindow] = []
     private var lastGoodLiveLimitsAt: Date?
+    /// When the last live-limits fetch was *attempted* (success or failure). Gates
+    /// the request rate so a sustained failure backs off instead of hammering the
+    /// API every refresh tick — `lastGoodLiveLimitsAt` only advances on success.
+    private var lastLiveFetchAttemptAt: Date?
     /// Minimum time between actual network fetches — the cached value is reused in
     /// between, so frequent refreshes never rate-limit the provider.
     private let liveLimitsRefetchInterval: TimeInterval = 8 * 60
@@ -268,15 +272,14 @@ final class SnapshotStore: ObservableObject {
     /// the slope. A sample is new when its window's percentage or its capture time
     /// changed from the last one we stored.
     private func recordLimitSamples(_ limits: [LimitWindow]) {
+        // Called once per SUCCESSFUL fresh fetch (spaced by the refetch throttle),
+        // so every reading here is a genuinely new observation — the same % at a
+        // later time is real evidence the limit is flat, not a duplicate to drop.
+        // (An earlier per-reading dedup keyed on capture time was inert anyway: the
+        // fetch-completion time is re-stamped each fetch, so it never matched.)
         let capturedAt = (lastGoodLiveLimitsAt ?? Date()).timeIntervalSince1970
         var appended = false
         for limit in limits where limit.provenance == AnthropicUsageClient.liveProvenance {
-            let last = limitSamples.last { $0.windowKey == limit.label }
-            // Same percentage at (effectively) the same capture time → not new.
-            if let last, abs(last.usedPercent - limit.used_percent) < 0.001,
-               abs(last.capturedAtUnix - capturedAt) < 1 {
-                continue
-            }
             limitSamples.append(LimitSample(
                 windowKey: limit.label, capturedAtUnix: capturedAt,
                 usedPercent: limit.used_percent))
@@ -910,8 +913,11 @@ final class SnapshotStore: ObservableObject {
         // Already checked and not being forced ⇒ nothing to do.
         if !force, checkedProjects.contains(projectPath) { return }
 
-        // Only ask about deps we don't already hold, unless forced.
-        let wanted = force ? deps : deps.filter { stackEnrichment[$0.id] == nil }
+        // Only ask about deps we don't already hold, unless forced. Keyed by the
+        // version-scoped `enrichmentKey`, so a dep at a DIFFERENT resolved version
+        // than a sibling project's is genuinely re-queried (its advisories differ)
+        // rather than skipped and served a wrong-version record.
+        let wanted = force ? deps : deps.filter { stackEnrichment[$0.enrichmentKey] == nil }
         guard !wanted.isEmpty else {
             checkedProjects.insert(projectPath)
             return
@@ -1249,10 +1255,19 @@ final class SnapshotStore: ObservableObject {
         //    cached value in between keeps StackPulse from rate-limiting the API.
         let cacheFresh = lastGoodLiveLimitsAt
             .map { Date().timeIntervalSince($0) < liveLimitsRefetchInterval } ?? false
-        guard !cacheFresh, !isFetchingLive else { return }
+        // Throttle on ATTEMPTS, not just successes. `cacheFresh` keys off
+        // `lastGoodLiveLimitsAt`, which only advances on a *successful* fetch — so
+        // under a sustained 429/offline it would stay false and fire a request
+        // every refresh tick (once a minute on the fast cadence), the opposite of
+        // backing off. Spacing attempts by the same interval bounds the request
+        // rate whether or not the fetch succeeds.
+        let attemptFresh = lastLiveFetchAttemptAt
+            .map { Date().timeIntervalSince($0) < liveLimitsRefetchInterval } ?? false
+        guard !cacheFresh, !attemptFresh, !isFetchingLive else { return }
 
         let claudeVersion = claude.detected_version
         isFetchingLive = true
+        lastLiveFetchAttemptAt = Date()
 
         // A main-actor Task: the fetch itself is a `nonisolated async` call, so it
         // suspends onto the global executor (Keychain read + network happen off
@@ -1550,7 +1565,16 @@ final class SnapshotStore: ObservableObject {
         var parts: [String] = []
         for p in snapshot.providers where p.installed {
             let code = p.shortCode
-            if let hottest = p.limits.max(by: { $0.used_percent < $1.used_percent }) {
+            // Only show a percentage we can still call current. Every CARD ages its
+            // limit with a `LimitAgeNote`; the menu bar is too small for that, so a
+            // stale reading is dropped rather than shown as live. Claude's stale
+            // cached limits are already stripped before the snapshot, but a core-
+            // provided Codex/Gemini limit carries its own `captured_at_unix` and can
+            // be hours old (measured at 18.5h on a real machine) — showing that as
+            // `Cx 32%` in the always-visible menu bar is the exact stale-as-live bug
+            // the rest of the app guards against.
+            let fresh = p.limits.filter { !$0.isStale(staleAfter: LimitWindow.liveStaleAfter) }
+            if let hottest = fresh.max(by: { $0.used_percent < $1.used_percent }) {
                 parts.append("\(code) \(Int(hottest.used_percent.rounded()))%")
             } else if let tokens = p.today?.tokens.grandTotal, tokens > 0 {
                 parts.append("\(code) \(Format.tokens(tokens))")

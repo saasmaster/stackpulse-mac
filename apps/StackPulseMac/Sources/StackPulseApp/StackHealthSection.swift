@@ -338,7 +338,7 @@ private func resolve(
     enrichment: [String: StackHealthClient.DependencyEnrichment],
     checking: Bool
 ) -> Resolved {
-    if checking, let e = enrichment[dep.id] {
+    if checking, let e = enrichment[dep.enrichmentKey] {
         let worst = e.advisories.map { AdvisoryLevel($0.severity) }.max()
         return Resolved(
             dep: dep, latest: e.latest,
@@ -517,7 +517,10 @@ private struct StackDigest {
         for proj in projects {
             for dep in proj.dependencies {
                 total += 1
-                let e = enrichment[dep.id]
+                // Look up enrichment by the version-scoped key (advisories are
+                // per-version), but GROUP by `dep.id` (name) below — the digest's
+                // job is "this package across your projects".
+                let e = enrichment[dep.enrichmentKey]
                 let latest = e?.latest
                 let status = DepStatus(projectStatusRaw(dep, latest: latest))
                 if status == .unknown { unchecked += 1 }
@@ -532,10 +535,13 @@ private struct StackDigest {
                 a.allProjects.append(proj.name)
                 a.allVersions.insert(version)
                 if let e, !e.advisories.isEmpty {
-                    // ASSIGNED, never summed: enrichment holds ONE advisory record
-                    // per dep id, which every project using that dep reads. Summing
-                    // across projects would multiply the same two advisories into
-                    // "eight" — a count nobody could stand behind.
+                    // ASSIGNED, never summed. Each project's dep now reads its OWN
+                    // version's advisory record, so within a same-version group every
+                    // project assigns the identical set; across a mixed-version group
+                    // this holds the last-assigned version's set, and `versionsAgree`
+                    // (surfaced in the row) tells the reader versions differ and to
+                    // open the per-project cards. Summing would multiply one version's
+                    // advisories by the project count — a number nobody could stand behind.
                     a.advisoryCount = e.advisories.count
                     a.worst = e.advisories.map { AdvisoryLevel($0.severity) }.max()
                     a.advisoryLinks = e.advisories.compactMap {

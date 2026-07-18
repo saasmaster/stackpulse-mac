@@ -172,6 +172,9 @@ fn parse_package_lock(text: &str) -> BTreeMap<String, String> {
 
     // npm v7+: top-level "packages" map.
     if let Some(packages) = json.get("packages").and_then(|v| v.as_object()) {
+        // Depth (count of `node_modules/` segments) of the entry currently chosen
+        // for each name, so a shallower entry can replace a deeper one.
+        let mut chosen_depth: BTreeMap<String, usize> = BTreeMap::new();
         for (key, meta) in packages {
             // Keys look like "node_modules/foo" or "node_modules/foo/node_modules/bar".
             // Take the last "node_modules/" segment as the package name so nested
@@ -181,9 +184,19 @@ fn parse_package_lock(text: &str) -> BTreeMap<String, String> {
                 _ => continue,
             };
             if let Some(version) = meta.get("version").and_then(|v| v.as_str()) {
-                // Prefer the top-level (shallowest) entry for a given name.
-                map.entry(name.to_string())
-                    .or_insert_with(|| version.to_string());
+                // Prefer the top-level (shallowest) entry — the version the project
+                // actually resolves. Keying "first seen" was wrong: the `packages`
+                // object is a BTreeMap (serde_json has no preserve_order here)
+                // iterated lexicographically, so a nested path
+                // (`node_modules/a/node_modules/lodash`) can sort BEFORE the
+                // top-level (`node_modules/lodash`) and shadow it with a transitive
+                // version. Compare depth and keep the shallowest.
+                let depth = key.matches("node_modules/").count();
+                let replace = chosen_depth.get(name).map_or(true, |&d| depth < d);
+                if replace {
+                    map.insert(name.to_string(), version.to_string());
+                    chosen_depth.insert(name.to_string(), depth);
+                }
             }
         }
     }
@@ -639,6 +652,26 @@ version = "3.10.1"
         let v6 = r#"{ "dependencies": { "b": { "version": "2.0.0" } } }"#;
         let m = parse_package_lock(v6);
         assert_eq!(m.get("b").map(String::as_str), Some("2.0.0"));
+    }
+
+    /// A transitive (nested) copy of a package must NOT shadow the top-level
+    /// resolved version, even when its BTreeMap key sorts first. Here
+    /// `node_modules/left-pad/node_modules/lodash` (3.10.1) sorts before
+    /// `node_modules/lodash` (4.17.21) lexicographically; the shallowest wins.
+    #[test]
+    fn nested_dep_does_not_shadow_top_level_version() {
+        let v7 = r#"{ "packages": {
+            "node_modules/left-pad": { "version": "1.3.0" },
+            "node_modules/left-pad/node_modules/lodash": { "version": "3.10.1" },
+            "node_modules/lodash": { "version": "4.17.21" }
+        } }"#;
+        let m = parse_package_lock(v7);
+        assert_eq!(
+            m.get("lodash").map(String::as_str),
+            Some("4.17.21"),
+            "top-level version must win over the nested one"
+        );
+        assert_eq!(m.get("left-pad").map(String::as_str), Some("1.3.0"));
     }
 
     #[test]

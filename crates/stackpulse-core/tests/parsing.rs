@@ -176,14 +176,31 @@ fn codex_fixture_scans_exactly() {
         "fresh input must exclude cached"
     );
     assert_eq!(today.tokens.cache_read_tokens, 1800); // 800 + 1000 cached
-    assert_eq!(today.tokens.output_tokens, 700); // 300 + 400
-                                                 // Reasoning tokens are captured separately.
-    assert_eq!(today.tokens.reasoning_tokens, 250); // 100 + 150
+                                                      // OpenAI's output_tokens already includes reasoning, so we store the EXCLUSIVE
+                                                      // visible output: (300-100) + (400-150) = 200 + 250 = 450. Reasoning is kept
+                                                      // separately (100 + 150 = 250). The two output-rate classes sum to 700 — the
+                                                      // raw output — never 950; that was the ~36% double-count this pins against.
+    assert_eq!(today.tokens.output_tokens, 450);
+    assert_eq!(today.tokens.reasoning_tokens, 250);
+    assert_eq!(
+        today.tokens.output_tokens + today.tokens.reasoning_tokens,
+        700,
+        "reasoning must not be double-counted on top of output"
+    );
 
+    // Pin the exact cost (gpt-5.5 = $5 in / $30 out / $0.50 cache-read per 1M),
+    // not just `> 0` — that weaker check let the reasoning double-count through.
+    //   input   3200 * 5.00 = 0.016
+    //   output  (450+250)=700 * 30.00 = 0.021
+    //   cache   1800 * 0.50 = 0.0009
     let cost = today
         .estimated_cost_usd
         .expect("gpt-5.5 should be priceable");
-    assert!(cost > 0.0, "expected a positive cost estimate, got {cost}");
+    let expected = 0.016 + 0.021 + 0.0009;
+    assert!(
+        (cost - expected).abs() < 1e-9,
+        "expected {expected}, got {cost}"
+    );
 
     // cli_version from session_meta, plan_type from the rate-limit block.
     assert_eq!(usage.detected_version.as_deref(), Some("1.4.2"));

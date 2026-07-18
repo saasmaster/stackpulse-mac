@@ -106,17 +106,24 @@ enum KeychainProbe {
     /// and only when the user has enabled live limits. Nothing here logs or
     /// persists the token.
     static func readClaudeCredentialsResult() -> CredentialsResult {
-        // File first — never prompts.
-        if let creds = readCredentialsFile(), !creds.isExpired { return .ok(creds) }
+        var pendingGrant = false
+        var parseFail = false
+        var expired = false
+
+        // File first — never prompts. An expired file token is not "not found":
+        // the user IS signed in, the login just needs renewal. Record that so the
+        // all-expired verdict below is `.expired` ("waiting for renewal"), not
+        // `.notFound` ("sign in") — the same distinction the CLI branch makes.
+        if let creds = readCredentialsFile() {
+            if !creds.isExpired { return .ok(creds) }
+            expired = true
+        }
 
         // Then Apple's `/usr/bin/security` tool. Granting its one-time
         // "Always Allow" is DURABLE: `security`'s code identity is stable, so the
         // grant survives StackPulse rebuilds — unlike a direct SecItemCopyMatching
         // whose grant resets on every ad-hoc re-sign. We never fall through to a
         // second (direct) read, so the user is never double-prompted.
-        var pendingGrant = false
-        var parseFail = false
-        var expired = false
         for service in claudeServices {
             switch readViaSecurityCLI(service: service) {
             case .data(let d):
@@ -169,35 +176,17 @@ enum KeychainProbe {
     /// hanging indefinitely. The token flows only through the pipe into memory —
     /// it is never logged, printed, or written to disk.
     private static func readViaSecurityCLI(service: String) -> SecurityRead {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        proc.arguments = ["find-generic-password", "-s", service, "-w"]
-        let out = Pipe()
-        proc.standardOutput = out
-        proc.standardError = FileHandle.nullDevice
-        do { try proc.run() } catch { return .missing }
-
-        // Drain the pipe WHILE the process runs, not after it exits. Waiting for
-        // exit first deadlocks the moment the payload exceeds the ~64KB pipe
-        // buffer: `security` blocks writing, so it never exits, so we never read.
-        // Not hypothetical — the real credential blob here is already 10KB and
-        // these payloads only grow.
-        var data = Data()
-        let handle = out.fileHandleForReading
-        let deadline = Date().addingTimeInterval(12)
-        while proc.isRunning && Date() < deadline {
-            data.append(handle.availableData)
-        }
-        if proc.isRunning {
-            proc.terminate()
-            return .timedOut
-        }
-        data.append(handle.readDataToEndOfFile()) // whatever landed after exit
-        guard proc.terminationStatus == 0 else { return .missing }
-
-        guard let text = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
-        else { return .missing }
+        // A 12-second deadline: generous enough that a user clicking "Always Allow"
+        // on the one-time prompt still succeeds, but the read never hangs — a
+        // pending prompt is reported as `.timedOut` (→ access denied) rather than
+        // parking forever. The bounded-read subtlety lives in `BoundedProcess`.
+        guard let outcome = BoundedProcess.run(
+            executable: "/usr/bin/security",
+            arguments: ["find-generic-password", "-s", service, "-w"],
+            timeout: 12
+        ) else { return .missing }
+        if outcome.timedOut { return .timedOut }
+        guard let text = outcome.trimmedText else { return .missing }
         return .data(Data(text.utf8))
     }
 

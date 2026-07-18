@@ -33,7 +33,7 @@ pub struct CodexProvider;
 #[derive(Default)]
 struct ScanState {
     records: Vec<UsageRecord>,
-    seen: HashSet<(String, u64, u64)>,
+    seen: HashSet<(String, u64, u64, u64)>,
     detected_version: Option<String>,
     plan_hint: Option<String>,
     latest_limits_ts: Option<String>,
@@ -247,8 +247,17 @@ fn scan_file(file: &PathBuf, now_unix: i64, state: &mut ScanState) {
                 if input + output + reasoning == 0 {
                     continue;
                 }
-                // Dedup across sessions/ vs archived_sessions/ duplicates.
-                let key = (ts.get(0..19).unwrap_or(ts).to_string(), input, output);
+                // Dedup across sessions/ vs archived_sessions/ duplicates. Include
+                // reasoning so two genuinely distinct turns that happen to share a
+                // wall-clock second and the same input/output deltas aren't
+                // collapsed into one (an under-count, the one direction this app
+                // must never fail silently).
+                let key = (
+                    ts.get(0..19).unwrap_or(ts).to_string(),
+                    input,
+                    output,
+                    reasoning,
+                );
                 if !state.seen.insert(key) {
                     continue;
                 }
@@ -257,6 +266,17 @@ fn scan_file(file: &PathBuf, now_unix: i64, state: &mut ScanState) {
                     None => continue,
                 };
                 let fresh_input = input.saturating_sub(cached);
+                // OpenAI's `output_tokens` (== completion_tokens) ALREADY includes
+                // `reasoning_output_tokens` as a subset — the repo's own fixture
+                // proves it (per-turn `output_tokens` sum to `total.output_tokens`,
+                // with reasoning nested inside, never added on top). The costing
+                // convention treats `output_tokens` and `reasoning_tokens` as
+                // DISJOINT classes both billed at the output rate, so storing the
+                // raw (inclusive) output alongside reasoning billed reasoning TWICE
+                // — inflating output cost ~36% on a reasoning-heavy Codex session,
+                // and double-counting it in the token grand total. Store the
+                // exclusive (visible) output so the two classes don't overlap.
+                let visible_output = output.saturating_sub(reasoning);
                 state.records.push(UsageRecord {
                     model: if current_model.is_empty() {
                         "unknown".to_string()
@@ -266,7 +286,7 @@ fn scan_file(file: &PathBuf, now_unix: i64, state: &mut ScanState) {
                     date,
                     tokens: TokenTotals {
                         input_tokens: fresh_input,
-                        output_tokens: output,
+                        output_tokens: visible_output,
                         cache_creation_tokens: 0,
                         cache_read_tokens: cached,
                         reasoning_tokens: reasoning,
@@ -387,6 +407,14 @@ mod tests {
         assert_eq!(r.tokens.input_tokens, 600); // 1000 - 400 cached
         assert_eq!(r.tokens.cache_read_tokens, 400);
         assert_eq!(r.tokens.reasoning_tokens, 50);
+        // OpenAI's output_tokens (200) already includes reasoning (50); we store
+        // the exclusive visible output so cost/grand-total don't double-count it.
+        assert_eq!(r.tokens.output_tokens, 150); // 200 raw − 50 reasoning
+                                                 // The two output-rate classes together must equal the RAW output (200),
+                                                 // never 250. This is the pin the old `cost > 0` assertion lacked.
+        assert_eq!(r.tokens.output_tokens + r.tokens.reasoning_tokens, 200);
+        // grand_total no longer double-counts reasoning: 600 + 150 + 400 + 50.
+        assert_eq!(r.tokens.grand_total(), 1200);
         assert_eq!(state.detected_version.as_deref(), Some("1.2.3"));
         assert_eq!(state.plan_hint.as_deref(), Some("plus"));
         assert_eq!(state.latest_limits.len(), 2);

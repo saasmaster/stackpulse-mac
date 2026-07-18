@@ -331,48 +331,64 @@ pub fn rates_for(model: &str, date: CivilDate) -> Option<ModelRates> {
 /// Guessing one would be the exact dishonesty this module refuses; the canary
 /// surfaces "tokens counted, no known price" instead.
 fn openai_rates(m: &str) -> Option<ModelRates> {
-    // Not an OpenAI id at all.
-    if !(m.contains("gpt") || m.contains("codex")) {
-        return None;
+    // **Version-strict**, like the Claude path. Match ONLY the specific published
+    // (version, variant) pairs verified on 2026-07-17. A later generation
+    // (`gpt-6-sol`), an unverified point release (`gpt-5.7-mini`), or a variant we
+    // haven't priced returns `None` so the canary reports it — never a same-named
+    // tier's card. The first cut of this matched on the variant keyword ALONE
+    // (`contains("sol")`), which would have priced a future `gpt-6-sol` at the 5.6
+    // card with no drift signal: the exact version-blind mistake that mispriced
+    // Opus 3×, reintroduced. Requiring the `gpt-<version>` prefix also stops a date
+    // fragment like `2025-3` from being read as `5.3`.
+    let gen = |v: &str| m.contains(&format!("gpt-{v}")) || m.contains(&format!("gpt{v}"));
+
+    // 5.3 — Codex-specialized only.
+    if (gen("5.3") || gen("5-3")) && m.contains("codex") {
+        return Some(CODEX_53);
     }
-    // Codex-specialized model. Only the published `gpt-5.3-codex` is priced; the
-    // internal `codex-*` tooling ids fall through to `None`.
+    // Any other codex id — a codex point release we haven't priced, or the internal
+    // `codex-*` tooling ids (codex-auto-review, codex-security-scans-…) — is
+    // unpriced, never guessed.
     if m.contains("codex") {
-        if m.contains("5.3") || m.contains("5-3") {
-            return Some(CODEX_53);
-        }
-        // A gpt-5.x-codex we don't have a verified card for — unpriced, not guessed.
         return None;
     }
-    // GPT-5.x standard tiers, by variant name first (the tier lives in the name).
-    if m.contains("pro") {
-        return Some(GPT5_PRO);
+
+    // 5.6 — sol / terra / luna only.
+    if gen("5.6") || gen("5-6") {
+        if m.contains("sol") {
+            return Some(GPT5_HIGH);
+        }
+        if m.contains("terra") {
+            return Some(GPT5_MID);
+        }
+        if m.contains("luna") {
+            return Some(GPT5_LUNA);
+        }
+        return None; // an unknown 5.6 variant
     }
-    if m.contains("nano") {
-        return Some(GPT5_NANO);
+    // 5.5 — flagship, plus a -pro tier.
+    if gen("5.5") || gen("5-5") {
+        return Some(if m.contains("pro") {
+            GPT5_PRO
+        } else {
+            GPT5_HIGH
+        });
     }
-    if m.contains("mini") {
-        return Some(GPT5_MINI);
-    }
-    if m.contains("luna") {
-        return Some(GPT5_LUNA);
-    }
-    if m.contains("sol") {
-        return Some(GPT5_HIGH);
-    }
-    if m.contains("terra") {
+    // 5.4 — mid, plus mini / nano / pro.
+    if gen("5.4") || gen("5-4") {
+        if m.contains("pro") {
+            return Some(GPT5_PRO);
+        }
+        if m.contains("nano") {
+            return Some(GPT5_NANO);
+        }
+        if m.contains("mini") {
+            return Some(GPT5_MINI);
+        }
         return Some(GPT5_MID);
     }
-    // Bare versioned flagships without a variant suffix: 5.5 is the $5/$30 tier,
-    // 5.4 is the $2.50/$15 tier.
-    if m.contains("gpt-5.5") || m.contains("gpt-5-5") {
-        return Some(GPT5_HIGH);
-    }
-    if m.contains("gpt-5.4") || m.contains("gpt-5-4") {
-        return Some(GPT5_MID);
-    }
-    // Any other GPT id (older gpt-4/gpt-5.0/o-series, or a version newer than this
-    // card set) is unpriced rather than mispriced — the canary reports the gap.
+    // Any other GPT id (gpt-4*, gpt-5.0/5.7, gpt-6*, o-series) is unpriced rather
+    // than mispriced — the canary reports the gap.
     None
 }
 
@@ -449,6 +465,14 @@ mod tests {
         assert!(rates_for("codex-auto-review", AS_OF).is_none());
         assert!(rates_for("codex-security-scans-fox", AS_OF).is_none());
         assert!(rates_for("totally-unknown-model", AS_OF).is_none());
+        // VERSION-STRICT: a variant name alone must not price a different
+        // generation. A future gpt-6 / gpt-5.7 sharing a tier name is UNPRICED,
+        // not silently priced at the 5.x card (the version-blind bug that
+        // mispriced Opus 3×, guarded here for OpenAI too).
+        assert!(rates_for("gpt-6-sol", AS_OF).is_none());
+        assert!(rates_for("gpt-6-mini", AS_OF).is_none());
+        assert!(rates_for("gpt-5.7-terra", AS_OF).is_none());
+        assert!(rates_for("gpt-5.3-turbo", AS_OF).is_none()); // 5.3 is codex-only
     }
 
     /// The published rates, pinned. Nothing else in the repo checked that a rate

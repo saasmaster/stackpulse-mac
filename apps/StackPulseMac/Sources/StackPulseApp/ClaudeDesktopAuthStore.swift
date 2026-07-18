@@ -400,27 +400,14 @@ enum ClaudeDesktopAuthStore {
     /// macOS-only glue. Read-only (`file:...?mode=ro`) so Desktop's own DB can
     /// never be touched, and bounded so a locked DB can't hang a refresh.
     private static func sqliteQuery(path: String, sql: String) -> String? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
-        proc.arguments = ["-readonly", path, sql]
-        let out = Pipe()
-        proc.standardOutput = out
-        proc.standardError = FileHandle.nullDevice
-        do { try proc.run() } catch { return nil }
-
-        // Drain while it runs: waiting for exit first deadlocks past the pipe
-        // buffer (the same trap that made a Keychain read look like a denial).
-        var data = Data()
-        let handle = out.fileHandleForReading
-        let deadline = Date().addingTimeInterval(5)
-        while proc.isRunning && Date() < deadline { data.append(handle.availableData) }
-        if proc.isRunning { proc.terminate(); return nil }
-        data.append(handle.readDataToEndOfFile())
-        guard proc.terminationStatus == 0,
-              let text = String(data: data, encoding: .utf8)?
-                  .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
-        else { return nil }
-        return text
+        // 5-second deadline so a `SQLITE_BUSY`/locked DB can't park a refresh. The
+        // bounded-read subtlety (why a poll loop can't enforce this) lives in
+        // `BoundedProcess`. `trimmedText` is nil on timeout / non-zero / empty.
+        BoundedProcess.run(
+            executable: "/usr/bin/sqlite3",
+            arguments: ["-readonly", path, sql],
+            timeout: 5
+        )?.trimmedText
     }
 
     private static func number(_ value: Any?) -> Double? {

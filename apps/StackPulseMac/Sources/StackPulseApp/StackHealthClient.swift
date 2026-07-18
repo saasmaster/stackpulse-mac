@@ -179,7 +179,7 @@ enum StackHealthClient {
                         // Stamped ONLY when the registry actually answered. A
                         // request that timed out gets no time rather than "now".
                         let at: Date? = facts == nil ? nil : Date()
-                        return (dep.id, facts, at)
+                        return (dep.enrichmentKey, facts, at)
                     }
                 }
                 for await (id, facts, at) in group {
@@ -196,17 +196,17 @@ enum StackHealthClient {
         var out: [String: DependencyEnrichment] = [:]
         out.reserveCapacity(fetchable.count)
         for dep in fetchable {
-            let facts = factsByID[dep.id]
+            let facts = factsByID[dep.enrichmentKey]
             let latest = facts?.latest
-            let advisories = advisoriesByID[dep.id] ?? []
+            let advisories = advisoriesByID[dep.enrichmentKey] ?? []
             let status = compareStatus(installed: installedVersion(dep), latest: latest)
-            out[dep.id] = DependencyEnrichment(
+            out[dep.enrichmentKey] = DependencyEnrichment(
                 latest: latest,
                 status: status,
                 advisories: advisories,
                 repositoryURL: facts?.repositoryURL,
                 homepageURL: facts?.homepageURL,
-                checkedAt: checkedAtByID[dep.id]
+                checkedAt: checkedAtByID[dep.enrichmentKey]
             )
         }
         return out
@@ -254,7 +254,7 @@ enum StackHealthClient {
         for dep in deps {
             guard let eco = normalizedEcosystem(dep.ecosystem) else { continue }
             guard let version = installedVersion(dep), !version.isEmpty else { continue }
-            ids.append(dep.id)
+            ids.append(dep.enrichmentKey)
             queries.append([
                 "package": ["name": dep.name, "ecosystem": eco.osvName],
                 "version": version,
