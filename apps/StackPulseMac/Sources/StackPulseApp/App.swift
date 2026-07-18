@@ -182,6 +182,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--open-settings") {
             openSettings()
         }
+        // Optional: open the main window on a named section (for scripted
+        // screenshot capture), e.g. `--section usage`. Ignored for unknown names.
+        if let i = CommandLine.arguments.firstIndex(of: "--section"),
+           i + 1 < CommandLine.arguments.count,
+           let section = MainSection(rawValue: CommandLine.arguments[i + 1]) {
+            showSection(section)
+        }
     }
 
     /// Menu-bar app: never quit just because the window closed.

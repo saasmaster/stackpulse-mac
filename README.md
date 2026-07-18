@@ -26,8 +26,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/hero.png" alt="StackPulse menu-bar popover: live limits with a usage forecast, today's spend, active AI coding sessions, and anything needing attention" width="760">
+  <img src="docs/images/hero.png" alt="StackPulse Home: today's spend, live limits, active AI coding sessions, and anything needing attention" width="820">
 </p>
+
+<p align="center"><sub><i>Shown with sample data (StackPulse's built-in demo mode) — every surface labels it as such.</i></sub></p>
 
 ---
 
@@ -55,9 +57,12 @@ opt-in exceptions.
 > documents its gaps instead of hiding them. The rest of this README is mostly
 > about *when not to trust a number* — which is exactly the point.
 
-<p align="center">
-  <img src="docs/images/dashboard.png" alt="StackPulse main window: per-provider spend, live limits, and usage trends" width="820">
-</p>
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/missions.png" alt="Missions: live Claude/Codex sessions observed on this Mac — what each is working on, changed files, and whether anything verified it"><br><sub><b>Missions</b> — what your agents are doing, right now, and whether it's verified.</sub></td>
+    <td width="50%"><img src="docs/images/diagnostics.png" alt="Diagnostics: is StackPulse working, and if not exactly why, with a repair step for each problem"><br><sub><b>Diagnostics</b> — is it working, and if not, exactly what to fix.</sub></td>
+  </tr>
+</table>
 
 ---
 
