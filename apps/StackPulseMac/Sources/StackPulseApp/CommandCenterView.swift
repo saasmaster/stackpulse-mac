@@ -75,6 +75,7 @@ struct CommandCenterView: View {
             }
             .buttonStyle(.borderless)
             .help("Toggle full screen")
+            .accessibilityLabel("Toggle full screen")
 
             RefreshButton(isLoading: store.isLoading) { store.refresh() }
                 .buttonStyle(.borderless)
@@ -109,6 +110,7 @@ struct CommandCenterView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Move to a display")
+            .accessibilityLabel("Move to a display")
         }
     }
 
@@ -192,10 +194,6 @@ private struct KPIRow: View {
             StatTile(label: "Turns (30d)", value: Format.tokens(snapshot.total30Turns),
                      caption: "\(Format.tokens(snapshot.total30Tokens)) tokens",
                      systemImage: "arrow.left.arrow.right")
-            StatTile(label: "Cache hit (30d)",
-                     value: snapshot.aggregate30CacheHitRate.map { Format.percent($0 * 100) } ?? "—",
-                     caption: "read ÷ (read + write)",
-                     systemImage: "bolt.horizontal", tint: .cyan)
         }
         .glassCard(padding: 16)
     }
@@ -223,11 +221,10 @@ private struct BigUsageCard: View {
                 }
             }
 
-            if let limit = provider.hottestLimit {
+            // Every window, not just the hottest — seeing the session (5h) AND the
+            // weekly figure side by side is the whole point of a limits readout.
+            ForEach(provider.limits) { limit in
                 limitMeter(limit)
-            }
-            if let cache = provider.last30?.tokens.cacheHitRate {
-                meter("Cache hit rate", fraction: cache, tint: .cyan, valueText: Format.percent(cache * 100))
             }
 
             if let daily = provider.analytics?.daily, daily.contains(where: { $0.tokens.grandTotal > 0 }) {
@@ -287,13 +284,15 @@ private struct BigUsageCard: View {
             HStack {
                 Text(limitLabel(limit.label)).font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                Text(Format.percent(limit.used_percent))
+                Text(Format.limitLeft(limit.used_percent))
                     .font(.caption2.weight(.semibold).monospacedDigit())
                 if let countdown = Format.resetCountdown(limit.resets_at_unix) {
                     Text("· \(countdown)").font(.system(size: 9)).foregroundStyle(.tertiary)
                 }
             }
-            MeterBar(fraction: limit.used_percent / 100,
+            // The bar shows what's LEFT (it empties as you spend); the tint still
+            // keys off how much is *used*, so it reddens as the window runs out.
+            MeterBar(fraction: Format.limitLeftFraction(limit.used_percent),
                      tint: SPStatus.limitColor(limit.used_percent),
                      glowsWhenHigh: true)
         }
@@ -311,11 +310,7 @@ private struct BigUsageCard: View {
     }
 
     private func limitLabel(_ raw: String) -> String {
-        switch raw {
-        case "5h": return "Session (5h)"
-        case "weekly": return "Weekly"
-        default: return raw.capitalized
-        }
+        Format.limitLabel(raw)
     }
 }
 
@@ -448,13 +443,13 @@ private struct LiveLimitsPanel: View {
                                 Text(row.0).font(.caption.weight(.semibold))
                                 Text(limitLabel(row.1.label)).font(.caption2).foregroundStyle(.secondary)
                                 Spacer()
-                                Text(Format.percent(row.1.used_percent))
+                                Text(Format.limitLeft(row.1.used_percent))
                                     .font(.caption.weight(.semibold).monospacedDigit())
                                 if let countdown = Format.resetCountdown(row.1.resets_at_unix) {
                                     Text("· \(countdown)").font(.system(size: 9)).foregroundStyle(.tertiary)
                                 }
                             }
-                            MeterBar(fraction: row.1.used_percent / 100,
+                            MeterBar(fraction: Format.limitLeftFraction(row.1.used_percent),
                                      tint: SPStatus.limitColor(row.1.used_percent),
                                      glowsWhenHigh: true)
                         }
@@ -465,11 +460,7 @@ private struct LiveLimitsPanel: View {
     }
 
     private func limitLabel(_ raw: String) -> String {
-        switch raw {
-        case "5h": return "Session (5h)"
-        case "weekly": return "Weekly"
-        default: return raw.capitalized
-        }
+        Format.limitLabel(raw)
     }
 }
 

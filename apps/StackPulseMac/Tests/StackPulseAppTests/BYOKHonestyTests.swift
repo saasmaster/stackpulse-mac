@@ -43,4 +43,11 @@ struct BYOKHonestyTests {
             #expect(APIKeyProviders.info(for: id)?.hasLiveBalance == true, "\(id) lost its live balance flag")
         }
     }
+
+    @Test("the balance parsers self-test passes (OpenRouter /key + /credits, LiteLLM, DeepSeek)")
+    func parsersSelftestPasses() {
+        // Runs the embedded fixture suite under `swift test` too — not just the
+        // `--selftest-parsers` CLI path — so a broken parser fails CI.
+        #expect(ProviderBalanceClient._selftest())
+    }
 }

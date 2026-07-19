@@ -16,7 +16,260 @@ also recorded in [`docs/CROSS_REPO_CHANGELOG.md`](docs/CROSS_REPO_CHANGELOG.md).
 First working foundation. Everything below is proven against real Claude Code and
 Codex CLI logs on macOS (Apple Silicon).
 
-Version lines at this point: **core 0.1.0**, **protocol 1.0.0**, app pre-release.
+Version lines at this point: **core 0.1.0**, **protocol 1.20.0**, app pre-release.
+
+### Live readings for every remaining provider (app 0.48.0)
+
+Completes the sweep started with Cursor: **Codex, Copilot, Antigravity, Z.ai, Grok
+and Devin** now show real, provider-reported usage instead of detection-only cards.
+Each reads a credential the tool already stored on this Mac — nothing to paste —
+and calls the same endpoint that vendor's own CLI or dashboard calls.
+
+- **Codex** — session + weekly limits now come from OpenAI's usage endpoint rather
+  than being derived from the CLI's logs: authoritative, fresher, and classified by
+  the window length the API reports (not slot order). Log-derived windows survive
+  the merge when the API doesn't report one. Flex credits shown as remaining.
+- **Copilot** — per-seat premium-request quota using the token Copilot (or `gh`)
+  already stored locally; **no PAT to create**. An org/enterprise seat has no
+  per-user quota, which is stated rather than shown as an empty meter.
+- **Antigravity** — real 5h + weekly quota buckets from its own language server over
+  **loopback** (port and CSRF token discovered from the running process). No OAuth,
+  no cloud call. Complements the existing conversation scan.
+- **Z.ai** — Coding Plan session/weekly quota with your saved key.
+- **Grok** — weekly usage from the billing endpoint the Grok CLI itself calls, using
+  the login in `~/.grok`.
+- **Devin** — daily + weekly quota and extra-usage balance from the seat-status
+  endpoint. The daily window is labelled **"Daily"**, never borrowed into the "5h"
+  slot.
+
+**Honesty rules held throughout.** A window the API didn't report is **dropped, never
+rendered as 0%**; every reading carries its capture time so it can't pass as current;
+tokens and response bodies are never logged; no credential means "absent", not
+"failed"; and no client refreshes a token (rewriting a CLI's `auth.json` could log the
+user out of their own tool). Amounts stay in the unit the provider reported — Grok's
+on-demand cap is in credits, so it is *not* converted into a dollar figure. Every
+provider card now says plainly that these endpoints are undocumented and can stop
+working without notice.
+
+Internally, the per-provider fetch/merge/strip logic was generalised into one
+throttled path (a new provider is one table entry), and the merge no longer strips by
+provenance — Codex reports its own limits with the same tag, so the store now tracks
+exactly which windows it injected.
+
+- **Claude credential resolution now follows openusage's design (`ClaudeAuthStore`).**
+  Three differences from what we had, all of which caused the wrong-login bug below:
+  **keychain before file** (a stale `~/.claude/.credentials.json` must not outrank a
+  live Keychain item just because its `expiresAt` is later — openusage fixed this as
+  a real bug); a token within **5 minutes of expiring is refreshed in place**
+  (`platform.claude.com/v1/oauth/token`) instead of abandoned; and the rotated
+  credential is **written back to the source it came from**, so renewing for
+  StackPulse can't leave Claude Code holding a dead token.
+  Safeguards this adds *beyond* openusage, because it writes real credentials: the
+  prior blob is **backed up once per source** before the first write and never
+  overwritten; every source is **re-read immediately before writing** and the write
+  is **aborted** (adopting what was found) if anything changed, so a token `claude`
+  rotated concurrently is never clobbered; unknown JSON keys are preserved; and
+  Claude Desktop stays **read-only** — its refresh token is never used, since
+  rotating it would sign the user out of the Desktop app.
+  One deliberate divergence: openusage queries the user-scoped Keychain item first,
+  we query **service-only first**, because the durable "Always Allow" grant is scoped
+  to the query that created it and leading with the other shape re-prompts.
+- **Fixed: Claude limits could describe the WRONG login, silently.** When the Claude
+  Code token expires, the credential read falls back to Claude Desktop's login (added
+  in 0.33.0 for Desktop-only users) — but nothing said so, so a hammered Claude Code
+  session displayed Desktop's barely-touched quota as if it were its own (observed:
+  "1% used" on a weekly window during heavy use). A successful read of the wrong
+  account is more dangerous than a failed one, because it looks authoritative.
+  Now: the fetch carries a **caveat** alongside the values, the card states plainly
+  that these are the Desktop login's limits and offers **Renew Claude Code login**,
+  the caveat is **persisted with the cached values** (a warning that didn't survive
+  relaunch would let the reading come back clean), and the menu bar **drops** the
+  percentage entirely — the same rule it already applies to stale readings, since the
+  strip has no room to explain and an unlabelled number there reads as "your usage".
+  It degrades to today's token volume, which is measured locally and is genuinely the
+  user's. `--selftest-live` now prints which credential source answered and each
+  window's reset instant, which is how this was found.
+- **Fixed: Codex no longer shows a green "$0.00 left".** A plan without the flex-credit
+  system reports a balance of 0, which was rendering as a measured zero — reading as
+  "you're out of money" when the truth is "this plan has no credits at all". Absence
+  of a credit system is not a zero balance, so no balance is shown.
+- **Menu bar: real brand marks + both limit windows, stacked.** Each cell now leads
+  with the AI's **own brand mark** (Anthropic's burst, OpenAI's knot, Cursor's cube,
+  …) instead of a two-letter code that was misread at menu-bar size ("Cl" reads as
+  "CI"), and shows **both** windows when a provider reports two — **stacked on two
+  tight lines**, session over weekly — instead of only the hottest, which hid a
+  comfortable session sitting inside a nearly-spent week. Percentages are remaining,
+  matching every card.
+
+  The strip is drawn as a **template image** (a SwiftUI view through `ImageRenderer`,
+  trimmed to its visible pixels) rather than an attributed title, because text
+  attachments can't stack; being a template, macOS tints it for light/dark and for
+  the clicked state. The coloured "▶N" and "⚠︎N" badges stay text precisely because
+  their colour carries meaning a template would flatten. Marks are vector paths with
+  an SVG parser that normalizes each to its **true bounding box** — several vendors
+  bake 10% padding into their viewBox while others run edge-to-edge, so viewBox
+  scaling alone made some marks visibly smaller. Gemini has no mark upstream and
+  falls back to an SF Symbol. Stale windows are still dropped, so the always-visible
+  readout never shows an old percentage as live.
+
+  Attribution: the mark artwork comes from openusage's `ProviderIcons` (MIT,
+  redistributed under it), and `NOTICE` now records both that copy — the file
+  previously claimed nothing was copied verbatim, which stopped being true — and
+  that each mark remains its vendor's trademark, used for identification only.
+- **New `make install`.** `build-app.sh` only produced the executable and
+  `package-app.sh` only assembled `dist/StackPulse.app` — neither touched the copy you
+  actually launch, so it was possible to build, test and verify a change while the
+  running app stayed on an old build (which is exactly what happened). `make install`
+  packages, replaces the installed bundle (`INSTALL_DIR`, default `~/Desktop`), and
+  **verifies** the installed version and its parser self-test before relaunching,
+  instead of assuming.
+
+Verified: 208 Rust tests, **149 Swift tests**, and 12 headless parser self-tests
+(`--selftest-parsers`) all green.
+
+### Cursor live usage + limits read as "% left" (app 0.47.0)
+
+**Cursor goes from "no source" to a full readout.** Cursor publishes no individual
+usage API, so StackPulse now reads the same endpoints Cursor's own dashboard calls,
+authenticated with the user's **local** Cursor session:
+- The access token comes from Cursor's own state DB
+  (`…/Cursor/User/globalStorage/state.vscdb`, read-only) with the `cursor-access-token`
+  Keychain item as a fallback — both via the same bounded shell-out the app already
+  uses for Claude's Keychain item (linking a second SQLite would collide with the one
+  the Rust core bundles).
+- The dashboard session cookie is rebuilt from the token's own `sub` claim, and
+  `GetCurrentPeriodUsage` / `GetPlanInfo` are called over Connect-RPC.
+- Surfaced: **Total / Auto / API** meters, the **authoritative billing-cycle reset**
+  (never an assumed month), **Extra usage** on-demand dollars, and the plan name.
+
+Honesty rules kept intact: a meter Cursor didn't report is **dropped, never rendered
+as 0%**; on-demand spend that wasn't reported stays absent rather than a measured
+`$0.00`; every reading carries its capture time so it can't pass as current; and the
+whole path degrades to "no reading" on failure. The provider note now states plainly
+that these endpoints are undocumented and can stop working without notice. Gated on
+the existing live-limits (network) consent; turning it off strips the reading.
+
+**Limits now read the way people actually read a quota.** Every surface (popover,
+sidebar, Overview, Command Center) shows **"81% left"** with the meter *emptying* as
+you spend — instead of "19% used" with a filling bar — and shows **both** the session
+(5h) and weekly windows side by side rather than only the hottest one. Colour still
+keys off consumption, so a window reddens as it runs out.
+
+**Removed the cache hit-rate percentage** from every surface (popover, Overview,
+Usage, Command Center, sidebar, Reports). Measured **cache savings in dollars** stays
+— it answers the same question in the unit that matters. Limit-window labels were
+also de-duplicated into one shared formatter (they were four private copies).
+
+### Provider usage features — real data where it honestly exists (app 0.46.0, core adds OpenCode scanner)
+
+Filling in the eight previously detection-only providers (Copilot, Cursor, Devin,
+Gemini, Grok, OpenCode, OpenRouter, Z.ai). Each was researched against official
+docs / open source; the rule was **real data or an honest "no source", never a
+guess**. What each got:
+
+- **OpenCode — a full local scanner (core).** New `providers::opencode`: reads
+  OpenCode's own session store — the current SQLite `message` table
+  (`~/.local/share/opencode/opencode.db`) *and* the legacy per-message JSON — for
+  real per-model tokens/cache/reasoning, priced by StackPulse's own table, windowed
+  and charted exactly like Claude/Codex. Promoted from detection-only; degrades to
+  empty when OpenCode isn't installed. (Fixture-tested from the pinned upstream
+  schema.)
+- **OpenRouter — richer, and works with a plain key.** Switched the balance fetch
+  to `GET /api/v1/key`, which a normal `sk-or-v1-…` inference key can call and which
+  returns remaining credit, all-time usage, **and** daily/weekly/monthly spend (now
+  shown). Falls back to `/credits` and `/auth/key`. (`/activity` and `/credits` now
+  require a management key, so they're deliberately not attempted for a BYOK key.)
+- **GitHub Copilot — real premium-request usage (BYOK).** A fine-grained GitHub PAT
+  with "Plan: read" now reads your own Copilot premium-request consumption + spend
+  via the GitHub billing API (resolves your login, then
+  `…/billing/premium_request/usage`). Personal-billing only — org/enterprise seats
+  have no per-user endpoint, which is reported plainly, not as a zero.
+- **Gemini, Grok, Devin, Cursor, Z.ai — the honest "why not".** These have no
+  individual usage/spend source that can be read without fabricating: Gemini CLI
+  keeps token counts in memory (only prompts hit disk); a normal xAI key has no
+  balance endpoint (that needs a separate management key); Devin's individual API
+  lists sessions but not ACU/spend (enterprise-admin only); Cursor keeps usage
+  server-side with only an undocumented, unstable local store; Z.ai/Zhipu exposes no
+  public balance endpoint. Each now says so specifically on its card instead of a
+  generic "not implemented / planned".
+
+Verified: `cargo test` (208 core), `swift test` (136, incl. the balance-parser
+self-test), `--selftest-parsers`, and a headless snapshot showing OpenCode
+registered as a real scanner.
+
+### Exhaustive repository audit — correctness, honesty, data-safety, and CI (app 0.45.0)
+
+A full 10-dimension audit of the whole repo (logic, flows, empty/error states,
+security, data persistence, performance, accessibility, dependencies, tests,
+production config). Findings were validated against source, de-duplicated, and
+classified; only **critical + high** were fixed, each with a reproducing test.
+No critical issues existed. See [`AUDIT.md`](AUDIT.md) for the full report.
+
+**Correctness (core)**
+- **Codex per-project spend no longer double-counts reasoning.** `project_usage.rs`
+  stored the raw (reasoning-inclusive) `output_tokens` *alongside* `reasoning_tokens`,
+  billing and counting reasoning twice — the exact twin of the already-fixed
+  `providers/codex.rs` bug, which per-project attribution never received. Output is
+  now stored exclusive of reasoning, and the dedup key includes `reasoning` so two
+  genuine same-second turns aren't collapsed. Inflated a reasoning-heavy project's
+  cost ~36%.
+- **Spend-anomaly alerts stop crying wolf for intermittent users.** `today_vs_avg_ratio`
+  divided today's cost by `total / 30`, so someone active a few days a month read as
+  a 15–30× "spend spike" on a perfectly normal day. It now divides by *active* days
+  (matching `burn_rate`), asking "high for a day I actually use this?".
+
+**Data safety (core)**
+- **A corrupt `history.json` is no longer silently destroyed.** The durable history
+  store (the one dataset kept past the ~30-day log window) degraded a parse failure to
+  an empty map, and the next write overwrote — permanently erasing months of history.
+  Corrupt bytes are now quarantined to a `.corrupt` sidecar before degrading, so
+  they're recoverable; genuine emptiness is left alone.
+
+**Data safety (app)**
+- **Old `command_runs.json` files no longer wipe your run history.** `CommandRun.safety`
+  had a default value, but Swift's synthesized decoder ignores stored-property defaults
+  and required the key — so a file written before the field existed threw and collapsed
+  the entire array to empty, which the next save made permanent. A tolerant decoder now
+  defaults a missing `safety` to `read_only`.
+
+**Honesty (app) — no false all-clears**
+- The **Needs-Attention** bell showed a green "All clear" during a data-read error
+  (alerts derive from the snapshot, so they're empty when it fails to load). It now
+  says "Can't tell right now" and shows the error instead.
+- The **Discover** radar showed a green "Nothing to flag — looks healthy" even when it
+  scanned **0** projects. Zero-scanned is now "Nothing scanned yet", not a clean bill.
+- **Usage → Breakdown** rendered "· 0 tok · N turns" *and* "No activity in this window"
+  for server-side-accounted providers (Antigravity) — a forbidden fake-zero that
+  contradicted the turn count. It now omits the token count and says usage is counted
+  server-side.
+- **Domain-scan failures no longer masquerade as clean empties (systemic).** The
+  secondary scans (`projects`, `stackHealth`, `services`, `projectUsage`, `radar`)
+  returned `[]` on error indistinguishably from a genuine empty, stamped "updated just
+  now", and overwrote good data — so a core error rendered "No running dev servers" /
+  "No dependency data" / "No project-attributed usage" as a freshly-timestamped success,
+  and a transient failure wiped the last good reading. `CoreBridge` now returns `nil` on
+  a real failure (vs `[]` for scanned-empty); the store keeps the last good data + its
+  timestamp and flags the failure; and each section renders a distinct "couldn't scan"
+  state instead of the reassuring empty.
+
+**Performance (core)**
+- **Antigravity scanning is bounded.** Every refresh opened one SQLite DB and read up
+  to 1 MiB per conversation, unbounded and forever-growing — while only the newest
+  model was ever used. Enumeration stays complete (counts unchanged); the model scan is
+  now lazy (newest-first, stops at the first hit) and the step-count SQLite work is
+  capped.
+
+**Accessibility (app)**
+- Added missing `accessibilityLabel`s to icon-only controls that had only tooltips: the
+  sidebar clear-filter and favorites toggle (with state), and the Command Center
+  full-screen and move-to-display buttons.
+
+**Production / CI**
+- CI now runs **`swift test`** (the whole Swift suite was compiled but never executed —
+  Swift-layer regressions merged green) and **clippy on the full workspace including the
+  FFI crate** (the unsafe C-ABI bridge was previously unlinted in CI).
+
+### Decoder resilience — a leaner core or one bad element can't break the app (app 0.44.0)
 
 ### Decoder resilience — a leaner core or one bad element can't break the app (app 0.44.0)
 

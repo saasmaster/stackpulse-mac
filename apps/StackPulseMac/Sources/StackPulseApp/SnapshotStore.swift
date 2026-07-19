@@ -139,9 +139,17 @@ final class SnapshotStore: ObservableObject {
             UserDefaults.standard.set(liveLimitsEnabled, forKey: Self.liveLimitsKey)
             if liveLimitsEnabled {
                 fetchAndMergeLiveLimits()
+                fetchAndMergeLiveProviders()
             } else {
                 // Fully offline again: drop the fetched limits, cache, and any note.
                 stripLiveLimits()
+                stripLiveProviderReadings()
+                liveReadings = [:]
+                liveReadingAt = [:]
+                liveAttemptAt = [:]
+                injectedLiveLabels = [:]
+                liveProviderErrors = [:]
+                liveProviderPlans = [:]
                 lastGoodLiveLimits = []
                 lastGoodLiveLimitsAt = nil
                 liveLimitsError = nil
@@ -155,6 +163,12 @@ final class SnapshotStore: ObservableObject {
     /// A short, user-facing note when the last live fetch couldn't produce data
     /// (offline, signed out, etc). Never contains the token or raw response.
     @Published private(set) var liveLimitsError: String?
+
+    /// A provenance warning about limits we DID get — currently: they belong to
+    /// the Claude Desktop login because the Claude Code one expired. Kept separate
+    /// from `liveLimitsError` precisely because there IS a value on screen; the
+    /// danger is that it looks like the user's Code usage when it isn't.
+    @Published private(set) var liveLimitsCaveat: String?
 
     /// The concrete action that would fix `liveLimitsError`, when one exists.
     /// Carried as a value so the UI can offer a button without string-matching the
@@ -231,6 +245,11 @@ final class SnapshotStore: ObservableObject {
     private struct LiveLimitsCache: Codable {
         let limits: [LimitWindow]
         let at: TimeInterval
+        /// The provenance warning these values were captured with, if any. Stored
+        /// WITH them because a caveat that doesn't survive relaunch is worse than
+        /// none: the app comes back up, re-applies wrong-login percentages from
+        /// the cache, and shows them clean until the next fetch happens to run.
+        var caveat: String?
     }
 
     /// `~/Library/Application Support/StackPulse/live_limits_cache.json`.
@@ -242,7 +261,8 @@ final class SnapshotStore: ObservableObject {
     /// there's nothing good to save.
     private func persistLiveLimits() {
         guard !lastGoodLiveLimits.isEmpty, let at = lastGoodLiveLimitsAt else { return }
-        let cache = LiveLimitsCache(limits: lastGoodLiveLimits, at: at.timeIntervalSince1970)
+        let cache = LiveLimitsCache(limits: lastGoodLiveLimits, at: at.timeIntervalSince1970,
+                                    caveat: liveLimitsCaveat)
         if let data = try? JSONEncoder().encode(cache) {
             try? data.write(to: liveLimitsCacheURL, options: .atomic)
         }
@@ -258,6 +278,10 @@ final class SnapshotStore: ObservableObject {
               !cache.limits.isEmpty else { return }
         lastGoodLiveLimits = cache.limits
         lastGoodLiveLimitsAt = Date(timeIntervalSince1970: cache.at)
+        // Restore the caveat with the values it belongs to, so a wrong-login
+        // reading can't come back clean after a relaunch.
+        liveLimitsCaveat = cache.caveat
+        liveLimitsRecovery = cache.caveat == nil ? nil : .renewLoginInTerminal
     }
 
     // MARK: Limit forecasting (the %-trajectory over time)
@@ -733,11 +757,17 @@ final class SnapshotStore: ObservableObject {
             let found = CoreBridge.projects(roots: roots, maxDepth: 4)
             await MainActor.run {
                 self.isScanningProjects = false
-                self.projectsUpdatedAt = Date()
-                self.projects = found
-                self.projectsError = found.isEmpty
-                    ? "No projects with recognizable commands were found in the selected folder\(roots.count == 1 ? "" : "s")."
-                    : nil
+                if let found {
+                    self.projects = found
+                    self.projectsUpdatedAt = Date()
+                    self.projectsError = found.isEmpty
+                        ? "No projects with recognizable commands were found in the selected folder\(roots.count == 1 ? "" : "s")."
+                        : nil
+                } else {
+                    // Scan failed — distinct from "found nothing". Keep the prior
+                    // list and its timestamp; report the failure, not a false empty.
+                    self.projectsError = "Couldn't read the projects in the selected folder\(roots.count == 1 ? "" : "s") — the scan failed. Try rescanning."
+                }
             }
         }
     }
@@ -749,6 +779,8 @@ final class SnapshotStore: ObservableObject {
     @Published private(set) var stackHealth: [ProjectStack] = []
     @Published private(set) var isScanningStack = false
     @Published private(set) var stackUpdatedAt: Date?
+    /// True when the last scan *failed* (vs. ran and found no dependency data).
+    @Published private(set) var stackScanFailed = false
 
     /// When on, Stack Health contacts official registries + OSV for latest
     /// versions and advisories; off = local-only inventory (no network). Persisted.
@@ -773,8 +805,13 @@ final class SnapshotStore: ObservableObject {
             let result = CoreBridge.stackHealth(roots: roots, checkUpdates: check, maxDepth: 4)
             await MainActor.run {
                 self.isScanningStack = false
-                self.stackUpdatedAt = Date()
-                self.stackHealth = result
+                if let result {
+                    self.stackHealth = result
+                    self.stackUpdatedAt = Date()
+                    self.stackScanFailed = false
+                } else {
+                    self.stackScanFailed = true   // keep prior data + timestamp
+                }
             }
         }
     }
@@ -785,6 +822,8 @@ final class SnapshotStore: ObservableObject {
     @Published private(set) var services: [RunningService] = []
     @Published private(set) var isScanningServices = false
     @Published private(set) var servicesUpdatedAt: Date?
+    /// True when the last detection *failed* (vs. ran and found nothing running).
+    @Published private(set) var servicesScanFailed = false
 
     /// Detects running dev servers/services off the main actor. Coalesced. Matches
     /// them to the approved project roots when any are set.
@@ -796,8 +835,13 @@ final class SnapshotStore: ObservableObject {
             let result = CoreBridge.services(roots: roots)
             await MainActor.run {
                 self.isScanningServices = false
-                self.servicesUpdatedAt = Date()
-                self.services = result
+                if let result {
+                    self.services = result
+                    self.servicesUpdatedAt = Date()
+                    self.servicesScanFailed = false
+                } else {
+                    self.servicesScanFailed = true   // keep prior data + timestamp
+                }
             }
         }
     }
@@ -1075,6 +1119,10 @@ final class SnapshotStore: ObservableObject {
     @Published private(set) var projectUsage: [ProjectUsage] = []
     @Published private(set) var isScanningProjectUsage = false
     @Published private(set) var projectUsageUpdatedAt: Date?
+    /// True when the last scan *failed* (as opposed to succeeding with no data).
+    /// A failure keeps the previous data and its timestamp — it must never read as
+    /// a fresh, clean "nothing here".
+    @Published private(set) var projectUsageScanFailed = false
 
     /// Recompute per-project spend off the main actor. Coalesced.
     func rescanProjectUsage() {
@@ -1084,8 +1132,14 @@ final class SnapshotStore: ObservableObject {
             let result = CoreBridge.projectUsage()
             await MainActor.run {
                 self.isScanningProjectUsage = false
-                self.projectUsageUpdatedAt = Date()
-                self.projectUsage = result
+                if let result {
+                    self.projectUsage = result
+                    self.projectUsageUpdatedAt = Date()
+                    self.projectUsageScanFailed = false
+                } else {
+                    // Scan failed — keep the last good data + timestamp, flag it.
+                    self.projectUsageScanFailed = true
+                }
             }
         }
     }
@@ -1096,6 +1150,8 @@ final class SnapshotStore: ObservableObject {
     @Published private(set) var radar: RadarReport?
     @Published private(set) var isScanningRadar = false
     @Published private(set) var radarUpdatedAt: Date?
+    /// True when the last radar run *failed* (vs. ran and had nothing to flag).
+    @Published private(set) var radarScanFailed = false
 
     /// Run the Repository Radar off the main actor. Coalesced. No-op with no
     /// approved roots (there's nothing to scan yet).
@@ -1107,8 +1163,15 @@ final class SnapshotStore: ObservableObject {
             let result = CoreBridge.radar(roots: roots)
             await MainActor.run {
                 self.isScanningRadar = false
-                self.radarUpdatedAt = Date()
-                if let result { self.radar = result }
+                if let result {
+                    self.radar = result
+                    self.radarUpdatedAt = Date()   // stamp freshness only on success
+                    self.radarScanFailed = false
+                } else {
+                    // Failed (roots are non-empty here) — keep the last report and
+                    // its timestamp instead of stamping a false "just now".
+                    self.radarScanFailed = true
+                }
             }
         }
     }
@@ -1137,9 +1200,12 @@ final class SnapshotStore: ObservableObject {
                 if let snap {
                     self.snapshot = snap
                     self.keychainAuthed = claudeAuthed ? ["claude"] : []
-                    // Overlay Claude's live limits onto the fresh core snapshot.
+                    // Overlay the live, provider-reported readings onto the fresh
+                    // core snapshot: Claude's limits, and Cursor's meters (which
+                    // exist nowhere else — the core can't see them at all).
                     if self.liveLimitsEnabled {
                         self.fetchAndMergeLiveLimits()
+                        self.fetchAndMergeLiveProviders()
                     }
                     // Re-decorate + refresh BYOK provider balances (the fresh core
                     // snapshot carries balance=nil, so cached balances are folded
@@ -1309,7 +1375,11 @@ final class SnapshotStore: ObservableObject {
                 self.lastGoodLiveLimits = outcome.limits
                 self.lastGoodLiveLimitsAt = Date()
                 self.liveLimitsError = nil
-                self.liveLimitsRecovery = nil
+                // A caveat rides WITH a successful reading (wrong-login numbers),
+                // so it is set here rather than on the failure path, and it keeps
+                // the recovery action so the fix stays one click away.
+                self.liveLimitsCaveat = outcome.caveat
+                self.liveLimitsRecovery = outcome.caveat == nil ? nil : outcome.recovery
                 // Persist so the % survives a relaunch / an expired saved token.
                 self.persistLiveLimits()
                 // Record the reading into the %-trajectory FIRST, so the forecast
@@ -1455,6 +1525,216 @@ final class SnapshotStore: ObservableObject {
         if changed { snapshot = snap.copy(providers: providers) }
     }
 
+    // MARK: - Live provider readings
+    //
+    // Several providers publish no local usage at all — their real numbers exist
+    // only behind an API. Claude keeps its own richer flow above (forecast latch,
+    // persisted cache, login recovery); every other live provider shares this one
+    // generic path, so adding a provider is a single table entry rather than
+    // another copy of the same throttle / merge / strip logic.
+    //
+    // The shape is the same in all cases: read a LOCAL credential, fetch off the
+    // main actor, throttle on ATTEMPTS as well as successes (so a sustained
+    // failure backs off), keep the last good reading so a transient failure never
+    // blanks a card, and stamp every window with its capture time. Gated on the
+    // one `liveLimitsEnabled` network consent.
+
+    /// One provider's live, provider-reported reading.
+    struct LiveProviderReading: Sendable {
+        var limits: [LimitWindow] = []
+        var balance: ProviderBalance?
+        var planName: String?
+        var error: String?
+
+        var isEmpty: Bool { limits.isEmpty && balance == nil }
+        static let empty = LiveProviderReading()
+    }
+
+    /// Why a provider's live reading is missing, keyed by provider id. Surfaced on
+    /// the card so an absence always carries its reason.
+    @Published private(set) var liveProviderErrors: [String: String] = [:]
+    /// Plan names the provider APIs reported, keyed by provider id.
+    @Published private(set) var liveProviderPlans: [String: String] = [:]
+
+    private var liveReadings: [String: LiveProviderReading] = [:]
+    private var liveReadingAt: [String: Date] = [:]
+    private var liveAttemptAt: [String: Date] = [:]
+    private var inFlightLive: Set<String> = []
+    /// The limit labels this store injected per provider — so a strip removes ours
+    /// and leaves the core's (Codex reports its own limits with the same
+    /// provenance, so provenance alone can't tell them apart).
+    private var injectedLiveLabels: [String: Set<String>] = [:]
+    /// Same spacing as the Claude fetch — bounds the request rate either way.
+    private let liveProviderRefetchInterval: TimeInterval = 8 * 60
+
+    /// Every provider whose reading comes from a live API, with its fetcher.
+    /// Claude is deliberately absent — it owns the richer flow above.
+    private static let liveFetchers: [(id: String, fetch: @Sendable () async -> LiveProviderReading)] = [
+        ("cursor", {
+            let o = await CursorUsageClient.fetch()
+            return LiveProviderReading(
+                limits: o.limits,
+                // Cursor reports dollars *spent* beyond the plan; there is no
+                // remaining balance to show, so only `used` is set.
+                balance: o.extraUsageUSD.map {
+                    ProviderBalance(used_usd: $0, currency: "USD", note: "Extra usage (on-demand)")
+                },
+                planName: o.planName,
+                error: o.error
+            )
+        }),
+        // Codex: the API's windows are authoritative and fresher than the ones the
+        // core derives from the CLI's logs, so they replace them by label. A window
+        // only the logs know about survives the merge.
+        ("codex", {
+            let o = await CodexLiveUsageClient.fetch()
+            return LiveProviderReading(
+                limits: o.limits,
+                // Flex credits are counted in CREDITS, not dollars — priced at
+                // $0.04 each (openusage's rate). Shown as remaining, never as spend.
+                //
+                // Only when there ARE credits: a plan without the credit system
+                // reports a balance of 0, and rendering that as a green "$0.00 left"
+                // reads as "you are out of money" when the truth is "this plan has
+                // no credits at all". Absence of a credit system is not a zero
+                // balance.
+                balance: o.creditsBalance.flatMap { credits in
+                    credits > 0
+                        ? ProviderBalance(remaining_usd: credits * 0.04, currency: "USD",
+                                          note: "\(Int(credits)) flex credits")
+                        : nil
+                },
+                planName: o.planType,
+                error: o.error
+            )
+        }),
+        // Copilot: per-seat premium-request quota, using the token Copilot/gh
+        // already stored locally — no PAT to create. An org-managed seat has no
+        // per-user quota, which arrives here as a note, never as 0%.
+        ("copilot", {
+            let o = await CopilotUsageClient.fetch()
+            return LiveProviderReading(
+                limits: o.limits,
+                balance: o.balance,
+                planName: o.planName,
+                error: o.error
+            )
+        }),
+        // Antigravity: its own language server, over loopback. No OAuth, no cloud
+        // call — and it complements the core's conversation scan with the real
+        // 5h/weekly quota buckets the logs can't see.
+        ("antigravity", {
+            let o = await AntigravityQuotaClient.fetch()
+            return LiveProviderReading(limits: o.limits, error: o.error)
+        }),
+        ("zai", {
+            let o = await ZaiUsageClient.fetch()
+            return LiveProviderReading(limits: o.limits, planName: o.planName, error: o.error)
+        }),
+        // Grok's on-demand cap is denominated in CREDITS, not dollars — converting
+        // it would fabricate a price, so it stays out of the balance slot.
+        ("grok", {
+            let o = await GrokUsageClient.fetch()
+            return LiveProviderReading(limits: o.limits, planName: o.planName, error: o.error)
+        }),
+        ("devin", {
+            let o = await DevinUsageClient.fetch()
+            return LiveProviderReading(
+                limits: o.limits, balance: o.balance, planName: o.planName, error: o.error
+            )
+        }),
+    ]
+
+    /// Kick off (or re-apply) every live provider reading for the current snapshot.
+    private func fetchAndMergeLiveProviders() {
+        guard liveLimitsEnabled, let snap = snapshot else { return }
+        for entry in Self.liveFetchers {
+            guard snap.providers.contains(where: { $0.provider == entry.id }) else { continue }
+            fetchLiveProvider(entry.id, entry.fetch)
+        }
+    }
+
+    private func fetchLiveProvider(
+        _ providerID: String,
+        _ fetch: @escaping @Sendable () async -> LiveProviderReading
+    ) {
+        // 1) Re-apply the last good reading onto the fresh core snapshot at once,
+        //    so a transient failure never blanks a card.
+        if let cached = liveReadings[providerID], !cached.isEmpty {
+            applyLiveReading(cached, to: providerID)
+        }
+
+        // 2) Only hit the network when both the cache AND the last attempt are old.
+        let cacheFresh = liveReadingAt[providerID]
+            .map { Date().timeIntervalSince($0) < liveProviderRefetchInterval } ?? false
+        let attemptFresh = liveAttemptAt[providerID]
+            .map { Date().timeIntervalSince($0) < liveProviderRefetchInterval } ?? false
+        guard !cacheFresh, !attemptFresh, !inFlightLive.contains(providerID) else { return }
+
+        inFlightLive.insert(providerID)
+        liveAttemptAt[providerID] = Date()
+        Task { [weak self] in
+            let reading = await fetch()
+            guard let self else { return }
+            self.inFlightLive.remove(providerID)
+            guard self.liveLimitsEnabled else { return }
+            if !reading.isEmpty {
+                self.liveReadings[providerID] = reading
+                self.liveReadingAt[providerID] = Date()
+                self.liveProviderErrors[providerID] = nil
+                if let plan = reading.planName { self.liveProviderPlans[providerID] = plan }
+                self.applyLiveReading(reading, to: providerID)
+            } else {
+                // No reading. Report the reason when we have one; keep whatever is
+                // already on screen rather than blanking it.
+                self.liveProviderErrors[providerID] = reading.error
+            }
+        }
+    }
+
+    /// Injects one provider's live reading (limits + optional balance) onto it.
+    ///
+    /// Deliberately does NOT strip existing limits by provenance the way the Claude
+    /// path does. Codex is the counter-example: the offline core emits ITS limits
+    /// with the same `provider_reported` provenance (read from the CLI's logs), so
+    /// a provenance filter would delete a real core reading. `mergeLimits` dedups
+    /// by label with live winning, which is exactly right — a live window replaces
+    /// the log-derived one of the same name, and a window only the core knows about
+    /// survives. Re-applying is idempotent, so nothing accumulates.
+    private func applyLiveReading(_ reading: LiveProviderReading, to providerID: String) {
+        guard let snap = snapshot else { return }
+        let providers = snap.providers.map { p -> ProviderUsage in
+            guard p.provider == providerID else { return p }
+            let withLimits = p.replacingLimits(
+                Self.mergeLimits(core: p.limits, live: reading.limits)
+            )
+            guard let balance = reading.balance else { return withLimits }
+            return withLimits.replacingBalance(balance)
+        }
+        // Remember exactly which labels WE injected, so turning live fetching off
+        // can remove ours without taking a core reading with it.
+        injectedLiveLabels[providerID] = Set(reading.limits.map(\.label))
+        snapshot = snap.copy(providers: providers)
+        evaluateNotifications()
+    }
+
+    /// Removes every merged live-provider reading, restoring the core-only view
+    /// (used when the user turns live fetching off). Strips only the labels this
+    /// store actually injected — never a limit the core reported.
+    private func stripLiveProviderReadings() {
+        guard let snap = snapshot else { return }
+        var changed = false
+        let providers = snap.providers.map { p -> ProviderUsage in
+            guard let injected = injectedLiveLabels[p.provider], !injected.isEmpty || p.balance != nil
+            else { return p }
+            let kept = p.limits.filter { !injected.contains($0.label) }
+            if kept.count != p.limits.count || p.balance != nil { changed = true }
+            return p.replacingLimits(kept).replacingBalance(nil)
+        }
+        injectedLiveLabels = [:]
+        if changed { snapshot = snap.copy(providers: providers) }
+    }
+
     /// Merges core + live limits, deduped by label, live winning, order stable
     /// (core labels first in their original order, then any new live labels).
     private static func mergeLimits(core: [LimitWindow], live: [LimitWindow]) -> [LimitWindow] {
@@ -1591,34 +1871,66 @@ final class SnapshotStore: ObservableObject {
         provider.authenticated || keychainAuthed.contains(provider.provider)
     }
 
-    /// A compact, **per-provider** menu-bar readout: one labeled token per active
-    /// provider — its hottest live-limit % when it has one (e.g. "Cx 9%"), else
-    /// today's token volume (e.g. "Cl 248M"). Up to three providers, so the
-    /// number is never ambiguous about which AI it belongs to.
-    var menuBarText: String {
-        guard let snapshot else { return "…" }
-        var parts: [String] = []
+    /// One provider's menu-bar cell: the mark that says *which* AI, plus its
+    /// reading(s). Two readings are rendered STACKED (session over weekly), which
+    /// is why they stay separate strings rather than one joined label.
+    struct MenuBarItem: Identifiable, Equatable {
+        let id: String            // provider id — also keys the brand mark
+        let symbolName: String    // SF Symbol fallback when there's no vector mark
+        let displayName: String   // for the VoiceOver description
+        let values: [String]      // 1–2 readings, e.g. ["41%", "34%"] or ["248M"]
+    }
+
+    /// A compact, **per-provider** menu-bar readout: a provider icon plus its
+    /// reading. Both limit windows are shown when the provider reports two (session
+    /// then weekly, e.g. "41%·34%") — seeing only the hottest one hid the fact that
+    /// a comfortable session can sit inside a nearly-spent week. Percentages are
+    /// **remaining**, matching every card. Falls back to today's token volume for a
+    /// provider with no limits. Up to three providers.
+    var menuBarItems: [MenuBarItem] {
+        guard let snapshot else { return [] }
+        var items: [MenuBarItem] = []
         for p in snapshot.providers where p.installed {
-            let code = p.shortCode
             // Only show a percentage we can still call current. Every CARD ages its
             // limit with a `LimitAgeNote`; the menu bar is too small for that, so a
-            // stale reading is dropped rather than shown as live. Claude's stale
-            // cached limits are already stripped before the snapshot, but a core-
-            // provided Codex/Gemini limit carries its own `captured_at_unix` and can
-            // be hours old (measured at 18.5h on a real machine) — showing that as
-            // `Cx 32%` in the always-visible menu bar is the exact stale-as-live bug
-            // the rest of the app guards against.
-            let fresh = p.limits.filter { !$0.isStale(staleAfter: LimitWindow.liveStaleAfter) }
-            if let hottest = fresh.max(by: { $0.used_percent < $1.used_percent }) {
-                parts.append("\(code) \(Int(hottest.used_percent.rounded()))%")
+            // stale reading is dropped rather than shown as live. A core-provided
+            // limit carries its own `captured_at_unix` and can be hours old
+            // (measured at 18.5h on a real machine) — showing that as live in the
+            // always-visible menu bar is the exact stale-as-live bug the rest of the
+            // app guards against.
+            var fresh = p.limits.filter { !$0.isStale(staleAfter: LimitWindow.liveStaleAfter) }
+            // A reading that belongs to a DIFFERENT login is dropped here for the
+            // same reason a stale one is: the menu bar has no room to explain it,
+            // and an unlabelled percentage in the always-visible strip reads as
+            // "your usage". The card carries the caveat and the one-click fix.
+            if p.provider == "claude", liveLimitsCaveat != nil { fresh = [] }
+            let values: [String]
+            if !fresh.isEmpty {
+                // Session on top, weekly below (the order people read them in);
+                // anything else keeps the provider's own order behind those two.
+                let rank: (LimitWindow) -> Int = { l in
+                    switch l.label {
+                    case "5h", "daily": return 0
+                    case "weekly": return 1
+                    default: return 2
+                    }
+                }
+                values = fresh
+                    .sorted { rank($0) < rank($1) }
+                    .prefix(2)
+                    .map { "\(Int(Format.limitLeftFraction($0.used_percent) * 100))%" }
             } else if let tokens = p.today?.tokens.grandTotal, tokens > 0 {
-                parts.append("\(code) \(Format.tokens(tokens))")
+                values = [Format.tokens(tokens)]
             } else {
                 continue
             }
-            if parts.count >= 3 { break }
+            items.append(MenuBarItem(id: p.provider,
+                                     symbolName: p.symbolName,
+                                     displayName: p.display_name,
+                                     values: values))
+            if items.count >= 3 { break }
         }
-        return parts.joined(separator: "  ")
+        return items
     }
 
     // MARK: Alerts

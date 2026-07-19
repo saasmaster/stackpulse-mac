@@ -125,28 +125,56 @@ struct DiscoverSection: View {
         .glassCard(padding: 24)
     }
 
+    @ViewBuilder
     private func allClearState(scanned: Int) -> some View {
-        VStack(spacing: 10) {
-            Image(systemName: "checkmark.seal.fill")
-                .font(.largeTitle)
-                .foregroundStyle(.green)
-            Text("Nothing to flag")
-                .font(.headline)
-            Text("The radar scanned \(scanned) project\(scanned == 1 ? "" : "s") and found no obvious gaps — instructions, tests, ignores, and git state look healthy. No change is the right call here.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-            Button { store.rescanRadar() } label: {
-                Label("Rescan", systemImage: "arrow.clockwise").font(.caption.weight(.medium))
+        // A green "all clear" is only honest if we actually scanned something.
+        // Zero projects scanned means "no evidence", not "healthy" — declaring
+        // health over nothing is the false all-clear the app must refuse.
+        if scanned == 0 {
+            VStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .font(.largeTitle)
+                    .foregroundStyle(.secondary)
+                Text("Nothing scanned yet")
+                    .font(.headline)
+                Text("The radar found no projects to look at under your approved folders, so there's nothing to report yet — this isn't a clean bill of health. Add a folder in Projects, or rescan once your projects are set up.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { store.rescanRadar() } label: {
+                    Label("Rescan", systemImage: "arrow.clockwise").font(.caption.weight(.medium))
+                }
+                .buttonStyle(.glass)
+                .disabled(store.isScanningRadar)
+                .padding(.top, 2)
             }
-            .buttonStyle(.glass)
-            .disabled(store.isScanningRadar)
-            .padding(.top, 2)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 40)
+            .glassCard(padding: 24)
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.largeTitle)
+                    .foregroundStyle(.green)
+                Text("Nothing to flag")
+                    .font(.headline)
+                Text("The radar scanned \(scanned) project\(scanned == 1 ? "" : "s") and found no obvious gaps — instructions, tests, ignores, and git state look healthy. No change is the right call here.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { store.rescanRadar() } label: {
+                    Label("Rescan", systemImage: "arrow.clockwise").font(.caption.weight(.medium))
+                }
+                .buttonStyle(.glass)
+                .disabled(store.isScanningRadar)
+                .padding(.top, 2)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 40)
+            .glassCard(padding: 24)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
-        .glassCard(padding: 24)
     }
 
     private var loadingOrPrompt: some View {
@@ -155,6 +183,21 @@ struct DiscoverSection: View {
                 ProgressView()
                 Text("Scanning your projects for opportunities…")
                     .font(.callout).foregroundStyle(.secondary)
+            } else if store.radarScanFailed {
+                // The run failed — say so, rather than the neutral "Run the radar"
+                // prompt that looks identical to never-having-run.
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.largeTitle).foregroundStyle(.orange)
+                Text("The radar couldn't run")
+                    .font(.headline)
+                Text("Something went wrong scanning your projects — this isn't a result. Try again.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { store.rescanRadar() } label: {
+                    Label("Try again", systemImage: "arrow.clockwise").font(.caption.weight(.medium))
+                }
+                .buttonStyle(.glass(tint: .accentColor, prominent: true))
             } else {
                 Image(systemName: "sparkle.magnifyingglass")
                     .font(.largeTitle).foregroundStyle(.secondary)

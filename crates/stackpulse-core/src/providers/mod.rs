@@ -9,6 +9,7 @@ pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod detection;
+pub mod opencode;
 
 use crate::datetime::{civil_from_days, days_from_civil, utc_date, CivilDate};
 use crate::pricing;
@@ -218,8 +219,14 @@ pub fn compute_analytics(records: &[UsageRecord], now_unix: i64) -> ProviderAnal
         .get(&today_days)
         .map(|(_, c, _, has)| if *has { *c } else { 0.0 })
         .unwrap_or(0.0);
-    let avg = total_cost / ANALYTICS_DAYS as f64;
-    let today_vs_avg_ratio = (avg > 0.0).then_some(today_cost / avg);
+    // Compare today against the average of the days the user was ACTIVE, not
+    // against total / 30. Dividing by 30 dilutes the baseline for anyone who
+    // codes intermittently — a normal $30 day for someone active 2 days out of
+    // 30 reads as a 15x "spend spike" and fires a false anomaly alert. The
+    // active-day average asks the honest question: "is today unusually high for
+    // a day I actually use this tool?" (matches `burn_rate_usd_per_day`).
+    let avg = (active_days > 0.0).then_some(total_cost / active_days);
+    let today_vs_avg_ratio = avg.filter(|a| *a > 0.0).map(|a| today_cost / a);
 
     ProviderAnalytics {
         cache_savings_usd: any_savings.then_some(cache_savings),
@@ -343,5 +350,43 @@ mod tests {
         assert!(a.burn_rate_usd_per_day.is_none());
         assert!(a.today_vs_avg_ratio.is_none());
         assert!(a.cache_hit_rate.is_none());
+    }
+
+    /// Regression: the spend-anomaly ratio must divide by *active* days, not by a
+    /// fixed 30. An intermittent user with a single active day is spending at
+    /// exactly their own baseline — ratio 1.0, not a fabricated 30x "spike".
+    #[test]
+    fn analytics_ratio_uses_active_day_baseline_not_thirty() {
+        let now = crate::datetime::now_unix();
+        // One active day (today), $3.00 of Sonnet input. No other activity in the
+        // window. burn_rate = today's cost over 1 active day; ratio = today / that
+        // same active-day average = 1.0. The old `total_cost / 30` denominator
+        // would have reported 30x here and tripped a false anomaly alert.
+        let records = vec![rec(0, "claude-sonnet-4", 1_000_000, 0)]; // $3.00 today
+        let a = compute_analytics(&records, now);
+
+        let burn = a.burn_rate_usd_per_day.expect("burn rate present");
+        assert!((burn - 3.0).abs() < 1e-6, "burn was {burn}");
+        let ratio = a.today_vs_avg_ratio.expect("ratio present");
+        assert!(
+            (ratio - 1.0).abs() < 1e-6,
+            "one active day at baseline must be ratio 1.0, was {ratio}"
+        );
+    }
+
+    /// A genuine spike still reads as a spike: today's active-day cost well above
+    /// the average of the other active days must yield ratio > 1.
+    #[test]
+    fn analytics_ratio_flags_a_real_spike() {
+        let now = crate::datetime::now_unix();
+        let records = vec![
+            rec(0, "claude-sonnet-4", 4_000_000, 0),  // today: $12.00
+            rec(5, "claude-sonnet-4", 1_000_000, 0),  // 5 days ago: $3.00
+            rec(10, "claude-sonnet-4", 1_000_000, 0), // 10 days ago: $3.00
+        ];
+        let a = compute_analytics(&records, now);
+        // total $18 over 3 active days → avg $6; today $12 → ratio 2.0.
+        let ratio = a.today_vs_avg_ratio.expect("ratio present");
+        assert!((ratio - 2.0).abs() < 1e-6, "ratio was {ratio}");
     }
 }

@@ -338,6 +338,7 @@ struct SidebarView: View {
                     Image(systemName: "xmark.circle.fill").font(.caption2).foregroundStyle(.tertiary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Clear app filter")
             }
             Button { favoritesOnly.toggle() } label: {
                 Image(systemName: favoritesOnly ? "star.fill" : "star")
@@ -346,6 +347,9 @@ struct SidebarView: View {
             }
             .buttonStyle(.plain)
             .help(favoritesOnly ? "Showing favorites only" : "Show favorites only")
+            .accessibilityLabel("Favorites only")
+            .accessibilityValue(favoritesOnly ? "On" : "Off")
+            .accessibilityAddTraits(favoritesOnly ? .isSelected : [])
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -534,31 +538,39 @@ private struct SidebarProviderRow: View {
 
             metricsLine
 
-            if let limit = provider.hottestLimit {
-                VStack(spacing: 2) {
-                    HStack {
-                        Text(limitLabel(limit.label))
-                            .font(.system(size: 9))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(Format.percent(limit.used_percent))
-                            .font(.system(size: 9, weight: .medium).monospacedDigit())
-                        if let countdown = Format.resetCountdown(limit.resets_at_unix) {
-                            Text("· \(countdown)")
-                                .font(.system(size: 8))
-                                .foregroundStyle(.tertiary)
+            // Both windows, not just the hottest: session (5h) and weekly answer
+            // different questions, and this panel is the at-a-glance surface.
+            if !provider.limits.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(provider.limits) { limit in
+                        VStack(spacing: 2) {
+                            HStack {
+                                Text(limitLabel(limit.label))
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text(Format.limitLeft(limit.used_percent))
+                                    .font(.system(size: 9, weight: .medium).monospacedDigit())
+                                if let countdown = Format.resetCountdown(limit.resets_at_unix) {
+                                    Text("· \(countdown)")
+                                        .font(.system(size: 8))
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                            MeterBar(fraction: Format.limitLeftFraction(limit.used_percent),
+                                     tint: SPStatus.limitColor(limit.used_percent),
+                                     height: 5,
+                                     glowsWhenHigh: true)
                         }
                     }
-                    MeterBar(fraction: limit.used_percent / 100,
-                             tint: SPStatus.limitColor(limit.used_percent),
-                             height: 5,
-                             glowsWhenHigh: true)
                     // This panel is open all day, which is exactly how a reading
                     // taken hours ago goes on reading as "right now". The popover
                     // has labelled its limits' age since protocol 1.20.0; this row
                     // rendered the same percentage bare. Draws nothing when the
                     // reading is fresh, so it costs no height in the normal case.
-                    LimitAgeNote(limit: limit)
+                    if let hottest = provider.hottestLimit {
+                        LimitAgeNote(limit: hottest)
+                    }
                 }
             }
         }
@@ -578,9 +590,6 @@ private struct SidebarProviderRow: View {
                 if let turns = provider.today?.records, turns > 0 {
                     metric("arrow.triangle.2.circlepath", "\(turns) turns")
                 }
-                if let hit = provider.analytics?.cache_hit_rate {
-                    metric("square.stack.3d.up", "\(Int((hit * 100).rounded()))% cache")
-                }
                 Spacer(minLength: 0)
             }
         } else if provider.isActivityOnly {
@@ -597,11 +606,7 @@ private struct SidebarProviderRow: View {
     }
 
     private func limitLabel(_ raw: String) -> String {
-        switch raw {
-        case "5h": return "Session (5h)"
-        case "weekly": return "Weekly"
-        default: return raw.capitalized
-        }
+        Format.limitLabel(raw)
     }
 }
 

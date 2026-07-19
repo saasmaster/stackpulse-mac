@@ -9,7 +9,7 @@ use crate::datetime::{now_unix, utc_date};
 use crate::pricing::PRICING_AS_OF;
 use crate::providers::{
     antigravity::AntigravityProvider, claude::ClaudeProvider, codex::CodexProvider,
-    detection::detection_providers, Provider,
+    detection::detection_providers, opencode::OpenCodeProvider, Provider,
 };
 use stackpulse_protocol::{
     CoreError, CoreRequest, CoreResponse, ErrorCode, IntegrationHealth, ProviderId, ProviderUsage,
@@ -29,14 +29,15 @@ impl Default for Engine {
 
 impl Engine {
     pub fn new() -> Self {
-        // Full local scanners first (Claude, Codex, Antigravity), then the eight
-        // detection-only providers in the ProviderId enum's declared order
-        // (Copilot, Cursor, Devin, Gemini, Grok, OpenCode, OpenRouter, Zai).
-        // Every snapshot therefore lists all eleven providers.
+        // Full local scanners first (Claude, Codex, Antigravity, OpenCode), then
+        // the seven detection-only providers in the ProviderId enum's declared
+        // order (Copilot, Cursor, Devin, Gemini, Grok, OpenRouter, Zai). Every
+        // snapshot therefore lists all eleven providers.
         let mut providers: Vec<Box<dyn Provider>> = vec![
             Box::new(ClaudeProvider),
             Box::new(CodexProvider),
             Box::new(AntigravityProvider),
+            Box::new(OpenCodeProvider),
         ];
         for p in detection_providers() {
             providers.push(Box::new(p));

@@ -27,3 +27,7 @@ apps/**/.swiftpm
 *.pem
 *.p12
 secrets.local.*
+
+# Generated code-graph artifacts (a local analysis tool's output, regenerated
+# on demand — not source, and noisy in diffs).
+graphify-out/

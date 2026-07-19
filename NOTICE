@@ -33,15 +33,32 @@ What we did:
   Claude Code and Codex CLI on-disk formats, and cost estimation from an
   embedded price table.
 
-  No OpenUsage source code is copied verbatim into this repository. All Rust
-  and Swift in this repository was written for StackPulse. Where our behavior
-  intentionally matches OpenUsage's (for example, path resolution order or
-  token-deduplication semantics), that is by design and is credited here.
+  No OpenUsage source CODE is copied verbatim into this repository. All Rust and
+  Swift in this repository was written for StackPulse. Where our behavior
+  intentionally matches OpenUsage's (for example, path resolution order,
+  token-deduplication semantics, or which vendor endpoint answers a given
+  question), that is by design and is credited here.
+
+  ONE ASSET IS COPIED. The provider brand marks in
+  apps/StackPulseMac/Sources/StackPulseApp/ProviderMarks.swift are the SVG path
+  data from OpenUsage's Sources/OpenUsage/Resources/ProviderIcons/*.svg,
+  re-keyed to StackPulse's provider ids and embedded as Swift string literals.
+  That artwork is redistributed here under OpenUsage's MIT license (reproduced
+  below). The menu-bar strip layout (a brand mark beside one large reading, or
+  two stacked tight lines) also follows OpenUsage's design.
 
 Trademarks:
   OpenUsage ships a TRADEMARK.md. The "OpenUsage" name and marks are NOT reused
   by StackPulse. "StackPulse" is an independent name. Do not present StackPulse
   as OpenUsage, a fork of OpenUsage, or as endorsed by the OpenUsage project.
+
+  AI PROVIDER MARKS. StackPulse embeds the brand marks of the AI tools it
+  monitors (Anthropic/Claude, OpenAI/Codex, GitHub Copilot, Cursor,
+  Antigravity, Devin, Grok/xAI, OpenCode, OpenRouter, Z.ai) so a menu-bar
+  reading can say which tool it belongs to. Each mark remains the trademark of
+  its owner and is used here for IDENTIFICATION ONLY — nominative use. Their
+  presence does not imply any affiliation with, sponsorship by, or endorsement
+  from those vendors. StackPulse is an independent, unaffiliated tool.
 
 The OpenUsage MIT license text is reproduced in full at the end of this file.
 

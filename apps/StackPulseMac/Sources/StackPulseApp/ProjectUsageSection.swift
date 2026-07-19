@@ -154,6 +154,8 @@ struct ProjectUsageSection: View {
             if store.projectUsage.isEmpty {
                 if store.isScanningProjectUsage {
                     scanningState
+                } else if store.projectUsageScanFailed {
+                    failedState
                 } else {
                     emptyState
                 }
@@ -337,6 +339,16 @@ struct ProjectUsageSection: View {
             icon: "folder.badge.questionmark",
             title: "No project-attributed usage yet",
             message: "StackPulse attributes each local session record to the folder that session ran in. Nothing has been attributed so far — run an AI coding session inside a project, then rescan."
+        )
+    }
+
+    /// Shown when the scan *failed*, distinct from a genuine empty — otherwise a
+    /// read error reads as "you've simply used nothing", a false all-clear.
+    private var failedState: some View {
+        EmptyStateView(
+            icon: "exclamationmark.triangle",
+            title: "Couldn't attribute usage",
+            message: "The scan couldn't run just now, so this isn't a confirmed “nothing here”. Try rescanning."
         )
     }
 

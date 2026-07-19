@@ -41,6 +41,10 @@ app: ## Build the macOS app (release)
 package: app ## Assemble a runnable StackPulse.app (ad-hoc signed, local use)
 	./scripts/package-app.sh
 
+.PHONY: install
+install: package ## Package + replace the installed app (INSTALL_DIR, default ~/Desktop) and relaunch
+	./scripts/install-app.sh
+
 .PHONY: run
 run: ## Build + launch the menu-bar app
 	./scripts/build-app.sh && "$(APP_DIR)/.build/release/StackPulseApp"

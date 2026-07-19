@@ -63,10 +63,6 @@ private struct UsageProviderBlock: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if let rate = provider.last30?.tokens.cacheHitRate {
-                Chip(text: "Cache \(Format.percent(rate * 100))",
-                     systemImage: "bolt.horizontal", tint: .cyan)
-            }
             if let plan = provider.plan_hint {
                 Chip(text: plan.capitalized, systemImage: "creditcard", tint: .cyan)
             }
@@ -98,13 +94,6 @@ private struct UsageProviderBlock: View {
                         caption: "est. $/active-day",
                         systemImage: "flame",
                         tint: .orange
-                    )
-                    StatTile(
-                        label: "Cache hit rate",
-                        value: a.cache_hit_rate.map { Format.percent($0 * 100) } ?? "—",
-                        caption: "read ÷ (read + write)",
-                        systemImage: "bolt.horizontal",
-                        tint: .cyan
                     )
                 }
 
@@ -209,25 +198,25 @@ private struct SpendWindowRow: View {
                 Spacer()
                 Text(Format.usd(window.estimated_cost_usd))
                     .font(.callout.monospacedDigit().weight(.semibold))
-                Text("· \(Format.tokens(window.tokens.grandTotal)) tok · \(window.records) turns")
+                Text(metaLine)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
 
-            if window.tokens.grandTotal == 0 {
+            if window.records == 0 {
+                // Genuinely nothing happened in this window.
                 Text("No activity in this window.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else if window.tokens.grandTotal == 0 {
+                // Activity happened (turns > 0) but this provider accounts tokens
+                // server-side — showing "0 tok / No activity" here would both emit
+                // a forbidden fake-zero and contradict the "N turns" just above.
+                Text("Usage is counted server-side — no local token breakdown.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } else {
                 categoryBreakdown
-                if let rate = window.tokens.cacheHitRate {
-                    HStack(spacing: 5) {
-                        Image(systemName: "bolt.horizontal").imageScale(.small)
-                        Text("Cache hit rate \(Format.percent(rate * 100))")
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.cyan)
-                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -267,6 +256,16 @@ private struct SpendWindowRow: View {
             ("Cache write", t.cache_creation_tokens, .teal),
             ("Reasoning", t.reasoning_tokens, .purple),
         ]
+    }
+
+    /// The token/turns meta line. Only shows a token count when there actually is
+    /// one — an activity-only provider (turns > 0, tokens 0) must never render the
+    /// forbidden "0 tok".
+    private var metaLine: String {
+        if window.tokens.grandTotal > 0 {
+            return "· \(Format.tokens(window.tokens.grandTotal)) tok · \(window.records) turns"
+        }
+        return "· \(window.records) turns"
     }
 
     private var prettyLabel: String {

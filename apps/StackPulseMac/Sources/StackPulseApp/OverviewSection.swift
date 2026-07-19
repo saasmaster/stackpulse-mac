@@ -88,13 +88,6 @@ struct OverviewDashboard: View {
                     caption: "\(Format.tokens(snapshot.total30Tokens)) tokens",
                     systemImage: "arrow.left.arrow.right"
                 )
-                StatTile(
-                    label: "Cache hit (30d)",
-                    value: snapshot.aggregate30CacheHitRate.map { Format.percent($0 * 100) } ?? "—",
-                    caption: "read ÷ (read + write)",
-                    systemImage: "bolt.horizontal",
-                    tint: .cyan
-                )
             }
         }
         .glassCard(padding: 16)
@@ -211,39 +204,48 @@ struct OverviewProviderCard: View {
     }
 
     @ViewBuilder private var limitRow: some View {
-        if let limit = provider.hottestLimit {
-            VStack(spacing: 3) {
-                HStack {
-                    Text(limitLabel(limit.label))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text(Format.percent(limit.used_percent))
-                        .font(.caption2.weight(.semibold).monospacedDigit())
-                    if let countdown = Format.resetCountdown(limit.resets_at_unix) {
-                        Text("· \(countdown)")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.tertiary)
+        if !provider.limits.isEmpty {
+            VStack(spacing: 6) {
+                // Every window, not just the hottest one: the session (5h) and the
+                // weekly figure answer different questions and people read both.
+                ForEach(provider.limits) { limit in
+                    VStack(spacing: 3) {
+                        HStack {
+                            Text(limitLabel(limit.label))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(Format.limitLeft(limit.used_percent))
+                                .font(.caption2.weight(.semibold).monospacedDigit())
+                            if let countdown = Format.resetCountdown(limit.resets_at_unix) {
+                                Text("· \(countdown)")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        MeterBar(fraction: Format.limitLeftFraction(limit.used_percent),
+                                 tint: SPStatus.limitColor(limit.used_percent),
+                                 glowsWhenHigh: true)
+                        if provider.provider == "claude",
+                           limit.provenance == AnthropicUsageClient.liveProvenance {
+                            LimitForecastNote(forecast: store.limitForecast(for: limit),
+                                              isStale: limit.isStale(staleAfter: LimitWindow.liveStaleAfter))
+                        }
                     }
-                }
-                MeterBar(fraction: limit.used_percent / 100,
-                         tint: SPStatus.limitColor(limit.used_percent),
-                         glowsWhenHigh: true)
-                if provider.provider == "claude",
-                   limit.provenance == AnthropicUsageClient.liveProvenance {
-                    LimitForecastNote(forecast: store.limitForecast(for: limit),
-                                      isStale: limit.isStale(staleAfter: LimitWindow.liveStaleAfter))
                 }
                 // Every provider's limit can be old, not just Claude's. Codex's
                 // come from whatever its logs last recorded — measured at 18.5
                 // hours on this machine while the card rendered the % as "now".
                 // The reading carries its own capture time now, so age it from the
                 // limit itself rather than from a Claude-only store field.
-                LimitAgeNote(limit: limit)
+                if let hottest = provider.hottestLimit {
+                    LimitAgeNote(limit: hottest)
+                }
                 if provider.provider == "claude" {
                     LiveLimitsStatusNote(capturedAt: store.liveLimitsCapturedAt,
                                          isStale: store.liveLimitsAreStale,
                                          error: store.liveLimitsError,
+                                         caveat: store.liveLimitsCaveat,
                                          onRenewLogin: renewAction)
                 }
             }
@@ -276,10 +278,6 @@ struct OverviewProviderCard: View {
     }
 
     private func limitLabel(_ raw: String) -> String {
-        switch raw {
-        case "5h": return "Session (5h)"
-        case "weekly": return "Weekly"
-        default: return raw.capitalized
-        }
+        Format.limitLabel(raw)
     }
 }

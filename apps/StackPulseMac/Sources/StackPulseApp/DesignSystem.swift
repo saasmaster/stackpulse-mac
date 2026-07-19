@@ -19,6 +19,34 @@ enum Format {
 
     static func percent(_ v: Double) -> String { String(format: "%.0f%%", v) }
 
+    /// A limit window framed the way people actually read a quota — "81% left"
+    /// rather than "19% used". Takes the *used* percent (what the providers
+    /// report) and inverts it, clamped so a provider overshooting 100 can't
+    /// print a negative. Pairs with a meter that empties as you spend.
+    static func limitLeft(_ usedPercent: Double) -> String {
+        "\(percent(limitLeftFraction(usedPercent) * 100)) left"
+    }
+
+    /// The remaining fraction (0…1) of a limit window, for the meter.
+    static func limitLeftFraction(_ usedPercent: Double) -> Double {
+        max(0, min(1, (100 - usedPercent) / 100))
+    }
+
+    /// Display name for a limit-window label. One copy for every surface — this
+    /// used to be a private duplicate in four views, which is exactly how a new
+    /// provider's window ends up reading "Cursor_api" on one card and fine on the
+    /// next.
+    static func limitLabel(_ raw: String) -> String {
+        switch raw {
+        case "5h": return "Session (5h)"
+        case "weekly": return "Weekly"
+        case "cursor_total": return "Total usage"
+        case "cursor_auto": return "Auto usage"
+        case "cursor_api": return "API usage"
+        default: return raw.capitalized
+        }
+    }
+
     /// A "times daily average" multiplier, e.g. `2.3×`.
     static func ratio(_ v: Double) -> String { String(format: "%.1f×", v) }
 
@@ -777,11 +805,28 @@ struct LiveLimitsStatusNote: View {
     let isStale: Bool
     /// Why there is no live value, when there isn't one.
     let error: String?
+    /// A warning about a value that IS shown — e.g. it belongs to a different
+    /// login. Rendered even on the success path, because a wrong number that
+    /// looks right is worse than a missing one.
+    var caveat: String? = nil
     /// The one-click fix, when the failure has one. `nil` ⇒ no button.
     var onRenewLogin: (() -> Void)?
 
     var body: some View {
-        if let error {
+        if let caveat {
+            VStack(alignment: .leading, spacing: 4) {
+                row("person.crop.circle.badge.exclamationmark", caveat, tint: .orange)
+                if let onRenewLogin {
+                    Button(action: onRenewLogin) {
+                        Label("Renew Claude Code login", systemImage: "terminal")
+                            .font(.caption2.weight(.medium))
+                    }
+                    .buttonStyle(.glass(tint: .orange))
+                    .help("Runs `claude` in Terminal so it can refresh its saved login. StackPulse never changes your login itself.")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if let error {
             VStack(alignment: .leading, spacing: 4) {
                 row("exclamationmark.triangle", error, tint: .orange)
                 // Telling someone to go type a command is a worse answer than

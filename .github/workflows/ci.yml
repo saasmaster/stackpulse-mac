@@ -52,7 +52,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Clippy (whole workspace incl. FFI, deny warnings)
+        # The FFI crate (raw pointers, catch_unwind, C strings) is the trickiest
+        # code in the repo and is macOS-only, so the Linux job can't lint it.
+        # Lint the full workspace here so soundness lints in the bridge gate too.
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Build workspace + release core
         run: cargo build --workspace && ./scripts/build-core.sh release
       - name: Test workspace
@@ -60,6 +67,12 @@ jobs:
       - name: Build Swift app
         working-directory: apps/StackPulseMac
         run: swift build -c release
+      - name: Test Swift app
+        # The Swift half has a real XCTest/swift-testing suite; without this step
+        # a Swift-layer regression (decoders, forecast latch, aggregates) merges
+        # green. Debug build so tests actually run (release excludes test targets).
+        working-directory: apps/StackPulseMac
+        run: swift test
       - name: Headless snapshot smoke (Swift -> FFI -> core)
         working-directory: apps/StackPulseMac
         run: |

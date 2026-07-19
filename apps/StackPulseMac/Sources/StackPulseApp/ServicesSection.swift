@@ -86,15 +86,23 @@ struct ServicesSection: View {
 
     // MARK: Empty state
 
+    /// The detection failed (not merely "found nothing"). Distinguishing the two
+    /// keeps this from rendering a scan error as a confident "nothing running".
+    private var scanFailed: Bool { store.servicesScanFailed && !store.isScanningServices }
+
     private var emptyState: some View {
         VStack(spacing: 10) {
             if store.isScanningServices { ProgressView() }
-            Image(systemName: "server.rack")
+            Image(systemName: scanFailed ? "exclamationmark.triangle" : "server.rack")
                 .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text(store.isScanningServices ? "Looking for running services…" : "No running dev servers found")
+                .foregroundStyle(scanFailed ? .orange : .secondary)
+            Text(store.isScanningServices
+                ? "Looking for running services…"
+                : (scanFailed ? "Couldn't detect services" : "No running dev servers found"))
                 .font(.headline)
-            Text("StackPulse lists processes listening on local ports and matches them to your projects.")
+            Text(scanFailed
+                ? "The detection couldn't run just now, so this isn't a confirmed “nothing running”. Try refreshing."
+                : "StackPulse lists processes listening on local ports and matches them to your projects.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

@@ -45,11 +45,19 @@ enum AnthropicUsageClient {
         var error: String?
         /// Set when there is a concrete, safe action that would fix this.
         var recovery: Recovery?
+        /// A provenance warning about limits we DID get: they're real numbers, but
+        /// not from the login the user thinks they're watching. A successful fetch
+        /// against the wrong account is more dangerous than a failed one — it looks
+        /// authoritative — so this rides alongside the values instead of replacing
+        /// them, and every surface that shows the values must show this too.
+        var caveat: String?
 
-        init(limits: [LimitWindow], error: String? = nil, recovery: Recovery? = nil) {
+        init(limits: [LimitWindow], error: String? = nil, recovery: Recovery? = nil,
+             caveat: String? = nil) {
             self.limits = limits
             self.error = error
             self.recovery = recovery
+            self.caveat = caveat
         }
 
         static let empty = Outcome(limits: [])
@@ -95,51 +103,30 @@ enum AnthropicUsageClient {
     ///   `"2.1.181"`), used to build the `User-Agent`. Falls back to
     ///   `defaultClaudeVersion` when `nil`.
     static func fetchClaudeLimits(claudeVersion: String?) async -> Outcome {
-        switch KeychainProbe.readClaudeCredentialsResult() {
-        case .notFound:
-            // This is only reached when the user has explicitly enabled live
-            // limits, so "no login found" is a reason they need — not something to
-            // pass over in silence. Returning `.empty` (error `nil`) meant the card
-            // simply showed nothing, or worse, kept showing a cached number with no
-            // hint that it could no longer be refreshed.
-            return Outcome(
-                limits: [],
-                error: "No Claude Code login found — run `claude` in Terminal once to sign in."
-            )
-        case .accessDenied:
-            return Outcome(
-                limits: [],
-                error: "Allow Keychain access to show Claude's live limits — click “Always Allow” on the macOS prompt."
-            )
-        case .parseFailed:
-            return Outcome(limits: [], error: "Couldn't read the Claude login for live limits.")
-        case .expired:
-            // Every source we can read is aged out — including Claude Desktop's own
-            // cache, which normally renews itself. Opening Claude and using it once
-            // is what refreshes that; running `claude` in a terminal refreshes the
-            // CLI item. Both are things the user does anyway.
-            return Outcome(
-                limits: [],
-                error: "Claude's login has expired everywhere StackPulse can see it — use Claude (the app or `claude` in Terminal) once and it renews itself.",
-                recovery: .renewLoginInTerminal
-            )
-        case .ok(let creds):
-            if creds.isExpired {
-                // The saved access token has aged out. We deliberately do NOT
-                // refresh it — using the refresh token could rotate it and sign
-                // the user out of Claude Code itself. Claude Code rewrites this
-                // token when it next refreshes, and StackPulse picks it up then.
-                // Desktop (app) sessions authenticate via Claude's own encrypted
-                // storage and never renew this CLI token — only a terminal
-                // session does. Say exactly how to revive it.
-                return Outcome(
-                    limits: [],
-                    error: "Claude's saved login has expired — run `claude` in Terminal once to renew it. (Desktop sessions don't refresh it; StackPulse never changes your login.)",
-                    recovery: .renewLoginInTerminal
-                )
-            }
-            return await fetchUsage(token: creds.accessToken, claudeVersion: claudeVersion)
+        // Credential resolution lives in `ClaudeAuthStore`: keychain before file,
+        // an expiring token RENEWED in place (written back under a never-clobber
+        // guard) rather than abandoned, and — crucially — no silent fall-through
+        // to Claude Desktop when the Claude Code login is merely expired. That
+        // fall-through is what made a hammered CLI report Desktop's untouched
+        // quota as its own.
+        let result = await ClaudeAuthStore.currentToken()
+
+        guard let token = result.accessToken else {
+            let reason = result.reason
+                ?? "Couldn't read the Claude login for live limits."
+            // Every no-token reason here is something a terminal sign-in fixes.
+            return Outcome(limits: [], error: reason, recovery: .renewLoginInTerminal)
         }
+
+        var outcome = await fetchUsage(token: token, claudeVersion: claudeVersion)
+        // Borrowing Desktop's access token is legitimate for a Desktop-only
+        // machine, but the numbers then describe THAT login — so they never ship
+        // unlabelled, even though the fetch succeeded.
+        if result.source == "desktop", !outcome.limits.isEmpty {
+            outcome.recovery = .renewLoginInTerminal
+            outcome.caveat = "These are your Claude Desktop limits — no Claude Code login was found, so Code's own usage isn't being read."
+        }
+        return outcome
     }
 
     // MARK: Networking
@@ -186,6 +173,8 @@ enum AnthropicUsageClient {
             if parsed.limits.isEmpty {
                 return Outcome(limits: [], error: "Live limits: no limit data in response.")
             }
+            // The wrong-login caveat is applied by the caller, which is the layer
+            // that knows WHICH credential answered.
             return Outcome(limits: parsed.limits, error: nil)
         } catch {
             // Offline / TLS / timeout. Report the category, never the details.

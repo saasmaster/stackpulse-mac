@@ -851,12 +851,23 @@ struct StackHealthSection: View {
 
     // MARK: Empty / loading states
 
+    /// The scan failed rather than finding nothing — don't present it as "no data".
+    private var scanFailed: Bool { store.stackScanFailed && !store.isScanningStack }
+
     private var loadingOrEmpty: some View {
         VStack(spacing: 8) {
             if store.isScanningStack { ProgressView() }
-            Text(store.isScanningStack ? "Analyzing your stack…" : "No dependency data yet")
+            if scanFailed {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.largeTitle).foregroundStyle(.orange)
+            }
+            Text(store.isScanningStack
+                ? "Analyzing your stack…"
+                : (scanFailed ? "Couldn't analyze your stack" : "No dependency data yet"))
                 .font(.headline)
-            Text("StackPulse reads each project's manifests and lockfiles.")
+            Text(scanFailed
+                ? "The scan couldn't run just now — this isn't a confirmed clean bill of health. Try refreshing."
+                : "StackPulse reads each project's manifests and lockfiles.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

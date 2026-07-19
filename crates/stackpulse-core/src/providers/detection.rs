@@ -1,13 +1,13 @@
 //! Detection-only adapters (data-driven).
 //!
-//! Claude and Codex have full local cost scanners. The other nine supported
-//! providers ship in this version as **detection-only**: they honestly report
+//! Claude, Codex, Antigravity, and OpenCode have real local scanners. The other
+//! seven supported providers ship as **detection-only**: they honestly report
 //! whether the tool looks installed and/or authenticated on this machine and
 //! advertise a capability matrix in which everything usage/cost/limit/control
 //! related is `Unsupported` or `Unavailable`. They never scan usage, never
 //! invent numbers, and never read a secret's contents (auth is presence-only).
 //!
-//! One [`DetectableProvider`] struct plus one `impl Provider` drives all eight;
+//! One [`DetectableProvider`] struct plus one `impl Provider` drives all seven;
 //! each provider is a small constructor filling in its detection [`Markers`] and
 //! two honesty toggles (`detects_install`, `detects_auth`).
 //!
@@ -62,6 +62,10 @@ pub struct DetectableProvider {
     /// True when we have an honest, non-secret credential-presence marker, so
     /// [`Cap::AuthDetection`] is honestly `Supported`.
     detects_auth: bool,
+    /// An optional provider-specific honest explanation of *why* no usage/spend is
+    /// shown — the concrete fact (no per-user API, tokens not written to disk, …),
+    /// appended to the detection note. `None` falls back to the generic note.
+    detail: Option<&'static str>,
 }
 
 /// Result of a detection pass.
@@ -121,30 +125,29 @@ impl DetectableProvider {
 
     fn notes(&self, d: &Detected) -> Vec<String> {
         let name = self.id.display_name();
-        let note = if d.installed {
+        // 1) The detection fact — what we actually observed on this machine.
+        let detection = if d.installed {
             let auth = if d.authenticated {
                 ", authenticated"
             } else {
                 ""
             };
-            format!(
-                "Detected {name} (installed{auth}). Usage and cost scanning for \
-                 {name} is not implemented yet — detection only in this version."
-            )
+            format!("Detected {name} (installed{auth}).")
         } else if self.detects_install {
             format!(
-                "{name} not detected on this machine. Detection is best-effort \
-                 (config dir, CLI on PATH, or app bundle) and detection-only in \
-                 this version."
+                "{name} not detected on this machine (best-effort: config dir, \
+                 CLI on PATH, or app bundle)."
             )
         } else {
-            format!(
-                "{name} is an API-key integration with no local footprint to \
-                 detect — add a key in Settings (planned). Detection only in \
-                 this version."
-            )
+            format!("{name} has no local footprint to detect on this machine.")
         };
-        vec![note]
+        // 2) The usage-availability statement: the provider-specific honest fact
+        //    when we have one, else a neutral fallback. This is authoritative —
+        //    it never claims a capability is merely "planned" when it isn't.
+        let usage = self.detail.map(str::to_string).unwrap_or_else(|| {
+            format!("Usage and cost for {name} isn't surfaced in this version — detection only.")
+        });
+        vec![detection, usage]
     }
 }
 
@@ -314,6 +317,12 @@ fn copilot() -> DetectableProvider {
         },
         detects_install: true,
         detects_auth: true,
+        detail: Some(
+            "Premium-request quota is read with the token Copilot (or the gh CLI) \
+             already stored on this Mac — nothing to paste. An org- or \
+             enterprise-managed seat has no per-user quota to read, which is \
+             reported as such rather than as an empty meter.",
+        ),
     }
 }
 
@@ -332,6 +341,13 @@ fn cursor() -> DetectableProvider {
         },
         detects_install: true,
         detects_auth: false,
+        detail: Some(
+            "Cursor publishes no usage API, so StackPulse reads the same endpoints \
+             Cursor's own dashboard uses, signed in with your local Cursor session. \
+             Every figure is Cursor's own — but those endpoints are undocumented and \
+             can stop working without notice, in which case the meters simply go \
+             absent rather than showing a guess.",
+        ),
     }
 }
 
@@ -348,6 +364,12 @@ fn devin() -> DetectableProvider {
         },
         detects_install: false,
         detects_auth: false,
+        detail: Some(
+            "Daily and weekly quota come from the seat-status endpoint the Devin/\
+             Windsurf client calls, using the key already stored on this Mac. It is \
+             undocumented and can change without notice. Per-session ACU spend stays \
+             enterprise-admin only and is not shown.",
+        ),
     }
 }
 
@@ -368,6 +390,10 @@ fn gemini() -> DetectableProvider {
         },
         detects_install: true,
         detects_auth: true,
+        detail: Some(
+            "Gemini CLI writes only your prompts to disk — token counts stay in memory \
+             unless you enable file telemetry, so there's no on-disk usage to read.",
+        ),
     }
 }
 
@@ -384,24 +410,12 @@ fn grok() -> DetectableProvider {
         },
         detects_install: true,
         detects_auth: false,
-    }
-}
-
-/// OpenCode (sst/opencode terminal agent). `~/.config/opencode` and the
-/// `opencode` CLI are confident install markers; `~/.local/share/opencode/
-/// auth.json` is where it stores provider auth — presence-only, medium
-/// confidence.
-fn opencode() -> DetectableProvider {
-    DetectableProvider {
-        id: ProviderId::OpenCode,
-        markers: Markers {
-            config_dirs: &[".config/opencode", ".opencode"], // confident / fallback
-            cli_names: &["opencode"],                        // confident
-            app_bundles: &[],
-            credential_files: &[".local/share/opencode/auth.json"], // medium confidence
-        },
-        detects_install: true,
-        detects_auth: true,
+        detail: Some(
+            "Weekly usage is read from the same billing endpoint the Grok CLI itself \
+             calls, using the login already in ~/.grok. That endpoint is \
+             undocumented and can change without notice; a normal xAI *API* key \
+             still has no spend endpoint of its own.",
+        ),
     }
 }
 
@@ -418,6 +432,10 @@ fn openrouter() -> DetectableProvider {
         },
         detects_install: false,
         detects_auth: false,
+        detail: Some(
+            "Add your OpenRouter key in Settings to show remaining credit and \
+             daily/weekly/monthly spend.",
+        ),
     }
 }
 
@@ -434,14 +452,20 @@ fn zai() -> DetectableProvider {
         },
         detects_install: false,
         detects_auth: false,
+        detail: Some(
+            "Coding Plan quota is read with your saved Z.ai key from the endpoints \
+             Z.ai's own usage page calls — undocumented, so they can change without \
+             notice. Pay-as-you-go Zhipu balance still has no public endpoint and is \
+             not shown.",
+        ),
     }
 }
 
-/// The eight detection-only providers, returned in the [`ProviderId`] enum's
-/// declared order (Copilot, Cursor, Devin, Gemini, Grok, OpenCode, OpenRouter,
-/// Zai). The engine registers these after the full scanners (Claude, Codex,
-/// Antigravity). Antigravity is no longer here — it has its own activity scanner
-/// (see `providers::antigravity`).
+/// The seven detection-only providers, returned in the [`ProviderId`] enum's
+/// declared order (Copilot, Cursor, Devin, Gemini, Grok, OpenRouter, Zai). The
+/// engine registers these after the full scanners (Claude, Codex, Antigravity,
+/// OpenCode). Antigravity and OpenCode are no longer here — each has its own real
+/// scanner (see `providers::antigravity` / `providers::opencode`).
 pub fn detection_providers() -> Vec<DetectableProvider> {
     vec![
         copilot(),
@@ -449,7 +473,6 @@ pub fn detection_providers() -> Vec<DetectableProvider> {
         devin(),
         gemini(),
         grok(),
-        opencode(),
         openrouter(),
         zai(),
     ]
@@ -493,7 +516,7 @@ mod tests {
     fn app_based_providers_advertise_install_detection() {
         // These implement a local probe, so InstalledAppDetection is Supported
         // (whether or not the tool is actually present on this machine).
-        for p in [copilot(), cursor(), gemini(), grok(), opencode()] {
+        for p in [copilot(), cursor(), gemini(), grok()] {
             let caps = p.capabilities();
             let install = caps
                 .iter()
@@ -515,7 +538,7 @@ mod tests {
     }
 
     #[test]
-    fn returns_all_eight_in_declared_order() {
+    fn returns_all_seven_in_declared_order() {
         let ids: Vec<ProviderId> = detection_providers().iter().map(|p| p.id()).collect();
         assert_eq!(
             ids,
@@ -525,7 +548,6 @@ mod tests {
                 ProviderId::Devin,
                 ProviderId::Gemini,
                 ProviderId::Grok,
-                ProviderId::OpenCode,
                 ProviderId::OpenRouter,
                 ProviderId::Zai,
             ]

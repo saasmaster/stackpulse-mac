@@ -29,12 +29,31 @@ enum StackPulseMain {
             let notify = NotificationManager._selftest()
             let stack = StackHealthClient._selftest()
             let stale = SnapshotStore._selftestStaleness()
+            let cursor = CursorUsageClient._selftest()
+            let codexLive = CodexLiveUsageClient._selftest()
+            let copilot = CopilotUsageClient._selftest()
+            let antigravity = AntigravityQuotaClient._selftest()
+            let zai = ZaiUsageClient._selftest()
+            let grok = GrokUsageClient._selftest()
+            let devin = DevinUsageClient._selftest()
+            let marks = ProviderIconShape._selftest()
+            let claudeAuth = ClaudeAuthStore._selftest()
             print("anthropic-usage parser: \(live ? "PASS" : "FAIL")")
             print("provider-balance parser: \(balances ? "PASS" : "FAIL")")
+            print("cursor-usage parser: \(cursor ? "PASS" : "FAIL")")
+            print("codex-live-usage parser: \(codexLive ? "PASS" : "FAIL")")
+            print("copilot-usage parser: \(copilot ? "PASS" : "FAIL")")
+            print("antigravity-quota parser: \(antigravity ? "PASS" : "FAIL")")
+            print("zai-usage parser: \(zai ? "PASS" : "FAIL")")
+            print("grok-usage parser: \(grok ? "PASS" : "FAIL")")
+            print("devin-usage parser: \(devin ? "PASS" : "FAIL")")
+            print("provider brand marks: \(marks ? "PASS" : "FAIL")")
+            print("claude auth store: \(claudeAuth ? "PASS" : "FAIL")")
             print("notification-gate logic: \(notify ? "PASS" : "FAIL")")
             print("stack-health semver logic: \(stack ? "PASS" : "FAIL")")
             print("live-limits staleness policy: \(stale ? "PASS" : "FAIL")")
-            exit(live && balances && notify && stack && stale ? 0 : 1)
+            exit(live && balances && cursor && codexLive && copilot && antigravity
+                 && zai && grok && devin && marks && claudeAuth && notify && stack && stale ? 0 : 1)
         }
         // Hidden diagnostic: exercise the live-limits path (Keychain read + fetch)
         // and print the outcome — the credential *state* and the limit
@@ -48,19 +67,25 @@ enum StackPulseMain {
             // deadlocked on every invocation — printing nothing, forever — which is
             // precisely why a 70-hour live-limits failure went undiagnosed.
             Task.detached {
-                switch KeychainProbe.readClaudeCredentialsResult() {
-                case .notFound: print("creds: notFound")
-                case .accessDenied: print("creds: accessDenied (Keychain read blocked)")
-                case .parseFailed: print("creds: parseFailed")
-                case .expired: print("creds: expired (CLI and Claude Desktop both aged out)")
-                case .ok: print("creds: ok (token read)")
-                }
-                // Which source answered — the whole point of reading Desktop too.
+                // Deliberately does NOT probe the Keychain separately first: the
+                // fetch below performs exactly one credential read, and a second
+                // one here would risk the double "allow access" prompt this file's
+                // design is built to avoid.
                 print("desktop: \(ClaudeDesktopAuthStore.describeForDiagnostics())")
                 let outcome = await AnthropicUsageClient.fetchClaudeLimits(claudeVersion: nil)
+                // WHICH login these percentages belong to, and whether the token
+                // had to be renewed to get them. "creds: ok" alone can't say.
+                print("auth: \(ClaudeAuthStore.describeForDiagnostics())")
+                if let caveat = outcome.caveat { print("caveat: \(caveat)") }
                 print("limits: \(outcome.limits.count)  error: \(outcome.error ?? "none")")
                 for l in outcome.limits {
-                    print(String(format: "  %@: %.0f%%", l.label, l.used_percent))
+                    // Reset time matters as much as the percentage: a suspiciously
+                    // low utilization is either a real fresh window or a wrong
+                    // reading, and only the reset instant tells them apart.
+                    let resets = l.resets_at_unix.map {
+                        ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: TimeInterval($0)))
+                    } ?? "nil"
+                    print(String(format: "  %@: used %.2f%% · resets %@", l.label, l.used_percent, resets))
                 }
                 sem.signal()
             }
@@ -292,10 +317,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateButtonTitle()
     }
 
-    /// The menu-bar title: an optional green "▶N" active-sessions indicator, the
-    /// existing limit%/tokens text, then a colored "⚠︎N" badge when there are
-    /// unacknowledged alerts (tinted by the highest active severity — critical
-    /// red, warning orange, info blue).
+    /// The menu-bar item: the per-provider strip (brand mark + stacked readings)
+    /// as a template image, plus a title carrying a green "▶N" active-sessions
+    /// indicator and a coloured "⚠︎N" badge (tinted by the highest active severity
+    /// — critical red, warning orange, info blue). Those two stay text precisely
+    /// because their colour carries meaning a template image would flatten.
     private func updateButtonTitle() {
         guard let button = statusItem.button else { return }
         if store.snapshot == nil && store.isLoading {
@@ -317,10 +343,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ))
         }
 
-        title.append(NSAttributedString(
-            string: " " + store.menuBarText,
-            attributes: [.foregroundColor: NSColor.labelColor]
-        ))
+        // The per-provider readout (brand mark + stacked percentages) is drawn as a
+        // template IMAGE, not text: two percentages have to stack on two tight
+        // lines to fit, which an attributed string can't do. The title keeps only
+        // the coloured badges, whose meaning is carried by their colour.
+        let strip = MenuBarStripRenderer.image(for: store.menuBarItems)
+        button.image = strip ?? Self.menuBarImage()
+        button.image?.isTemplate = true
 
         let active = store.activeAlerts
         if !active.isEmpty, let severity = store.highestActiveSeverity {

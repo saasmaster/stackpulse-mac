@@ -115,7 +115,10 @@ enum KeychainProbe {
         // all-expired verdict below is `.expired` ("waiting for renewal"), not
         // `.notFound` ("sign in") — the same distinction the CLI branch makes.
         if let creds = readCredentialsFile() {
-            if !creds.isExpired { return .ok(creds) }
+            if !creds.isExpired {
+                recordSource("file (~/.claude/.credentials.json)")
+                return .ok(creds)
+            }
             expired = true
         }
 
@@ -135,7 +138,12 @@ enum KeychainProbe {
                 // Desktop-only machine sits in permanently, because only a
                 // terminal session rewrites this item. Remember it and try
                 // Desktop rather than reporting "expired" as the verdict.
-                if creds.isExpired { expired = true } else { return .ok(creds) }
+                if creds.isExpired {
+                    expired = true
+                } else {
+                    recordSource("Claude Code Keychain (\(service))")
+                    return .ok(creds)
+                }
             case .timedOut:
                 pendingGrant = true // the "allow access" prompt is still unanswered
             case .missing:
@@ -149,7 +157,14 @@ enum KeychainProbe {
         // the wrong source. Consulted only after the CLI has failed to produce a
         // valid token, so a working terminal setup keeps its existing behavior.
         switch ClaudeDesktopAuthStore.load() {
-        case .ok(let creds): return .ok(creds)
+        case .ok(let creds):
+            // Worth naming loudly: these percentages now describe DESKTOP's login,
+            // which may be a different plan than the CLI the user is watching.
+            recordSource(expired
+                ? "Claude DESKTOP (the Claude Code token is EXPIRED — limits describe Desktop's login)"
+                : "Claude DESKTOP (no usable Claude Code token)",
+                substitutedDesktop: true)
+            return .ok(creds)
         case .accessDenied: return .accessDenied
         case .stale: expired = true          // Desktop will renew it on next use
         case .invalid: parseFail = true
@@ -160,6 +175,41 @@ enum KeychainProbe {
         if expired { return .expired }
         if parseFail { return .parseFailed }
         return .notFound
+    }
+
+    /// Which source answered the LAST credential read.
+    ///
+    /// Recorded during that single read rather than recomputed on demand: probing
+    /// again would mean a second `security` call, and this file's whole design is
+    /// "never fall through to a second read, so the user is never double-prompted".
+    /// It matters because "creds: ok" plus "a Desktop token exists" cannot say
+    /// WHICH login the reported percentages describe — a CLI token that quietly
+    /// expired routes the read to Desktop, potentially a different plan. A usage
+    /// number attributed to the wrong account is exactly the confident-but-wrong
+    /// reading this app refuses to show.
+    private static let sourceLock = NSLock()
+    nonisolated(unsafe) private static var _lastCredentialSource = "not read yet"
+    nonisolated(unsafe) private static var _lastReadSubstitutedDesktop = false
+
+    static var lastCredentialSource: String {
+        sourceLock.lock(); defer { sourceLock.unlock() }
+        return _lastCredentialSource
+    }
+
+    /// True when the last read answered with **Claude Desktop's** login because the
+    /// Claude Code one was expired/absent. The numbers are then real, but they
+    /// describe a different login than the CLI the user is watching — so every
+    /// surface showing them has to say so.
+    static var lastReadSubstitutedDesktop: Bool {
+        sourceLock.lock(); defer { sourceLock.unlock() }
+        return _lastReadSubstitutedDesktop
+    }
+
+    private static func recordSource(_ source: String, substitutedDesktop: Bool = false) {
+        sourceLock.lock()
+        _lastCredentialSource = source
+        _lastReadSubstitutedDesktop = substitutedDesktop
+        sourceLock.unlock()
     }
 
     private enum SecurityRead {

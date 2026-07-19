@@ -351,7 +351,10 @@ fn scan_codex(now_unix: i64, out: &mut Vec<Attributed>) {
     let mtime_cutoff = now_unix - SCAN_WINDOW_DAYS * 86_400;
     // Keyed as in the Codex adapter, and shared across `sessions/` and
     // `archived_sessions/` because a session archived mid-window appears in both.
-    let mut seen: HashSet<(String, u64, u64)> = HashSet::new();
+    // The key includes `reasoning` so two genuinely distinct turns that share a
+    // wall-clock second and the same input/output deltas aren't collapsed into one
+    // (an under-count — the one direction this app must never fail silently).
+    let mut seen: HashSet<(String, u64, u64, u64)> = HashSet::new();
     for root in paths::codex_roots() {
         for sub in ["sessions", "archived_sessions"] {
             let dir = root.join(sub);
@@ -374,7 +377,11 @@ fn scan_codex(now_unix: i64, out: &mut Vec<Attributed>) {
 /// `session_meta`/`turn_context` carry the `cwd` and the active `model`, and
 /// `event_msg` of type `token_count` carries the per-turn delta. Staged and
 /// flushed for the same reasons as the Claude scanner.
-fn scan_codex_file(file: &Path, out: &mut Vec<Attributed>, seen: &mut HashSet<(String, u64, u64)>) {
+fn scan_codex_file(
+    file: &Path,
+    out: &mut Vec<Attributed>,
+    seen: &mut HashSet<(String, u64, u64, u64)>,
+) {
     let f = match std::fs::File::open(file) {
         Ok(f) => f,
         Err(_) => return,
@@ -383,7 +390,7 @@ fn scan_codex_file(file: &Path, out: &mut Vec<Attributed>, seen: &mut HashSet<(S
     let mut cwd: Option<String> = None;
     // The active model comes from the most recent `turn_context` in this file.
     let mut current_model = String::new();
-    let mut pending: Vec<Pending<(String, u64, u64)>> = Vec::new();
+    let mut pending: Vec<Pending<(String, u64, u64, u64)>> = Vec::new();
 
     for line in reader.lines().map_while(Result::ok) {
         if line.is_empty() {
@@ -431,7 +438,12 @@ fn scan_codex_file(file: &Path, out: &mut Vec<Attributed>, seen: &mut HashSet<(S
                     continue;
                 };
                 pending.push(Pending {
-                    key: (ts.get(0..19).unwrap_or(ts).to_string(), input, output),
+                    key: (
+                        ts.get(0..19).unwrap_or(ts).to_string(),
+                        input,
+                        output,
+                        reasoning,
+                    ),
                     record: UsageRecord {
                         model: if current_model.is_empty() {
                             "unknown".to_string()
@@ -443,7 +455,14 @@ fn scan_codex_file(file: &Path, out: &mut Vec<Attributed>, seen: &mut HashSet<(S
                             // Codex's `input_tokens` includes the cached portion;
                             // normalize to the exclusive-input convention.
                             input_tokens: input.saturating_sub(cached),
-                            output_tokens: output,
+                            // OpenAI's `output_tokens` ALREADY includes
+                            // `reasoning_output_tokens` as a subset. The costing
+                            // convention treats output and reasoning as disjoint
+                            // classes both billed at the output rate, so storing the
+                            // raw (inclusive) output alongside reasoning bills — and
+                            // token-counts — reasoning TWICE. Store the exclusive
+                            // (visible) output, mirroring `providers/codex.rs`.
+                            output_tokens: output.saturating_sub(reasoning),
                             cache_creation_tokens: 0,
                             cache_read_tokens: cached,
                             reasoning_tokens: reasoning,

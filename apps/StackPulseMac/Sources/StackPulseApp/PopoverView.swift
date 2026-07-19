@@ -303,7 +303,6 @@ struct ProviderCard: View {
                 }
                 if !provider.limits.isEmpty { limitsSection }
                 liveLimitsNote
-                if let cache = cacheFraction { cacheRow(cache) }
                 if provider.hasLocalSpend, let top = provider.models.first { topModelRow(top) }
             } else if provider.balance == nil {
                 Text("Not detected on this Mac.")
@@ -402,14 +401,16 @@ struct ProviderCard: View {
                         Text(limitLabel(limit.label))
                             .font(.caption2).foregroundStyle(.secondary)
                         Spacer()
-                        Text(Format.percent(limit.used_percent))
+                        Text(Format.limitLeft(limit.used_percent))
                             .font(.caption2.weight(.medium).monospacedDigit())
                         if let countdown = Format.resetCountdown(limit.resets_at_unix) {
                             Text("· \(countdown)")
                                 .font(.system(size: 9)).foregroundStyle(.tertiary)
                         }
                     }
-                    MeterBar(fraction: limit.used_percent / 100,
+                    // Bar shows what's LEFT (empties as you spend); tint still keys
+                    // off used, so it reddens as the window runs out.
+                    MeterBar(fraction: Format.limitLeftFraction(limit.used_percent),
                              tint: SPStatus.limitColor(limit.used_percent),
                              glowsWhenHigh: true)
                     // "at this pace, ~X to the limit" — only for a Claude live
@@ -436,21 +437,10 @@ struct ProviderCard: View {
                 LiveLimitsStatusNote(capturedAt: store.liveLimitsCapturedAt,
                                      isStale: store.liveLimitsAreStale,
                                      error: store.liveLimitsError,
+                                     caveat: store.liveLimitsCaveat,
                                      onRenewLogin: store.liveLimitsRecovery == .renewLoginInTerminal
                                         ? { store.renewClaudeLogin() } : nil)
             }
-        }
-    }
-
-    private func cacheRow(_ fraction: Double) -> some View {
-        VStack(spacing: 2) {
-            HStack {
-                Text("Cache hit rate").font(.caption2).foregroundStyle(.secondary)
-                Spacer()
-                Text(Format.percent(fraction * 100))
-                    .font(.caption2.weight(.medium).monospacedDigit())
-            }
-            MeterBar(fraction: fraction, tint: .cyan)
         }
     }
 
@@ -486,16 +476,8 @@ struct ProviderCard: View {
         }
     }
 
-    private var cacheFraction: Double? {
-        provider.last30?.tokens.cacheHitRate
-    }
-
     private func limitLabel(_ raw: String) -> String {
-        switch raw {
-        case "5h": return "Session (5h)"
-        case "weekly": return "Weekly"
-        default: return raw.capitalized
-        }
+        Format.limitLabel(raw)
     }
 }
 

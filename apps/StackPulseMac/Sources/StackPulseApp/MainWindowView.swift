@@ -434,7 +434,28 @@ struct AlertsInboxPopover: View {
                     .font(.caption.weight(.semibold).monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            if store.activeAlerts.isEmpty {
+            if store.snapshot == nil {
+                // No snapshot means we haven't read the data — NOT that everything
+                // is fine. Rendering a green "all clear" here (alerts derive from
+                // the snapshot, so they're empty during a read error) would be the
+                // exact false all-clear this app exists to refuse. Show the true
+                // state: still loading, or a failure we couldn't read past.
+                VStack(spacing: 8) {
+                    if store.isLoading {
+                        ProgressView()
+                        Text("Checking…").font(.subheadline.weight(.semibold))
+                    } else {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.largeTitle).foregroundStyle(.orange)
+                        Text("Can't tell right now").font(.subheadline.weight(.semibold))
+                        Text(store.lastError ?? "Couldn't read your data — try refreshing.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 28)
+            } else if store.activeAlerts.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "checkmark.seal.fill")
                         .font(.largeTitle).foregroundStyle(.green)

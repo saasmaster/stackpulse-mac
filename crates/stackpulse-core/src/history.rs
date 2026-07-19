@@ -29,14 +29,19 @@ use crate::datetime::{days_from_civil, parse_iso_date, utc_date};
 const STORE_FILE: &str = "history.json";
 /// The temp file used for the atomic write.
 const STORE_TMP: &str = "history.json.tmp";
+/// Where an unparseable store is moved aside so its bytes stay recoverable
+/// instead of being silently overwritten by the next write.
+const STORE_CORRUPT: &str = "history.json.corrupt";
 
 /// One persisted day/provider cell. The date and provider live in the map *key*
 /// (`"YYYY-MM-DD|<provider_snake>"`), so they are not repeated here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredRecord {
+    #[serde(default)]
     tokens: TokenTotals,
     #[serde(default)]
     estimated_cost_usd: Option<f64>,
+    #[serde(default)]
     records: u64,
 }
 
@@ -172,12 +177,32 @@ fn store_path(data_dir: &str) -> PathBuf {
     Path::new(data_dir).join(STORE_FILE)
 }
 
-/// Load the store tolerantly: a missing or corrupt file yields an empty map so
-/// the write path is never lost and reads never panic.
+fn quarantine_path(data_dir: &str) -> PathBuf {
+    Path::new(data_dir).join(STORE_CORRUPT)
+}
+
+/// Load the store tolerantly, without ever silently destroying data:
+/// - a missing/unreadable file is genuinely empty → empty map;
+/// - a present but unparseable file is *corruption*, not emptiness. Returning
+///   empty and letting the next `save()` overwrite it would permanently destroy
+///   the accumulated history this store exists to retain past the ~30-day log
+///   window. So the corrupt bytes are first moved aside to a `.corrupt` sidecar
+///   (recoverable), then we degrade to empty. Reads still never panic.
 fn load(data_dir: &str) -> BTreeMap<String, StoredRecord> {
-    match std::fs::read_to_string(store_path(data_dir)) {
-        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
-        Err(_) => BTreeMap::new(),
+    let path = store_path(data_dir);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return BTreeMap::new(),
+    };
+    match serde_json::from_str(&contents) {
+        Ok(map) => map,
+        Err(_) => {
+            // Only quarantine real bytes; an empty/whitespace file is just empty.
+            if !contents.trim().is_empty() {
+                let _ = std::fs::rename(&path, quarantine_path(data_dir));
+            }
+            BTreeMap::new()
+        }
     }
 }
 
@@ -227,6 +252,49 @@ mod tests {
         }
         // An unrecognized snake name decodes to Unknown, never an error.
         assert_eq!(provider_from_snake("totally-made-up"), ProviderId::Unknown);
+    }
+
+    /// Regression: a corrupt (non-empty, unparseable) store must be preserved,
+    /// never silently emptied-then-overwritten. This is the one dataset the app
+    /// promises to retain past the raw log-rotation window.
+    #[test]
+    fn corrupt_store_is_quarantined_not_destroyed() {
+        let dir = std::env::temp_dir().join("stackpulse_history_corrupt_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let data_dir = dir.to_str().unwrap();
+        let corrupt = b"{ this is not valid json history at all";
+        std::fs::write(store_path(data_dir), corrupt).unwrap();
+
+        // Loading must degrade to empty (never panic)...
+        let map = load(data_dir);
+        assert!(map.is_empty());
+        // ...must NOT leave the original in place for the next save() to clobber...
+        assert!(
+            !store_path(data_dir).exists(),
+            "the corrupt store must be moved aside, not left to be overwritten"
+        );
+        // ...and must keep the original bytes recoverable in the sidecar.
+        let saved =
+            std::fs::read(quarantine_path(data_dir)).expect("quarantine sidecar must exist");
+        assert_eq!(saved, corrupt);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_store_is_not_quarantined() {
+        let dir = std::env::temp_dir().join("stackpulse_history_empty_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let data_dir = dir.to_str().unwrap();
+        std::fs::write(store_path(data_dir), b"   \n").unwrap();
+
+        assert!(load(data_dir).is_empty());
+        // A whitespace-only file is genuine emptiness, not corruption — no sidecar.
+        assert!(!quarantine_path(data_dir).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

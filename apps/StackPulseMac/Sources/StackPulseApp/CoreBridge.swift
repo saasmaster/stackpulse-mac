@@ -47,9 +47,13 @@ enum CoreBridge {
     }
 
     /// Discover projects and their runnable commands under `roots`. Heavy (walks
-    /// the filesystem), so call off the main actor. Returns `[]` on any error, an
-    /// error response, empty roots, or an undecodable payload — never throws.
-    static func projects(roots: [String], maxDepth: Int = 4) -> [Project] {
+    /// the filesystem), so call off the main actor.
+    ///
+    /// Returns `[]` for a genuine "nothing to scan" (no roots) or a successful
+    /// scan that found nothing, and **`nil` when the scan itself failed** (a bridge
+    /// error or an error/undecodable response). Callers must keep the two apart —
+    /// rendering a failure as an empty success is a false all-clear.
+    static func projects(roots: [String], maxDepth: Int = 4) -> [Project]? {
         guard !roots.isEmpty else { return [] }
 
         struct Request: Encodable {
@@ -58,16 +62,17 @@ enum CoreBridge {
             let max_depth: Int
         }
         // Response is tagged `{"kind":"projects","projects":[…]}`; an error
-        // response omits `projects`, so decoding simply yields `[]`.
+        // response omits `projects`, so decoding fails → `nil` (a real failure),
+        // distinct from a decoded-but-empty `[]`.
         struct Response: Decodable { let projects: [Project] }
 
         guard let reqData = try? JSONEncoder().encode(Request(roots: roots, max_depth: maxDepth)),
               let reqJSON = String(data: reqData, encoding: .utf8)
-        else { return [] }
+        else { return nil }
 
         let json = handle(reqJSON)
-        guard let data = json.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode(Response.self, from: data))?.projects ?? []
+        guard let data = json.data(using: .utf8) else { return nil }
+        return (try? JSONDecoder().decode(Response.self, from: data))?.projects
     }
 
     // MARK: Usage history (protocol ≥ 1.6.0)
@@ -116,7 +121,9 @@ enum CoreBridge {
     /// `checkUpdates` gates the core's network access (registry latest + OSV);
     /// scans manifests/lockfiles + optional network, so call off the main actor.
     /// Returns `[]` on any error, empty roots, or an undecodable payload.
-    static func stackHealth(roots: [String], checkUpdates: Bool, maxDepth: Int = 4) -> [ProjectStack] {
+    /// `[]` = no roots / scanned-but-empty; **`nil` = the scan failed** (bridge or
+    /// error/undecodable response). See `projects(roots:)` on why they must differ.
+    static func stackHealth(roots: [String], checkUpdates: Bool, maxDepth: Int = 4) -> [ProjectStack]? {
         guard !roots.isEmpty else { return [] }
         struct Request: Encodable {
             let op = "get_stack_health"
@@ -128,10 +135,10 @@ enum CoreBridge {
         guard let reqData = try? JSONEncoder().encode(
             Request(roots: roots, max_depth: maxDepth, check_updates: checkUpdates)),
               let reqJSON = String(data: reqData, encoding: .utf8)
-        else { return [] }
+        else { return nil }
         let json = handle(reqJSON)
-        guard let data = json.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode(Response.self, from: data))?.projects ?? []
+        guard let data = json.data(using: .utf8) else { return nil }
+        return (try? JSONDecoder().decode(Response.self, from: data))?.projects
     }
 
     // MARK: Services (protocol ≥ 1.9.0)
@@ -139,7 +146,9 @@ enum CoreBridge {
     /// Detect locally-running dev servers/services, matched to the approved roots.
     /// Runs `lsof` + reads process cwds, so call off the main actor. Returns `[]`
     /// on any error or an undecodable payload.
-    static func services(roots: [String]) -> [RunningService] {
+    /// `[]` = scanned, nothing running; **`nil` = the detection failed** (bridge or
+    /// error/undecodable response). See `projects(roots:)` on why they must differ.
+    static func services(roots: [String]) -> [RunningService]? {
         struct Request: Encodable {
             let op = "get_services"
             let roots: [String]
@@ -147,10 +156,10 @@ enum CoreBridge {
         struct Response: Decodable { let services: [RunningService] }
         guard let reqData = try? JSONEncoder().encode(Request(roots: roots)),
               let reqJSON = String(data: reqData, encoding: .utf8)
-        else { return [] }
+        else { return nil }
         let json = handle(reqJSON)
-        guard let data = json.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode(Response.self, from: data))?.services ?? []
+        guard let data = json.data(using: .utf8) else { return nil }
+        return (try? JSONDecoder().decode(Response.self, from: data))?.services
     }
 
     // MARK: Worktrees (protocol ≥ 1.15.0)
@@ -237,12 +246,14 @@ enum CoreBridge {
     // MARK: Project usage (protocol ≥ 1.13.0)
 
     /// Per-project spend attribution. Re-reads the session logs, so call off the
-    /// main actor. Returns `[]` on any error or an undecodable payload.
-    static func projectUsage() -> [ProjectUsage] {
+    /// main actor. `[]` = scanned, nothing attributable; **`nil` = the scan failed**
+    /// (bridge or error/undecodable response) — callers must not render that as an
+    /// empty success. See `projects(roots:)`.
+    static func projectUsage() -> [ProjectUsage]? {
         struct Response: Decodable { let projects: [ProjectUsage] }
         let json = handle(#"{"op":"get_project_usage"}"#)
-        guard let data = json.data(using: .utf8) else { return [] }
-        return (try? JSONDecoder().decode(Response.self, from: data))?.projects ?? []
+        guard let data = json.data(using: .utf8) else { return nil }
+        return (try? JSONDecoder().decode(Response.self, from: data))?.projects
     }
 
     // MARK: Repository Radar (protocol ≥ 1.11.0)

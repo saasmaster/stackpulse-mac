@@ -28,6 +28,12 @@ enum APIKeyProviders {
     static let all: [APIKeyProviderInfo] = [
         .init(id: "open_router", displayName: "OpenRouter", needsBaseURL: false,
               hasLiveBalance: true, placeholder: "sk-or-v1-…"),
+        // GitHub Copilot: a fine-grained PAT with "Plan: read" reads the user's own
+        // premium-request CONSUMPTION via the GitHub billing API. Personal billing
+        // only — org/enterprise seats have no per-user usage endpoint (handled
+        // honestly at fetch time). id "copilot" folds onto the Copilot card.
+        .init(id: "copilot", displayName: "GitHub Copilot", needsBaseURL: false,
+              hasLiveBalance: true, placeholder: "github_pat_… (Plan: read)"),
         .init(id: "litellm", displayName: "LiteLLM", needsBaseURL: true,
               hasLiveBalance: true, placeholder: "sk-…"),
         .init(id: "openai", displayName: "OpenAI", needsBaseURL: false,
@@ -112,6 +118,8 @@ enum ProviderBalanceClient {
             return await fetchLiteLLM(key: key, baseURL: baseURL)
         case "deepseek":
             return await fetchDeepSeek(key: key)
+        case "copilot":
+            return await fetchCopilot(key: key)
         default:
             // Stored, but no balance endpoint here — say so; do NOT invent one and
             // do NOT promise one.
@@ -124,28 +132,41 @@ enum ProviderBalanceClient {
 
     // MARK: OpenRouter
 
-    /// `GET https://openrouter.ai/api/v1/credits` (Bearer key) → `{ data: {
-    /// total_credits, total_usage } }`. Falls back to the older `/auth/key`
-    /// shape `{ data: { limit?, usage } }` when `/credits` returns 404.
+    /// Prefers `GET https://openrouter.ai/api/v1/key` — the one endpoint that works
+    /// with a normal inference key (`sk-or-v1-…`) and returns the most: remaining
+    /// credit, all-time usage, AND daily/weekly/monthly spend. Falls back to the
+    /// older `/credits` (`{ total_credits, total_usage }`) and `/auth/key`
+    /// (`{ limit?, usage }`) shapes, which per current docs may now require a
+    /// management key. (`/activity`'s per-day/model breakdown is management-key-only,
+    /// so it's deliberately not attempted for a plain BYOK key.)
     private static func fetchOpenRouter(key: String) async -> Outcome {
         let base = "https://openrouter.ai/api/v1/"
 
-        // 1) Modern /credits endpoint.
+        // 1) /key — richest, and works with a normal inference key.
+        switch await request(URL(string: base + "key")!, key: key) {
+        case .ok(let data):
+            if let bal = parseOpenRouterKey(data) { return Outcome(balance: bal, error: nil) }
+            // Parsed as OK but not the /key shape — fall through to older endpoints.
+        case .unauthorized:
+            return Outcome(balance: nil, error: "Check your OpenRouter API key.")
+        case .notFound, .httpError, .failure:
+            break   // fall through to /credits
+        }
+
+        // 2) /credits (may require a management key on newer accounts).
         switch await request(URL(string: base + "credits")!, key: key) {
         case .ok(let data):
             if let bal = parseOpenRouter(data) { return Outcome(balance: bal, error: nil) }
             return Outcome(balance: nil, error: "OpenRouter balance: unexpected response.")
         case .unauthorized:
             return Outcome(balance: nil, error: "Check your OpenRouter API key.")
-        case .notFound:
+        case .notFound, .httpError:
             break   // fall through to /auth/key
-        case .httpError(let code):
-            return Outcome(balance: nil, error: "OpenRouter balance unavailable (HTTP \(code)).")
         case .failure:
             return Outcome(balance: nil, error: "OpenRouter balance unavailable (offline?).")
         }
 
-        // 2) Legacy /auth/key fallback.
+        // 3) Legacy /auth/key fallback.
         switch await request(URL(string: base + "auth/key")!, key: key) {
         case .ok(let data):
             if let bal = parseOpenRouter(data) { return Outcome(balance: bal, error: nil) }
@@ -220,7 +241,121 @@ enum ProviderBalanceClient {
         )
     }
 
+    // MARK: GitHub Copilot
+
+    /// Reads the user's own GitHub Copilot **premium-request consumption** (not a
+    /// balance — GitHub exposes no remaining-quota figure). Two steps, both with a
+    /// fine-grained PAT carrying "Plan: read":
+    ///   1. `GET /user` → the login,
+    ///   2. `GET /users/{login}/settings/billing/premium_request/usage` → line items.
+    /// Personal-billing only: an org/enterprise-managed seat has no per-user usage
+    /// endpoint, which we report plainly rather than as an error.
+    private static func fetchCopilot(key: String) async -> Outcome {
+        // 1) Resolve the username from the token itself.
+        let login: String
+        switch await githubRequest(URL(string: "https://api.github.com/user")!, key: key) {
+        case .ok(let data):
+            guard
+                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let l = obj["login"] as? String, !l.isEmpty
+            else { return Outcome(balance: nil, error: "GitHub: unexpected response.") }
+            login = l
+        case .unauthorized:
+            return Outcome(balance: nil, error: "Check your GitHub token (needs 'Plan: read').")
+        case .notFound, .httpError, .failure:
+            return Outcome(balance: nil, error: "GitHub Copilot usage unavailable.")
+        }
+
+        // 2) Premium-request consumption for that user.
+        let usage = "https://api.github.com/users/\(login)/settings/billing/premium_request/usage"
+        guard let usageURL = URL(string: usage) else {
+            return Outcome(balance: nil, error: "GitHub Copilot usage unavailable.")
+        }
+        switch await githubRequest(usageURL, key: key) {
+        case .ok(let data):
+            if let bal = parseCopilotUsage(data) { return Outcome(balance: bal, error: nil) }
+            return Outcome(balance: nil, error: "Copilot usage: unexpected response.")
+        case .unauthorized:
+            return Outcome(balance: nil, error: "GitHub token needs the 'Plan: read' permission.")
+        case .notFound:
+            // Org/enterprise-managed seats aren't billed to the user → no per-user
+            // usage. State it; don't fabricate a zero.
+            return Outcome(
+                balance: ProviderBalance(
+                    note: "No personal Copilot billing — org/enterprise seats have no per-user usage API."
+                ),
+                error: nil
+            )
+        case .httpError(let code):
+            return Outcome(balance: nil, error: "Copilot usage unavailable (HTTP \(code)).")
+        case .failure:
+            return Outcome(balance: nil, error: "Copilot usage unavailable (offline?).")
+        }
+    }
+
+    /// Parses GitHub's `…/billing/premium_request/usage` payload:
+    /// `{ "timePeriod": { "year": Y, "month": M? }, "usageItems": [ { "unitType",
+    /// "netQuantity", "netAmount", … } ] }`. Sums billed `netAmount` (USD) and the
+    /// `requests` count. An empty `usageItems` is a real "nothing consumed this
+    /// period" (used = $0), not a failure. Pure and side-effect-free.
+    static func parseCopilotUsage(_ data: Data) -> ProviderBalance? {
+        guard
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let items = root["usageItems"] as? [[String: Any]]
+        else { return nil }
+
+        var netAmount = 0.0
+        var requests = 0.0
+        for it in items {
+            netAmount += coerceDouble(it["netAmount"]) ?? 0
+            if (it["unitType"] as? String)?.lowercased() == "requests" {
+                requests += coerceDouble(it["netQuantity"]) ?? 0
+            }
+        }
+
+        let period: String? = (root["timePeriod"] as? [String: Any]).flatMap { tp in
+            guard let y = tp["year"] as? Int else { return nil }
+            if let m = tp["month"] as? Int { return String(format: "%04d-%02d", y, m) }
+            return String(y)
+        }
+        var parts: [String] = []
+        if requests > 0 { parts.append("\(Int(requests)) premium requests") }
+        if let p = period { parts.append(p) }
+        let note = parts.isEmpty ? "Personal-billing consumption" : parts.joined(separator: " · ")
+
+        return ProviderBalance(
+            remaining_usd: nil,     // GitHub exposes no remaining-quota figure
+            used_usd: netAmount,
+            limit_usd: nil,
+            currency: "USD",
+            note: note
+        )
+    }
+
     // MARK: Networking
+
+    /// A GitHub API GET: same key-hygiene as `request`, plus the GitHub-required
+    /// `Accept`/`X-GitHub-Api-Version` headers.
+    private static func githubRequest(_ url: URL, key: String) async -> HTTPOutcome {
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 15
+        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return .failure }
+            switch http.statusCode {
+            case 200: return .ok(data)
+            case 401, 403: return .unauthorized
+            case 404: return .notFound
+            default: return .httpError(http.statusCode)
+            }
+        } catch {
+            return .failure
+        }
+    }
 
     private enum HTTPOutcome {
         case ok(Data)
@@ -295,6 +430,45 @@ enum ProviderBalanceClient {
         }
 
         return nil
+    }
+
+    /// Parses OpenRouter's `/api/v1/key` payload:
+    /// `{ "data": { "limit": D?, "limit_remaining": D?, "usage": D,
+    ///    "usage_daily": D, "usage_weekly": D, "usage_monthly": D,
+    ///    "is_free_tier": Bool } }`. `limit`/`limit_remaining` are null when the
+    /// key is uncapped. Windowed spend goes into an honest note (only the fields
+    /// present). Credits are USD-denominated. Pure and side-effect-free.
+    static func parseOpenRouterKey(_ data: Data) -> ProviderBalance? {
+        guard
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let obj = root["data"] as? [String: Any]
+        else { return nil }
+
+        let usage = coerceDouble(obj["usage"])
+        let remaining = coerceDouble(obj["limit_remaining"]) // nil ⇒ uncapped
+        let limit = coerceDouble(obj["limit"])               // nil ⇒ uncapped
+        // Distinguish the /key shape from /credits (`total_credits`) and /auth/key
+        // (`usage` + `limit` but no windowed fields): require a /key-only marker.
+        let looksLikeKey = obj["limit_remaining"] != nil
+            || obj["usage_daily"] != nil
+            || obj["is_free_tier"] != nil
+        guard looksLikeKey, usage != nil || remaining != nil else { return nil }
+
+        var parts: [String] = []
+        if let d = coerceDouble(obj["usage_daily"]) { parts.append(String(format: "today $%.2f", d)) }
+        if let w = coerceDouble(obj["usage_weekly"]) { parts.append(String(format: "7d $%.2f", w)) }
+        if let m = coerceDouble(obj["usage_monthly"]) { parts.append(String(format: "30d $%.2f", m)) }
+        var note: String? = parts.isEmpty ? nil : "Spend: " + parts.joined(separator: " · ")
+        if (obj["is_free_tier"] as? Bool) == true {
+            note = [note, "Free tier"].compactMap { $0 }.joined(separator: " · ")
+        }
+        return ProviderBalance(
+            remaining_usd: remaining,
+            used_usd: usage,
+            limit_usd: limit,
+            currency: "USD",
+            note: note
+        )
     }
 
     /// Parses a LiteLLM `/key/info` payload: `{ "info": { "spend": D,
@@ -417,6 +591,35 @@ enum ProviderBalanceClient {
               u.limit_usd == nil
         else { return false }
 
+        // 3b) OpenRouter /api/v1/key: capped key with windowed spend.
+        let orKey = """
+        { "data": { "label": "sk-or", "limit": 50.0, "limit_remaining": 30.0,
+          "usage": 20.0, "usage_daily": 2.0, "usage_weekly": 9.0, "usage_monthly": 20.0,
+          "is_free_tier": false } }
+        """
+        guard let k = parseOpenRouterKey(Data(orKey.utf8)),
+              approx(k.remaining_usd, 30.0),
+              approx(k.used_usd, 20.0),
+              approx(k.limit_usd, 50.0),
+              k.note == "Spend: today $2.00 · 7d $9.00 · 30d $20.00"
+        else { return false }
+
+        // 3c) OpenRouter /key: uncapped (null limit) → remaining unknown, usage shown.
+        let orKeyUncapped = """
+        { "data": { "limit": null, "limit_remaining": null, "usage": 12.5,
+          "is_free_tier": true } }
+        """
+        guard let ku = parseOpenRouterKey(Data(orKeyUncapped.utf8)),
+              ku.remaining_usd == nil,
+              approx(ku.used_usd, 12.5),
+              ku.limit_usd == nil,
+              ku.note == "Free tier"
+        else { return false }
+
+        // 3d) A /credits payload must NOT be mistaken for the /key shape.
+        guard parseOpenRouterKey(Data(#"{"data":{"total_credits":20,"total_usage":7.5}}"#.utf8)) == nil
+        else { return false }
+
         // 4) LiteLLM /key/info with a budget.
         let litellm = """
         { "info": { "spend": 4.25, "max_budget": 50.0 } }
@@ -460,6 +663,28 @@ enum ProviderBalanceClient {
               approx(ds.remaining_usd, 8.80),
               ds.currency == "USD",
               ds.used_usd == nil
+        else { return false }
+
+        // 7b) GitHub Copilot premium-request usage: sums netAmount + request count.
+        let copilot = """
+        { "timePeriod": { "year": 2026, "month": 7 }, "user": "octocat",
+          "usageItems": [
+            { "product": "copilot", "sku": "premium", "model": "gpt-5", "unitType": "requests",
+              "pricePerUnit": 0.04, "grossQuantity": 100, "grossAmount": 4.0,
+              "discountQuantity": 0, "discountAmount": 0, "netQuantity": 100, "netAmount": 4.0 },
+            { "product": "copilot", "sku": "premium", "model": "opus", "unitType": "requests",
+              "pricePerUnit": 0.04, "grossQuantity": 50, "grossAmount": 2.0,
+              "discountQuantity": 0, "discountAmount": 0, "netQuantity": 50, "netAmount": 2.0 } ] }
+        """
+        guard let cp = parseCopilotUsage(Data(copilot.utf8)),
+              approx(cp.used_usd, 6.0),
+              cp.remaining_usd == nil,
+              cp.note == "150 premium requests · 2026-07"
+        else { return false }
+
+        // 7c) Empty usageItems = a real "nothing consumed", used $0 (not a failure).
+        guard let cp0 = parseCopilotUsage(Data(#"{"timePeriod":{"year":2026},"usageItems":[]}"#.utf8)),
+              approx(cp0.used_usd, 0.0)
         else { return false }
 
         // 8) Garbage / empty inputs degrade to nil.

@@ -59,9 +59,37 @@ pub struct Conversation {
     pub steps: Option<u64>,
 }
 
-/// Enumerate `conversations/*.db`, each with its last-modified time and (from a
-/// bounded byte scan) the Gemini model it used. Newest first. Empty when the
-/// directory is absent. Never panics.
+/// Hard cap on how many conversations receive the expensive per-DB enrichment
+/// (one SQLite open for the step count) on a single scan. Conversations
+/// accumulate forever and this runs on the refresh cadence, so without a cap the
+/// per-refresh cost grows unbounded. 200 sits far above any realistic recent set
+/// while bounding the pathological case.
+const MAX_ENRICH: usize = 200;
+
+/// Cheap existence check for `status()`: enumerates the conversation DBs without
+/// opening any SQLite file or reading any bytes (unlike `scan_conversations`).
+fn has_conversations() -> bool {
+    let Some(dir) = conversations_dir() else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("db"))
+}
+
+/// Enumerate `conversations/*.db`, each with its last-modified time and (for the
+/// most recent ones) the Gemini model and trajectory step count. Newest first.
+/// Empty when the directory is absent. Never panics.
+///
+/// Enumeration (path + mtime) is cheap and covers every conversation, so counts
+/// and windows stay complete. The two *expensive* per-DB operations are bounded:
+/// the SQLite step count runs only for the newest [`MAX_ENRICH`] conversations,
+/// and the model byte-scan runs lazily newest-first, stopping at the first hit —
+/// the caller only ever surfaces a single model, so scanning every DB (up to
+/// 1 MiB each) on every refresh was pure waste.
 pub fn scan_conversations() -> Vec<Conversation> {
     let Some(dir) = conversations_dir() else {
         return Vec::new();
@@ -69,7 +97,8 @@ pub fn scan_conversations() -> Vec<Conversation> {
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
     };
-    let mut out: Vec<Conversation> = Vec::new();
+    // Cheap pass first: path + mtime + id only. No SQLite, no byte reads.
+    let mut files: Vec<(PathBuf, i64, String)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("db") {
@@ -83,15 +112,36 @@ pub fn scan_conversations() -> Vec<Conversation> {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        out.push(Conversation {
-            id,
-            mtime_unix: mtime,
-            model: extract_model(&path),
-            steps: step_count(&path),
-        });
+        files.push((path, mtime, id));
     }
-    out.sort_by_key(|c| std::cmp::Reverse(c.mtime_unix));
-    out
+    files.sort_by_key(|(_, mtime, _)| std::cmp::Reverse(*mtime));
+
+    let mut model_found = false;
+    files
+        .into_iter()
+        .enumerate()
+        .map(|(i, (path, mtime, id))| {
+            let steps = if i < MAX_ENRICH {
+                step_count(&path)
+            } else {
+                None
+            };
+            // Lazy, newest-first: scan for the model only until one is found.
+            let model = if model_found {
+                None
+            } else {
+                let m = extract_model(&path);
+                model_found = m.is_some();
+                m
+            };
+            Conversation {
+                id,
+                mtime_unix: mtime,
+                model,
+                steps,
+            }
+        })
+        .collect()
 }
 
 fn file_mtime_unix(path: &Path) -> Option<i64> {
@@ -219,7 +269,9 @@ impl Provider for AntigravityProvider {
 
     fn status(&self) -> ProviderStatus {
         let installed = self.installed();
-        let authenticated = !scan_conversations().is_empty();
+        // Cheap existence check — no SQLite opens or byte reads just to answer
+        // "is there any conversation at all?".
+        let authenticated = has_conversations();
         ProviderStatus {
             provider: ProviderId::Antigravity,
             display_name: ProviderId::Antigravity.display_name().to_string(),

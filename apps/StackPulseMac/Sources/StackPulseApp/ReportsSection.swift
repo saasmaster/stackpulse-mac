@@ -202,10 +202,6 @@ struct ReportsSection: View {
                 .font(.callout.weight(.medium))
                 .lineLimit(1)
                 .frame(width: 150, alignment: .leading)
-            if let hit = row.cacheHitRate {
-                Chip(text: "\(Format.percent(hit * 100)) cache hit",
-                     systemImage: "square.stack.3d.up", tint: .green)
-            }
             if let savings = row.cacheSavings {
                 Chip(text: "\(Format.usd(savings)) saved", systemImage: "arrow.down", tint: .mint)
             }
@@ -389,7 +385,6 @@ struct ReportsSection: View {
             }
             for row in model.efficiencyRows {
                 var bits: [String] = []
-                if let hit = row.cacheHitRate { bits.append("\(Format.percent(hit * 100)) cache hit-rate") }
                 if let savings = row.cacheSavings { bits.append("\(Format.usd(savings)) saved") }
                 if let burn = row.burnPerDay { bits.append("\(Format.usd(burn))/day burn") }
                 out.append("- **\(row.name):** \(bits.isEmpty ? "—" : bits.joined(separator: " · "))")
@@ -489,17 +484,17 @@ private struct ReportModel {
     let activeMissionCount: Int
     let stacks: [ProjectStack]
 
-    /// One provider's efficiency line: cache hit-rate, measured savings, and burn.
+    /// One provider's efficiency line: measured cache savings and burn rate.
+    /// (The cache *hit-rate* percentage was dropped — the dollars saved answer the
+    /// same question in the unit that matters.)
     struct EffRow: Identifiable {
         let id: String
         let name: String
-        let cacheHitRate: Double?
         let cacheSavings: Double?
         let burnPerDay: Double?
 
         var accessibilityLabel: String {
             var parts = [name]
-            if let hit = cacheHitRate { parts.append("\(Format.percent(hit * 100)) cache hit-rate") }
             if let savings = cacheSavings { parts.append("\(Format.usd(savings)) saved") }
             if let burn = burnPerDay { parts.append("\(Format.usd(burn)) per day") }
             return parts.joined(separator: ", ") + "."
@@ -523,13 +518,12 @@ private struct ReportModel {
         let rows: [EffRow] = snapshot.providers.compactMap { p in
             guard let a = p.analytics else { return nil }
             // Skip a provider whose analytics carry nothing meaningful to show.
-            if a.cache_hit_rate == nil && a.cache_savings_usd == nil && a.burn_rate_usd_per_day == nil {
+            if a.cache_savings_usd == nil && a.burn_rate_usd_per_day == nil {
                 return nil
             }
             return EffRow(
                 id: p.provider,
                 name: p.display_name,
-                cacheHitRate: a.cache_hit_rate,
                 cacheSavings: a.cache_savings_usd,
                 burnPerDay: a.burn_rate_usd_per_day
             )
