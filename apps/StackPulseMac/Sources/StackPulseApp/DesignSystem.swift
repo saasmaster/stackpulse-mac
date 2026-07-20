@@ -19,17 +19,28 @@ enum Format {
 
     static func percent(_ v: Double) -> String { String(format: "%.0f%%", v) }
 
-    /// A limit window framed the way people actually read a quota — "81% left"
-    /// rather than "19% used". Takes the *used* percent (what the providers
-    /// report) and inverts it, clamped so a provider overshooting 100 can't
-    /// print a negative. Pairs with a meter that empties as you spend.
-    static func limitLeft(_ usedPercent: Double) -> String {
-        "\(percent(limitLeftFraction(usedPercent) * 100)) left"
+    /// A limit window shown the way the PROVIDER shows it — "46% used".
+    ///
+    /// This deliberately matches Claude Code's own usage panel (and Codex's), which
+    /// is what a user has open beside this app. A "54% left" reading is the same
+    /// fact, but comparing it against the provider's own screen takes mental
+    /// arithmetic and reads as a contradiction — which is exactly how it was
+    /// reported. Same number, same direction, no translation.
+    static func limitUsed(_ usedPercent: Double) -> String {
+        "\(percent(limitFraction(usedPercent) * 100)) used"
     }
 
-    /// The remaining fraction (0…1) of a limit window, for the meter.
-    static func limitLeftFraction(_ usedPercent: Double) -> Double {
-        max(0, min(1, (100 - usedPercent) / 100))
+    /// The bare percentage, for places too tight for a word (the menu bar). Matches
+    /// the provider's panel digit for digit.
+    static func limitBare(_ usedPercent: Double) -> String {
+        percent(limitFraction(usedPercent) * 100)
+    }
+
+    /// The consumed fraction (0…1) of a limit window, for the meter — it FILLS as
+    /// you spend, like the provider's own bar. Clamped so a provider overshooting
+    /// 100 can't overflow.
+    static func limitFraction(_ usedPercent: Double) -> Double {
+        max(0, min(1, usedPercent / 100))
     }
 
     /// Display name for a limit-window label. One copy for every surface — this

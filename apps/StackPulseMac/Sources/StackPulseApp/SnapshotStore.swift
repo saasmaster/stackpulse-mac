@@ -1919,7 +1919,7 @@ final class SnapshotStore: ObservableObject {
                 values = fresh
                     .sorted { rank($0) < rank($1) }
                     .prefix(2)
-                    .map { "\(Int(Format.limitLeftFraction($0.used_percent) * 100))%" }
+                    .map { "\(Int(Format.limitFraction($0.used_percent) * 100))%" }
             } else if let tokens = p.today?.tokens.grandTotal, tokens > 0 {
                 values = [Format.tokens(tokens)]
             } else {

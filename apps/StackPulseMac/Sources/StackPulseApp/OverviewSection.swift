@@ -215,7 +215,7 @@ struct OverviewProviderCard: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                             Spacer()
-                            Text(Format.limitLeft(limit.used_percent))
+                            Text(Format.limitUsed(limit.used_percent))
                                 .font(.caption2.weight(.semibold).monospacedDigit())
                             if let countdown = Format.resetCountdown(limit.resets_at_unix) {
                                 Text("· \(countdown)")
@@ -223,7 +223,7 @@ struct OverviewProviderCard: View {
                                     .foregroundStyle(.tertiary)
                             }
                         }
-                        MeterBar(fraction: Format.limitLeftFraction(limit.used_percent),
+                        MeterBar(fraction: Format.limitFraction(limit.used_percent),
                                  tint: SPStatus.limitColor(limit.used_percent),
                                  glowsWhenHigh: true)
                         if provider.provider == "claude",

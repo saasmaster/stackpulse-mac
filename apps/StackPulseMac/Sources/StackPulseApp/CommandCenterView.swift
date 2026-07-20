@@ -284,7 +284,7 @@ private struct BigUsageCard: View {
             HStack {
                 Text(limitLabel(limit.label)).font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                Text(Format.limitLeft(limit.used_percent))
+                Text(Format.limitUsed(limit.used_percent))
                     .font(.caption2.weight(.semibold).monospacedDigit())
                 if let countdown = Format.resetCountdown(limit.resets_at_unix) {
                     Text("· \(countdown)").font(.system(size: 9)).foregroundStyle(.tertiary)
@@ -292,7 +292,7 @@ private struct BigUsageCard: View {
             }
             // The bar shows what's LEFT (it empties as you spend); the tint still
             // keys off how much is *used*, so it reddens as the window runs out.
-            MeterBar(fraction: Format.limitLeftFraction(limit.used_percent),
+            MeterBar(fraction: Format.limitFraction(limit.used_percent),
                      tint: SPStatus.limitColor(limit.used_percent),
                      glowsWhenHigh: true)
         }
@@ -443,13 +443,13 @@ private struct LiveLimitsPanel: View {
                                 Text(row.0).font(.caption.weight(.semibold))
                                 Text(limitLabel(row.1.label)).font(.caption2).foregroundStyle(.secondary)
                                 Spacer()
-                                Text(Format.limitLeft(row.1.used_percent))
+                                Text(Format.limitUsed(row.1.used_percent))
                                     .font(.caption.weight(.semibold).monospacedDigit())
                                 if let countdown = Format.resetCountdown(row.1.resets_at_unix) {
                                     Text("· \(countdown)").font(.system(size: 9)).foregroundStyle(.tertiary)
                                 }
                             }
-                            MeterBar(fraction: Format.limitLeftFraction(row.1.used_percent),
+                            MeterBar(fraction: Format.limitFraction(row.1.used_percent),
                                      tint: SPStatus.limitColor(row.1.used_percent),
                                      glowsWhenHigh: true)
                         }

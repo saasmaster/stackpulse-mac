@@ -127,6 +127,18 @@ exactly which windows it injected.
 Verified: 208 Rust tests, **149 Swift tests**, and 12 headless parser self-tests
 (`--selftest-parsers`) all green.
 
+### Limits read in the provider's own direction (app 0.49.2)
+
+Percentages now show **used**, not remaining — "46% used", with the meter filling as
+you spend. The values were never wrong: 54% left and 46% used are the same fact. But
+the screen people check this against is the provider's own panel (Claude Code shows
+"Weekly 46%", Codex the same), and showing the complement meant every comparison
+needed mental arithmetic and read as a contradiction — which is exactly how it got
+reported, twice. Same number, same direction, nothing to translate.
+
+Verified against Claude Code's own usage panel on the same machine: 5-hour 25% vs 28%
+and weekly 46% vs 47%, the gaps being live usage between the two readings.
+
 ### Claude's percentage is back — the dead-credential dead end (app 0.49.1)
 
 Claude showed no limits at all on a machine that had a perfectly good Claude login.

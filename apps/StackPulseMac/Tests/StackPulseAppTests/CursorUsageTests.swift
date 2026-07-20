@@ -41,8 +41,9 @@ struct CursorUsageTests {
         let json = #"{"planUsage":{"apiPercentUsed":100.0}}"#
         let out = CursorUsageClient.parseUsage(Data(json.utf8), capturedAt: 1)
         #expect(out.limits.first?.used_percent == 100)
-        // The UI renders this as "0% left" — the openusage "Limit reached" case.
-        #expect(Format.limitLeft(out.limits[0].used_percent) == "0% left")
+        // The UI renders this as "100% used" — the "Limit reached" case, in the
+        // same direction the provider's own dashboard reports it.
+        #expect(Format.limitUsed(out.limits[0].used_percent) == "100% used")
     }
 
     @Test("garbage degrades to no reading, never to a fabricated one")
