@@ -246,10 +246,21 @@ enum ClaudeAuthStore {
         }
 
         guard let refreshToken = candidate.oauth.refreshToken, !refreshToken.isEmpty else {
-            // Nothing to renew with. This is the state that used to route to
-            // Desktop and report the wrong account's quota; now it says so.
+            // A DEAD credential: expired with nothing to renew it. It will never
+            // work again until the user signs in, so refusing to look further just
+            // means showing nothing at all — which is what happened on a machine
+            // whose CLI item was a six-day-old fossil while Claude Desktop held a
+            // live login. Desktop keeps its own cache current as a side effect of
+            // use, so for that machine it IS the live session.
+            //
+            // This is not the silent substitution that caused the wrong-account
+            // bug: `desktopFallback()` labels the source, and the caller turns that
+            // label into a caveat on the card. Falling through *unlabelled* was the
+            // bug; refusing to fall through at all was the overcorrection.
+            recordDiagnostic("\(candidate.source.label) token expired with no refresh token — trying Desktop")
+            let desktop = desktopFallback()
+            if desktop.accessToken != nil { return desktop }
             let reason = "Claude Code token expired and carries no refresh token — run `claude` to sign in again."
-            recordDiagnostic("\(candidate.source.label) token expired, no refresh token")
             return .none(reason, source: candidate.source.label)
         }
 
@@ -259,7 +270,12 @@ enum ClaudeAuthStore {
 
         switch await performRefresh(refreshToken: refreshToken) {
         case .failure(let reason):
-            recordDiagnostic("refresh failed from \(candidate.source.label)")
+            // Same reasoning as the dead-credential path above: a refresh that
+            // fails leaves nothing usable here, so a live Desktop login is better
+            // than a blank card — labelled, never silent.
+            recordDiagnostic("refresh failed from \(candidate.source.label) — trying Desktop")
+            let desktop = desktopFallback()
+            if desktop.accessToken != nil { return desktop }
             return .none("Claude Code token refresh failed (\(reason)). Run `claude` to sign in again.",
                          source: candidate.source.label)
 

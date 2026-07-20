@@ -1898,12 +1898,13 @@ final class SnapshotStore: ObservableObject {
             // (measured at 18.5h on a real machine) — showing that as live in the
             // always-visible menu bar is the exact stale-as-live bug the rest of the
             // app guards against.
-            var fresh = p.limits.filter { !$0.isStale(staleAfter: LimitWindow.liveStaleAfter) }
-            // A reading that belongs to a DIFFERENT login is dropped here for the
-            // same reason a stale one is: the menu bar has no room to explain it,
-            // and an unlabelled percentage in the always-visible strip reads as
-            // "your usage". The card carries the caveat and the one-click fix.
-            if p.provider == "claude", liveLimitsCaveat != nil { fresh = [] }
+            let fresh = p.limits.filter { !$0.isStale(staleAfter: LimitWindow.liveStaleAfter) }
+            // A caveated reading (Claude Desktop answering because the Code login
+            // is dead) is still the user's OWN live Claude login, and it is the
+            // only Claude limit that exists on such a machine — blanking it here
+            // left the strip showing nothing at all, which is worse than showing a
+            // real number whose source the card names. Only *stale* readings are
+            // dropped, above.
             let values: [String]
             if !fresh.isEmpty {
                 // Session on top, weekly below (the order people read them in);

@@ -124,7 +124,7 @@ enum AnthropicUsageClient {
         // unlabelled, even though the fetch succeeded.
         if result.source == "desktop", !outcome.limits.isEmpty {
             outcome.recovery = .renewLoginInTerminal
-            outcome.caveat = "These are your Claude Desktop limits — no Claude Code login was found, so Code's own usage isn't being read."
+            outcome.caveat = "From your Claude Desktop login — StackPulse has no usable Claude Code login (expired or missing). If Code runs on a different account, these limits aren't its. Sign in with `claude` to read Code's own."
         }
         return outcome
     }

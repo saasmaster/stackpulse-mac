@@ -127,6 +127,28 @@ exactly which windows it injected.
 Verified: 208 Rust tests, **149 Swift tests**, and 12 headless parser self-tests
 (`--selftest-parsers`) all green.
 
+### Claude's percentage is back — the dead-credential dead end (app 0.49.1)
+
+Claude showed no limits at all on a machine that had a perfectly good Claude login.
+Root cause, found by dumping the Keychain: this Mac carries **247**
+`Claude Code-credentials*` items (one per `CLAUDE_CONFIG_DIR`), and the one the app
+reads is a six-day-old fossil whose `refreshToken` is an empty string — dead, and
+unrefreshable. Claude *Desktop* held a live token the whole time.
+
+The regression was mine. Fixing the earlier wrong-account bug, I told the store never
+to fall through to Desktop — correct for a refresh that fails mid-flight, wrong for a
+credential that can never work again, which is exactly openusage's rule: Desktop is
+consulted once the Claude Code login cannot produce a valid token. Falling through
+*unlabelled* was the original bug; refusing to fall through at all was the
+overcorrection, and it traded a wrong number for no number.
+
+Now: a dead or unrefreshable Claude Code credential falls through to Desktop, the
+reading is labelled with the login it came from (with a one-click "Renew Claude Code
+login"), and the menu bar shows it again rather than blanking — it is the user's own
+live Claude login, and it was the only Claude limit that existed on that machine.
+Verified: weekly 46% used, session 24% used, which is what heavy mid-week use looks
+like. The earlier "1% used" that looked wrong was a genuinely just-reset weekly window.
+
 ### Popover density — the glance surface now fits the glance (app 0.49.0)
 
 The menu-bar popover spent its vertical budget on chrome: a two-column money grid
