@@ -127,6 +127,18 @@ exactly which windows it injected.
 Verified: 208 Rust tests, **149 Swift tests**, and 12 headless parser self-tests
 (`--selftest-parsers`) all green.
 
+### Popover density — the glance surface now fits the glance (app 0.49.0)
+
+The menu-bar popover spent its vertical budget on chrome: a two-column money grid
+plus a separate cache/burn row cost ~80pt per provider, so barely one provider fit
+above the fold. Same data, laid out for scanning: "today" keeps the headline size
+because it is the number you act on, the 30-day total sits beside it as context, and
+volume / turns / savings / burn collapse to one secondary line. The header dropped to
+one line (the UTC bucket date moved to its tooltip), card row spacing went 8 → 6, and
+long provider notes clamp to two lines with the full text on hover — clamped, never
+edited down, since they carry the honest "why". Result: three providers and the
+roll-up visible without scrolling, where one and a bit fit before.
+
 ### Cursor live usage + limits read as "% left" (app 0.47.0)
 
 **Cursor goes from "no source" to a full readout.** Cursor publishes no individual

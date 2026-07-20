@@ -39,7 +39,11 @@ struct PopoverView: View {
                 .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 1) {
                 Text("StackPulse").font(.headline)
-                Text(subtitle).font(.caption2).foregroundStyle(.secondary)
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help(subtitleTooltip)
             }
             Spacer()
             if onToggleSidebar != nil {
@@ -88,11 +92,19 @@ struct PopoverView: View {
         .padding(.vertical, 10)
     }
 
+    /// One short line. The UTC bucket date used to hang off this and wrapped the
+    /// header onto a second line in a 360pt popover — it's the accounting day the
+    /// numbers belong to, which matters when reading them but not at a glance, so
+    /// it moved to the header's tooltip.
     private var subtitle: String {
         if store.isLoading && store.snapshot == nil { return "Scanning local sessions…" }
-        var parts = ["Updated \(Format.relative(store.lastUpdated))"]
-        if let s = store.snapshot { parts.append("UTC \(s.bucket_date_utc)") }
-        return parts.joined(separator: " · ")
+        return "Updated \(Format.relative(store.lastUpdated))"
+    }
+
+    /// The detail the subtitle no longer spends a line on.
+    private var subtitleTooltip: String {
+        guard let s = store.snapshot else { return "" }
+        return "Usage is bucketed by UTC day — currently \(s.bucket_date_utc)"
     }
 
     // MARK: Content states
@@ -283,7 +295,10 @@ struct ProviderCard: View {
     @EnvironmentObject var store: SnapshotStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // 6, not 8: at 360pt wide this card stacks 4-6 rows, so every point of
+        // inter-row spacing is multiplied per provider — and the popover's job is
+        // to show several providers at once, not one beautifully.
+        VStack(alignment: .leading, spacing: 6) {
             identityRow
             if let balance = provider.balance {
                 ProviderBalanceLabel(balance: balance)
@@ -297,7 +312,6 @@ struct ProviderCard: View {
                 // no `NoLocalSpendNote` here.
                 if provider.hasLocalSpend {
                     spendRow
-                    if let a = provider.analytics { analyticsRow(a) }
                 } else if provider.hasLocalActivity {
                     ProviderActivityRow(provider: provider)
                 }
@@ -308,11 +322,18 @@ struct ProviderCard: View {
                 Text("Not detected on this Mac.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            // Clamped, not shortened. These notes carry the honest "why" (server-side
+            // metering, unpriced models) and must not be edited down to a slogan —
+            // but at 360pt a two-paragraph note ran five lines and pushed the next
+            // provider off screen. Two lines here, the whole text on hover.
             ForEach(provider.notes, id: \.self) { note in
                 Text(note)
                     .font(.system(size: 9))
                     .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
+                    .help(note)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -343,29 +364,59 @@ struct ProviderCard: View {
         }
     }
 
+    /// Spend + efficiency in TWO lines instead of five.
+    ///
+    /// This is a glance surface, and the old block spent ~80pt per provider on a
+    /// two-column money grid plus a separate cache/burn row — so barely one
+    /// provider fit above the fold, which defeats the point of a menu-bar popover.
+    /// Nothing was dropped: every figure that was here is still here. "Today" keeps
+    /// the headline size because it is the number you act on; the 30-day total and
+    /// the volume/efficiency figures are context and read as context.
     private var spendRow: some View {
-        HStack(spacing: 0) {
-            spendCell("Today", provider.today)
-            Divider().frame(height: 30)
-            spendCell("30 days", provider.last30)
-        }
-    }
-
-    private func spendCell(_ label: String, _ window: SpendWindow?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(label.uppercased())
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(Format.usd(window?.estimated_cost_usd))
-                .font(.title3.weight(.semibold))
-                .monospacedDigit()
-            if let w = window {
-                Text("\(Format.tokens(w.tokens.grandTotal)) tok · \(w.records) turns")
-                    .font(.system(size: 9)).foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(Format.usd(provider.today?.estimated_cost_usd))
+                    .font(.title3.weight(.semibold))
+                    .monospacedDigit()
+                Text("today")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Text(Format.usd(provider.last30?.estimated_cost_usd))
+                    .font(.callout.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                Text("30d")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            if !secondaryFigures.isEmpty {
+                Text(secondaryFigures.joined(separator: " · "))
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, label == "30 days" ? 12 : 0)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Volume, turns, measured cache savings and burn rate — one line, only the
+    /// parts that exist. Kept separate from the money line so a provider with no
+    /// analytics simply loses the line instead of rendering empty separators.
+    private var secondaryFigures: [String] {
+        var parts: [String] = []
+        if let t = provider.today {
+            parts.append("\(Format.tokens(t.tokens.grandTotal)) tok")
+            parts.append("\(t.records) turns")
+        }
+        if let saved = provider.analytics?.cache_savings_usd {
+            parts.append("\(Format.usd(saved)) saved")
+        }
+        if let burn = provider.analytics?.burn_rate_usd_per_day {
+            parts.append("\(Format.usd(burn))/day")
+        }
+        return parts
     }
 
     /// For Claude only: explains the live-limits state when there's no live
@@ -454,27 +505,6 @@ struct ProviderCard: View {
         }
     }
 
-    @ViewBuilder private func analyticsRow(_ a: ProviderAnalytics) -> some View {
-        let items: [(String, String, Color)] = [
-            a.cache_savings_usd.map { ("Cache saved", Format.usd($0), Color.mint) },
-            a.burn_rate_usd_per_day.map { ("Burn / day", Format.usd($0), Color.orange) },
-        ].compactMap { $0 }
-        if !items.isEmpty {
-            HStack(spacing: 10) {
-                ForEach(items, id: \.0) { item in
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(item.0.uppercased())
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        Text(item.1)
-                            .font(.caption.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(item.2)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-    }
 
     private func limitLabel(_ raw: String) -> String {
         Format.limitLabel(raw)
