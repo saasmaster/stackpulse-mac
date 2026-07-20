@@ -161,8 +161,8 @@ enum CursorUsageClient {
 
         // The billing cycle is authoritative — Cursor tells us when it resets, so
         // we never assume a calendar month.
-        let startMS = coerceDouble(plan["billingCycleStart"] ?? root["billingCycleStart"])
-        let endMS = coerceDouble(plan["billingCycleEnd"] ?? root["billingCycleEnd"])
+        let startMS = LiveUsageJSON.coerceDouble(plan["billingCycleStart"] ?? root["billingCycleStart"])
+        let endMS = LiveUsageJSON.coerceDouble(plan["billingCycleEnd"] ?? root["billingCycleEnd"])
         let resetsAt: Int64? = endMS.map { Int64($0 / 1000) }
         let windowMinutes: Int = {
             guard let s = startMS, let e = endMS, e > s else { return 0 }
@@ -171,10 +171,10 @@ enum CursorUsageClient {
 
         var limits: [LimitWindow] = []
         func addMeter(_ key: String, _ label: String) {
-            guard let used = coerceDouble(plan[key]) else { return }
+            guard let used = LiveUsageJSON.coerceDouble(plan[key]) else { return }
             limits.append(LimitWindow(
                 label: label,
-                used_percent: max(0, min(100, used)),
+                used_percent: LiveUsageJSON.clampPercent(used),
                 window_minutes: windowMinutes,
                 resets_at_unix: resetsAt,
                 provenance: liveProvenance,
@@ -198,9 +198,15 @@ enum CursorUsageClient {
         guard let spend = root["spendLimitUsage"] as? [String: Any] else { return nil }
         let candidates = ["individualUsed", "pooledUsed", "totalSpend"]
         for key in candidates {
-            if let cents = coerceDouble(spend[key]), cents > 0 { return cents / 100 }
+            if let cents = LiveUsageJSON.coerceDouble(spend[key]), cents > 0 { return cents / 100 }
         }
-        if let limit = coerceDouble(spend["limit"]), let remaining = coerceDouble(spend["remaining"]),
+        // `limit > 0`, not `>= remaining`: an account with on-demand spending turned
+        // OFF reports `limit: 0, remaining: 0`, which the old guard turned into a
+        // measured $0.00 of extra usage — precisely the claim this function's
+        // contract says it must not make. No limit means no on-demand spend to
+        // imply, so there is nothing to report.
+        if let limit = LiveUsageJSON.coerceDouble(spend["limit"]), limit > 0,
+           let remaining = LiveUsageJSON.coerceDouble(spend["remaining"]),
            limit >= remaining {
             return (limit - remaining) / 100
         }
@@ -216,48 +222,23 @@ enum CursorUsageClient {
         return (name?.isEmpty ?? true) ? nil : name
     }
 
-    private static func coerceDouble(_ any: Any?) -> Double? {
-        switch any {
-        case let n as NSNumber: return n.doubleValue
-        case let d as Double: return d
-        case let i as Int: return Double(i)
-        case let s as String: return Double(s)
-        default: return nil
-        }
-    }
-
     // MARK: Networking
 
-    private enum HTTPOutcome {
-        case ok(Data)
-        case unauthorized
-        case notFound
-        case httpError(Int)
-        case failure
-    }
-
     /// A Connect-RPC POST with an empty body — the shape Cursor's dashboard uses.
-    /// The token goes on the Authorization header and nowhere else.
-    private static func post(_ url: URL, token: String) async -> HTTPOutcome {
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 15
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
-        req.httpBody = Data("{}".utf8)
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else { return .failure }
-            switch http.statusCode {
-            case 200: return .ok(data)
-            case 401, 403: return .unauthorized
-            case 404: return .notFound
-            default: return .httpError(http.statusCode)
-            }
-        } catch {
-            return .failure
-        }
+    /// The token goes on the Authorization header and nowhere else. Connect-RPC
+    /// answers a bare 200 on success, so anything else in the 2xx band is drift
+    /// rather than data and stays an `httpError`.
+    private static func post(_ url: URL, token: String) async -> LiveUsageHTTP.Outcome {
+        await LiveUsageHTTP.post(
+            url,
+            headers: [
+                "Authorization": "Bearer \(token)",
+                "Content-Type": "application/json",
+                "Connect-Protocol-Version": "1",
+            ],
+            body: Data("{}".utf8),
+            success: 200..<201
+        )
     }
 
     // MARK: Headless self-test
@@ -300,7 +281,14 @@ enum CursorUsageClient {
         else { return false }
 
         // 3) No on-demand spend reported ⇒ nil, not $0.00 (absence ≠ measured zero).
-        guard extraUsageUSD(root: ["spendLimitUsage": ["individualUsed": 0, "pooledUsed": 0]]) == nil
+        //    Both shapes: the keys missing entirely, and the `limit: 0, remaining: 0`
+        //    an account with on-demand spending DISABLED actually sends — that one
+        //    used to fall through to the limit-implied branch and report a measured
+        //    $0.00.
+        guard extraUsageUSD(root: ["spendLimitUsage": ["individualUsed": 0, "pooledUsed": 0]]) == nil,
+              extraUsageUSD(root: ["spendLimitUsage": ["limit": 0, "remaining": 0]]) == nil,
+              // A real limit with nothing drawn against it is still a measured $0.00.
+              extraUsageUSD(root: ["spendLimitUsage": ["limit": 5000, "remaining": 5000]]) == 0
         else { return false }
 
         // 4) JWT subject extraction (`auth0|user_abc` → `user_abc`) and the cookie.

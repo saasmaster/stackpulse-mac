@@ -484,14 +484,42 @@ mod tests {
 
     #[test]
     fn covers_every_capability_variant_once() {
-        // Guards against forgetting a Capability if the protocol grows.
+        // Names, not a count. `assert_eq!(caps.len(), 22)` only caught ADDITIONS:
+        // renaming a variant, or swapping one capability for another, kept the
+        // count at 22 and passed silently. Listing them makes a substitution fail
+        // with a readable diff, which is the failure actually worth catching.
         let caps = build_capabilities(true, true);
-        assert_eq!(caps.len(), 22);
-        // No duplicate capability keys.
         let mut keys: Vec<_> = caps.iter().map(|(c, _)| format!("{c:?}")).collect();
         keys.sort();
+        let mut expected = vec![
+            "InstalledAppDetection",
+            "AuthDetection",
+            "VersionDetection",
+            "LocalCostScan",
+            "ModelBreakdown",
+            "CacheMetrics",
+            "LocalSessionHistory",
+            "ProjectAssociation",
+            "LiveTaskDetection",
+            "CompletionDetection",
+            "WaitingForInputDetection",
+            "ToolCallVisibility",
+            "ConversationPreview",
+            "Reply",
+            "ApproveReject",
+            "Stop",
+            "Resume",
+            "DeepLink",
+            "RemoteTaskState",
+            "SessionLimits",
+            "WeeklyLimits",
+            "CreditsAndSpend",
+        ];
+        expected.sort_unstable();
+        assert_eq!(keys, expected);
+        // Sorting above would hide a duplicate; this is what rules one out.
         keys.dedup();
-        assert_eq!(keys.len(), 22);
+        assert_eq!(keys.len(), expected.len());
     }
 
     #[test]

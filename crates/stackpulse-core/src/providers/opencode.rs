@@ -162,11 +162,17 @@ fn record_from(json: &str, cutoff_ms: f64, seen: &mut HashSet<String>) -> Option
     })
 }
 
-/// Read every message blob from the SQLite store (macOS only). Opened read-only
-/// with a short busy timeout so it coexists with OpenCode writing the same file;
-/// any error (locked, schema drift, missing table) degrades to nothing.
+/// Stream every message blob from the SQLite store (macOS only) into `emit`.
+/// Opened read-only with a short busy timeout so it coexists with OpenCode
+/// writing the same file; any error (locked, schema drift, missing table)
+/// degrades to nothing.
+///
+/// One blob at a time, deliberately. Collecting first into a `Vec<String>` meant
+/// a heavy long-lived install materialized its ENTIRE message history in RAM —
+/// multi-gigabyte on this path, which runs on every rescan — only for the caller
+/// to discard everything outside the 35-day window. The peak is now one row.
 #[cfg(target_os = "macos")]
-fn read_db_blobs(path: &Path, out: &mut Vec<String>) {
+fn read_db_blobs(path: &Path, emit: &mut dyn FnMut(&str)) {
     use rusqlite::{Connection, OpenFlags};
     let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
         return;
@@ -179,26 +185,27 @@ fn read_db_blobs(path: &Path, out: &mut Vec<String>) {
         return;
     };
     for blob in rows.flatten() {
-        out.push(blob);
+        emit(&blob);
     }
 }
 
 /// Non-macOS builds have no SQLite dependency; only the portable legacy-JSON path
 /// runs there. (OpenCode ships on macOS/Linux; the app itself is macOS.)
 #[cfg(not(target_os = "macos"))]
-fn read_db_blobs(_path: &Path, _out: &mut Vec<String>) {}
+fn read_db_blobs(_path: &Path, _emit: &mut dyn FnMut(&str)) {}
 
-/// Read legacy per-message JSON files under `storage/` (older installs and the
-/// pre-migration copy). Directory names vary by version, so we take any `*.json`
-/// under `storage/` and let the assistant/tokens filter drop non-message files.
-fn read_legacy_blobs(data_dir: &Path, out: &mut Vec<String>) {
+/// Stream legacy per-message JSON files under `storage/` (older installs and the
+/// pre-migration copy) into `emit`. Directory names vary by version, so we take
+/// any `*.json` under `storage/` and let the assistant/tokens filter drop
+/// non-message files. One file at a time, for the reason in `read_db_blobs`.
+fn read_legacy_blobs(data_dir: &Path, emit: &mut dyn FnMut(&str)) {
     let storage = data_dir.join("storage");
     if !storage.is_dir() {
         return;
     }
     for file in paths::collect_files(&storage, STORAGE_DEPTH, &|n| n.ends_with(".json")) {
         if let Ok(s) = std::fs::read_to_string(&file) {
-            out.push(s);
+            emit(&s);
         }
     }
 }
@@ -257,22 +264,22 @@ impl Provider for OpenCodeProvider {
         let authenticated = auth_present();
         let cutoff_ms = (now_unix - SCAN_WINDOW_DAYS * 86_400) as f64 * 1000.0;
 
-        // Gather raw message blobs from both stores, then parse+dedup once.
-        let mut blobs: Vec<String> = Vec::new();
-        if let Some(dir) = data_dir() {
-            let db = dir.join("opencode.db");
-            if db.is_file() {
-                read_db_blobs(&db, &mut blobs);
-            }
-            read_legacy_blobs(&dir, &mut blobs);
-        }
-
+        // Parse and dedup as each blob arrives, so only the in-window records are
+        // ever held. The DB is read before the legacy files so that when both
+        // stores hold one message, the DB copy is the one `seen` keeps.
         let mut seen: HashSet<String> = HashSet::new();
         let mut records: Vec<UsageRecord> = Vec::new();
-        for blob in &blobs {
-            if let Some(rec) = record_from(blob, cutoff_ms, &mut seen) {
-                records.push(rec);
+        if let Some(dir) = data_dir() {
+            let mut emit = |blob: &str| {
+                if let Some(rec) = record_from(blob, cutoff_ms, &mut seen) {
+                    records.push(rec);
+                }
+            };
+            let db = dir.join("opencode.db");
+            if db.is_file() {
+                read_db_blobs(&db, &mut emit);
             }
+            read_legacy_blobs(&dir, &mut emit);
         }
 
         let (windows, models, unpriceable) = aggregate(&records, now_unix);

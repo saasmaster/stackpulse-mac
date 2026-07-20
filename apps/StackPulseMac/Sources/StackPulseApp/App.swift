@@ -149,6 +149,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Earlier builds copied the Claude credential to a plaintext file. Clear
+        // that before anything else runs — it holds a live refresh token, and it
+        // only stops being a liability once it's gone. Off the main thread: it
+        // shells out to `security`. Content is re-homed into the Keychain first.
+        Task.detached(priority: .utility) { ClaudeAuthStore.migrateLegacyPlaintextBackup() }
+
         buildMainMenu()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)

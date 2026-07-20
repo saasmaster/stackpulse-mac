@@ -80,6 +80,9 @@ enum AntigravityQuotaClient {
         var ports: [Int]
         /// `--extension_server_port` — an HTTP-only fallback port.
         var extensionPort: Int?
+        /// The pid of the process whose argv gave us `csrf`. Ports are scoped to
+        /// it, so a token is never offered to a server we didn't read it from.
+        var pid: Int?
 
         /// Every endpoint worth trying, best first: HTTPS then HTTP on each
         /// listening port, then the plain-HTTP extension port.
@@ -101,25 +104,32 @@ enum AntigravityQuotaClient {
     static func discover() -> Discovery? {
         guard let ps = BoundedProcess.run(
             executable: "/bin/ps",
-            arguments: ["-ax", "-o", "args="],
+            arguments: ["-ax", "-o", "pid=,args="],
             timeout: 5
         )?.trimmedText else { return nil }
 
         guard var discovery = discovery(fromPSOutput: ps) else { return nil }
-        discovery.ports = listeningPorts()
+        discovery.ports = discovery.pid.map(listeningPorts(ofPID:)) ?? []
         return (discovery.ports.isEmpty && discovery.extensionPort == nil) ? nil : discovery
     }
 
-    /// Listening TCP ports of any `language_server` process. `ps -o args=` gives no
-    /// pid, so we match `lsof`'s COMMAND column by prefix instead of `-p <pid>`;
-    /// lsof truncates that column, hence the prefix match.
-    private static func listeningPorts() -> [Int] {
+    /// Listening TCP ports **of one pid**, scoped with `lsof -p`.
+    ///
+    /// It used to match `lsof`'s COMMAND column by prefix instead, because
+    /// `ps -o args=` carries no pid. That silently paired our CSRF token with
+    /// somebody else's socket: Windsurf ships a `language_server_macos_arm`
+    /// speaking the same service, lsof truncates COMMAND to `language_`, and the
+    /// first port that answered won — so another product's quota could be shown
+    /// as Antigravity's, with Antigravity's token POSTed to it. The pid now comes
+    /// from the same `ps` row the token did, so the two can't come apart. The
+    /// prefix filter stays as a second gate, since it costs nothing.
+    private static func listeningPorts(ofPID pid: Int) -> [Int] {
         let lsof = ["/usr/sbin/lsof", "/usr/bin/lsof"]
             .first { FileManager.default.fileExists(atPath: $0) }
         guard let lsof,
               let text = BoundedProcess.run(
                 executable: lsof,
-                arguments: ["-nP", "-iTCP", "-sTCP:LISTEN"],
+                arguments: ["-nP", "-iTCP", "-sTCP:LISTEN", "-p", String(pid)],
                 timeout: 5
               )?.trimmedText
         else { return [] }
@@ -128,22 +138,35 @@ enum AntigravityQuotaClient {
 
     // MARK: Discovery parsing (pure, headless-testable)
 
-    /// Pick the CSRF token (and any extension port) out of `ps -ax -o args=` output.
-    /// An exact IDE-flag marker match beats a `/antigravity/` path match; a process
-    /// with no readable `--csrf_token` is skipped, never guessed at.
+    /// Pick the CSRF token (and any extension port) out of `ps -ax -o pid=,args=`
+    /// output. An exact IDE-flag marker match beats a `/antigravity/` path match; a
+    /// process with no readable `--csrf_token` is skipped, never guessed at.
+    ///
+    /// The pid is carried out with the token so the port scan can be scoped to the
+    /// same process — see ``listeningPorts(ofPID:)``. Rows without a leading pid
+    /// still parse (the old `-o args=` shape), they just yield no ports.
     static func discovery(fromPSOutput output: String) -> Discovery? {
         var ranked: [(rank: Int, discovery: Discovery)] = []
         for rawLine in output.split(whereSeparator: \.isNewline) {
-            let command = rawLine.trimmingCharacters(in: .whitespaces)
+            let (pid, command) = splitPID(rawLine.trimmingCharacters(in: .whitespaces))
             guard !command.isEmpty,
                   commandMatchesProcess(command),
                   let rank = markerRank(command),
                   let csrf = extractFlag(command: command, flag: csrfFlag), !csrf.isEmpty
             else { continue }
             let port = extractFlag(command: command, flag: portFlag).flatMap { Int($0) }
-            ranked.append((rank, Discovery(csrf: csrf, ports: [], extensionPort: port)))
+            ranked.append((rank, Discovery(csrf: csrf, ports: [], extensionPort: port, pid: pid)))
         }
         return ranked.min { $0.rank < $1.rank }?.discovery
+    }
+
+    /// Peel `ps`'s leading pid column off a row, leaving argv for every other
+    /// check. A bare-integer first token is unambiguous here: argv0 is always a
+    /// path, so it can never be all digits.
+    static func splitPID(_ row: String) -> (pid: Int?, command: String) {
+        let parts = row.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2, let pid = Int(parts[0]) else { return (nil, row) }
+        return (pid, String(parts[1]))
     }
 
     /// Value of a CLI flag in a command string. Handles `--flag value` and `--flag=value`.
@@ -435,6 +458,20 @@ enum AntigravityQuotaClient {
               discovery(fromPSOutput: "/opt/language_server --csrf_token X") == nil,
               // Marker present but no CSRF ⇒ skipped, not guessed.
               discovery(fromPSOutput: "/x/antigravity/language_server --ide_name antigravity") == nil
+        else { return false }
+
+        // The pid travels with the token. Without it the port scan would fall back
+        // to a COMMAND-prefix match and could hand this token to Windsurf's server,
+        // so the binding is asserted, not assumed.
+        let withPIDs = """
+          701 /Applications/Windsurf.app/Contents/Resources/language_server_macos_arm --ide_name windsurf --csrf_token WRONG
+          902 /Users/x/.antigravity/bin/language_server_macos_arm --ide_name antigravity --csrf_token TOK123
+        """
+        guard let bound = discovery(fromPSOutput: withPIDs),
+              bound.csrf == "TOK123", bound.pid == 902,
+              // argv0 is always a path, so a pid-less row must not lose its first token.
+              splitPID("/opt/language_server --csrf_token X").pid == nil,
+              found.pid == nil
         else { return false }
 
         // 2) lsof rows: only `language_*` processes, deduped and ascending.

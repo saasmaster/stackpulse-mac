@@ -18,6 +18,72 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.20.0**, app pre-release.
 
+### Audit follow-up: credentials, attribution, and three silent lies (app 0.50.0)
+
+Three independent reviewers (security, red-team correctness, testing/maintainability)
+went over the live-provider work. What they found, and what changed:
+
+**Your credentials**
+
+- **The Claude credential was being copied to a plaintext file.** Backing up a
+  Keychain-protected secret wrote the whole blob — live `refreshToken` included — to
+  `~/Library/Application Support/StackPulse/claude-credential-backup.json`, readable by
+  any same-user process, Time Machine snapshot or crash reporter with no prompt. The
+  never-overwrite rule then left it there indefinitely. Backups of a Keychain secret
+  now go to a sibling **Keychain** service, so a backup never weakens the protection of
+  what it copies. Existing installs are migrated on launch: the content is re-homed
+  into the Keychain first, then the plaintext file is deleted.
+- **A credential write could duplicate the item instead of updating it.**
+  `security add-generic-password -U` matches on service *and* account, and the write
+  passed no account — so on the common user-scoped item it appended a **second** item
+  rather than updating the first. Two items under one service is exactly the state
+  Claude Code reads non-deterministically. The item's real account is now read (an
+  attribute-only query, so still no Keychain prompt) and reused for the write.
+- The credential file is now created at `0600` **before** the atomic write, closing the
+  window where it briefly existed at the umask default.
+
+**Numbers that weren't what they claimed**
+
+- **Antigravity could report another product's quota as yours.** Ports came from an
+  `lsof` scan filtered by command-name prefix, with no tie to the process whose CSRF
+  token we had read. Windsurf ships a `language_server_*` speaking the same protocol —
+  it could answer first, and its quota rendered as your Antigravity usage while your
+  token was POSTed to it. The pid now travels with the token from the same `ps` row and
+  the scan is `lsof -p <pid>`.
+- **Codex and Z.ai could mislabel a window.** Both picked "5h" or "weekly" from slot
+  order or a coarse threshold rather than the measured duration, so a 12-hour or 30-day
+  window was presented as a 5-hour session. Both now derive the label from the window
+  itself, using the same vocabulary as the Rust core — which already refused this.
+- **Grok and Cursor turned absence into a measured zero.** A missing
+  `creditUsagePercent` became "0% used", and Cursor's `limit: 0, remaining: 0` (the
+  shape an account with on-demand spending *disabled* sends) became a measured "$0.00
+  extra usage". Both now omit the reading. Absence is not zero.
+- VoiceOver announced menu-bar readings under the wrong window names — Cursor's total-
+  and auto-usage meters were read aloud as "session" and "weekly". Each value now
+  carries its own label. This is the only readout a blind user gets, since the strip is
+  an image.
+
+**Stability**
+
+- Fixed **undefined behavior in the menu-bar render path**: a `CGContext` was retaining
+  a pointer to a Swift array past the lifetime that pointer was valid for, then drawing
+  through it.
+- A stuck live fetch could block that provider **for the life of the process**.
+  `URLSession`'s timeout is an *idle* timeout, so a server dribbling bytes never tripped
+  it. There is now a hard 30-second ceiling on the whole attempt.
+- The OpenCode scanner loaded every message ever written into memory before filtering to
+  the last 35 days — multi-gigabyte on a long-lived install, on every rescan. It now
+  streams, peaking at one record.
+- A provider error accompanied by data (Copilot's org-managed seat) was silently
+  discarded, and the "these limits came from your Desktop login" caveat outlived the
+  values it qualified.
+
+**Internals** — one shared HTTP/JSON helper replaced nine copies of `coerceDouble`,
+six hand-written percent clamps, and seven duplicated request helpers; the SVG mark
+parser gained exact-geometry fixtures (the old test would have passed on a mis-reflected
+curve); and the capability test asserts names instead of a count, so a *substitution*
+fails rather than passing at 22.
+
 ### Live readings for every remaining provider (app 0.48.0)
 
 Completes the sweep started with Cursor: **Codex, Copilot, Antigravity, Z.ai, Grok

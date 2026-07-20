@@ -137,11 +137,15 @@ enum ZaiUsageClient {
         var limits: [LimitWindow] = []
         for entry in entries where isType(entry, "TOKENS_LIMIT") {
             guard let minutes = windowMinutes(entry),
-                  let percent = coerceDouble(entry["percentage"]), percent.isFinite
+                  let percent = LiveUsageJSON.coerceDouble(entry["percentage"]), percent.isFinite
             else { continue }
+            // Named after the duration Z.ai reported, not bucketed by it: the old
+            // `< 24h ⇒ "5h"` split presented a 12-hour token window as a 5-hour
+            // session and a 30-day one as weekly, with the truth visible only in
+            // `window_minutes`, which no surface prints.
             limits.append(LimitWindow(
-                label: minutes < 24 * 60 ? "5h" : "weekly",
-                used_percent: clampPercent(percent),
+                label: LiveUsageJSON.windowLabel(minutes: minutes),
+                used_percent: LiveUsageJSON.clampPercent(percent),
                 window_minutes: minutes,
                 resets_at_unix: resetSeconds(entry),
                 provenance: liveProvenance,
@@ -149,12 +153,12 @@ enum ZaiUsageClient {
             ))
         }
         if let web = entries.first(where: { isType($0, "TIME_LIMIT") }),
-           let used = coerceDouble(web["currentValue"]),
-           let limit = coerceDouble(web["usage"]),
+           let used = LiveUsageJSON.coerceDouble(web["currentValue"]),
+           let limit = LiveUsageJSON.coerceDouble(web["usage"]),
            used >= 0, limit > 0 {
             limits.append(LimitWindow(
                 label: "web searches",
-                used_percent: clampPercent(used / limit * 100),
+                used_percent: LiveUsageJSON.clampPercent(used / limit * 100),
                 window_minutes: 30 * 24 * 60,
                 resets_at_unix: resetSeconds(web),
                 provenance: liveProvenance,
@@ -187,8 +191,8 @@ enum ZaiUsageClient {
     /// `nil`, which drops that meter — a future window we can't read must not be
     /// silently mislabelled as one we can.
     static func windowMinutes(_ entry: [String: Any]) -> Int? {
-        guard let unit = coerceDouble(entry["unit"]),
-              let number = coerceDouble(entry["number"]), number > 0
+        guard let unit = LiveUsageJSON.coerceDouble(entry["unit"]),
+              let number = LiveUsageJSON.coerceDouble(entry["number"]), number > 0
         else { return nil }
         let unitMinutes: Double
         switch Int(unit) {
@@ -205,52 +209,19 @@ enum ZaiUsageClient {
 
     /// `nextResetTime` arrives as epoch **milliseconds**; we store seconds.
     private static func resetSeconds(_ entry: [String: Any]) -> Int64? {
-        guard let ms = coerceDouble(entry["nextResetTime"]), ms > 0 else { return nil }
+        guard let ms = LiveUsageJSON.coerceDouble(entry["nextResetTime"]), ms > 0 else { return nil }
         return Int64(ms / 1000)
-    }
-
-    private static func clampPercent(_ v: Double) -> Double { max(0, min(100, v)) }
-
-    private static func coerceDouble(_ any: Any?) -> Double? {
-        switch any {
-        case let n as NSNumber: return n.doubleValue
-        case let d as Double: return d
-        case let i as Int: return Double(i)
-        case let s as String: return Double(s)
-        default: return nil
-        }
     }
 
     // MARK: Networking
 
-    private enum HTTPOutcome {
-        case ok(Data)
-        case unauthorized
-        case notFound
-        case httpError(Int)
-        case failure
-    }
-
     /// A plain GET. The key goes on the Authorization header and nowhere else —
     /// never a query parameter, where it would land in logs and history.
-    private static func get(_ url: URL, apiKey: String) async -> HTTPOutcome {
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.timeoutInterval = 15
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else { return .failure }
-            switch http.statusCode {
-            case 200..<300: return .ok(data)
-            case 401, 403: return .unauthorized
-            case 404: return .notFound
-            default: return .httpError(http.statusCode)
-            }
-        } catch {
-            return .failure
-        }
+    private static func get(_ url: URL, apiKey: String) async -> LiveUsageHTTP.Outcome {
+        await LiveUsageHTTP.get(url, headers: [
+            "Authorization": "Bearer \(apiKey)",
+            "Accept": "application/json",
+        ])
     }
 
     // MARK: Headless self-test
@@ -311,6 +282,21 @@ enum ZaiUsageClient {
         guard parseQuota(Data(odd.utf8), capturedAt: 0).limits.isEmpty,
               windowMinutes(["unit": 6, "number": 1]) == 10_080,
               windowMinutes(["unit": 3, "number": 0]) == nil
+        else { return false }
+
+        // 3b) A window that is neither 5h nor weekly is named after its real duration
+        //     instead of being bucketed into one of the two familiar labels: a
+        //     12-hour token window is "12h", a 30-day one is "30d". Getting this
+        //     wrong also splits one quota into two rows, since SnapshotStore dedups
+        //     by label and the Rust core labels by duration.
+        let unusual = """
+        { "limits": [ { "type": "TOKENS_LIMIT", "unit": 3, "number": 12, "percentage": 20 },
+                      { "type": "TOKENS_LIMIT", "unit": 5, "number": 1, "percentage": 30 } ] }
+        """
+        let u = parseQuota(Data(unusual.utf8), capturedAt: 0)
+        guard u.limits.count == 2,
+              u.limits[0].label == "12h", u.limits[0].window_minutes == 720,
+              u.limits[1].label == "30d", u.limits[1].window_minutes == 43_200
         else { return false }
 
         // 4) Percentages are clamped into 0…100, never trusted blindly.

@@ -224,7 +224,7 @@ enum AnthropicUsageClient {
         if let limits = root["limits"] as? [[String: Any]] {
             for entry in limits {
                 if let active = entry["is_active"] as? Bool, active == false { continue }
-                guard let raw = coerceDouble(entry["percent"] ?? entry["utilization"]) else { continue }
+                guard let raw = LiveUsageJSON.coerceDouble(entry["percent"] ?? entry["utilization"]) else { continue }
                 let kind = (entry["kind"] as? String) ?? ""
                 let group = entry["group"] as? String
                 add(Staged(
@@ -245,7 +245,7 @@ enum AnthropicUsageClient {
         for (key, label) in legacy {
             guard
                 let entry = root[key] as? [String: Any],
-                let raw = coerceDouble(entry["utilization"] ?? entry["percent"])
+                let raw = LiveUsageJSON.coerceDouble(entry["utilization"] ?? entry["percent"])
             else { continue }
             add(Staged(label: label, raw: raw, resetsAt: parseResetsAt(entry["resets_at"])))
         }
@@ -317,20 +317,10 @@ enum AnthropicUsageClient {
 
     private static let percentScaleDefaultsKey = "stackpulse.anthropicUsage.percentScaleObserved"
 
-    static func coerceDouble(_ any: Any?) -> Double? {
-        switch any {
-        case let n as NSNumber: return n.doubleValue
-        case let d as Double: return d
-        case let i as Int: return Double(i)
-        case let s as String: return Double(s)
-        default: return nil
-        }
-    }
-
     /// Parses `resets_at`, which may be a unix epoch (seconds OR milliseconds),
     /// a numeric string, or an ISO-8601 timestamp. Returns unix **seconds**.
     static func parseResetsAt(_ any: Any?) -> Int64? {
-        if let d = coerceDouble(any) {
+        if let d = LiveUsageJSON.coerceDouble(any) {
             return d > 1_000_000_000_000 ? Int64(d / 1000.0) : Int64(d)
         }
         if let s = any as? String {

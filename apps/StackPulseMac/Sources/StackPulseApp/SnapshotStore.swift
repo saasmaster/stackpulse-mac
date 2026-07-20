@@ -154,6 +154,11 @@ final class SnapshotStore: ObservableObject {
                 lastGoodLiveLimitsAt = nil
                 liveLimitsError = nil
                 liveLimitsRecovery = nil
+                // The caveat describes values that are being discarded right here,
+                // so it has to go with them. Left behind, the "these are your
+                // Desktop login's limits" warning outlives what it qualified and
+                // reappears attached to the next account's numbers.
+                liveLimitsCaveat = nil
                 liveLimitsUpdatedAt = nil
                 try? FileManager.default.removeItem(at: liveLimitsCacheURL)
             }
@@ -1567,6 +1572,10 @@ final class SnapshotStore: ObservableObject {
     /// Same spacing as the Claude fetch — bounds the request rate either way.
     private let liveProviderRefetchInterval: TimeInterval = 8 * 60
 
+    /// Hard ceiling on one live fetch, well under `liveProviderRefetchInterval` so
+    /// a stuck attempt can never outlive the window that would retry it.
+    private let liveFetchDeadline: TimeInterval = 30
+
     /// Every provider whose reading comes from a live API, with its fetcher.
     /// Claude is deliberately absent — it owns the richer flow above.
     private static let liveFetchers: [(id: String, fetch: @Sendable () async -> LiveProviderReading)] = [
@@ -1673,15 +1682,42 @@ final class SnapshotStore: ObservableObject {
 
         inFlightLive.insert(providerID)
         liveAttemptAt[providerID] = Date()
+        // Read before the Task: inside it `self` is weak, so an instance property
+        // isn't reachable until after the `guard let self` — which is too late.
+        let deadlineSeconds = liveFetchDeadline
         Task { [weak self] in
-            let reading = await fetch()
+            // Bound the WHOLE attempt, not just the socket. Every client sets
+            // `timeoutInterval`, which is URLSession's *idle* timeout: a server
+            // that dribbles one byte at a time never trips it, and one such
+            // request would pin this provider in `inFlightLive` for the life of
+            // the process — silently, because step 1 keeps re-applying the last
+            // good reading, so nothing on screen looks wrong. Cancelling the task
+            // does reach URLSession's async call, unlike a plain timeout race.
+            let work = Task { await fetch() }
+            let deadline = Task {
+                try? await Task.sleep(nanoseconds: UInt64(deadlineSeconds * 1_000_000_000))
+                work.cancel()
+            }
+            let reading = await work.value
+            deadline.cancel()
+
             guard let self else { return }
             self.inFlightLive.remove(providerID)
             guard self.liveLimitsEnabled else { return }
-            if !reading.isEmpty {
+            if !reading.isEmpty, reading.error == nil {
                 self.liveReadings[providerID] = reading
                 self.liveReadingAt[providerID] = Date()
                 self.liveProviderErrors[providerID] = nil
+                if let plan = reading.planName { self.liveProviderPlans[providerID] = plan }
+                self.applyLiveReading(reading, to: providerID)
+            } else if !reading.isEmpty {
+                // Values AND a reason — Copilot's org-managed seat is the case:
+                // no limits, a note-only balance, and an explanation. Showing the
+                // values while dropping the reason is how "why is this empty?"
+                // becomes unanswerable, so keep both.
+                self.liveReadings[providerID] = reading
+                self.liveReadingAt[providerID] = Date()
+                self.liveProviderErrors[providerID] = reading.error
                 if let plan = reading.planName { self.liveProviderPlans[providerID] = plan }
                 self.applyLiveReading(reading, to: providerID)
             } else {
@@ -1875,18 +1911,33 @@ final class SnapshotStore: ObservableObject {
     /// reading(s). Two readings are rendered STACKED (session over weekly), which
     /// is why they stay separate strings rather than one joined label.
     struct MenuBarItem: Identifiable, Equatable {
+        /// One reading plus the window it came from.
+        ///
+        /// The label travels with the value because the accessibility readout
+        /// names each window out loud. It used to infer the names from position —
+        /// values[0] "session", values[1] "weekly" — which only holds for labels
+        /// the sort actually ranks. Cursor's three windows all rank equal, so
+        /// VoiceOver announced its total- and auto-usage meters as session and
+        /// weekly: real numbers under the wrong names, and the only readout a
+        /// blind user gets, since the strip is an image.
+        struct Reading: Equatable {
+            /// Limit-window label; `nil` for the token-volume fallback.
+            let label: String?
+            let text: String
+        }
         let id: String            // provider id — also keys the brand mark
-        let symbolName: String    // SF Symbol fallback when there's no vector mark
         let displayName: String   // for the VoiceOver description
-        let values: [String]      // 1–2 readings, e.g. ["41%", "34%"] or ["248M"]
+        let values: [Reading]     // 1–2 readings, e.g. 41% / 34%, or one token count
     }
 
     /// A compact, **per-provider** menu-bar readout: a provider icon plus its
     /// reading. Both limit windows are shown when the provider reports two (session
     /// then weekly, e.g. "41%·34%") — seeing only the hottest one hid the fact that
     /// a comfortable session can sit inside a nearly-spent week. Percentages are
-    /// **remaining**, matching every card. Falls back to today's token volume for a
-    /// provider with no limits. Up to three providers.
+    /// **used**, matching `Format.limitUsed` on every card — this comment used to
+    /// claim "remaining" while the code emitted used, which is exactly how someone
+    /// ends up "fixing" the working side and inverting the menu bar. Falls back to
+    /// today's token volume for a provider with no limits. Up to three providers.
     var menuBarItems: [MenuBarItem] {
         guard let snapshot else { return [] }
         var items: [MenuBarItem] = []
@@ -1905,7 +1956,7 @@ final class SnapshotStore: ObservableObject {
             // left the strip showing nothing at all, which is worse than showing a
             // real number whose source the card names. Only *stale* readings are
             // dropped, above.
-            let values: [String]
+            let values: [MenuBarItem.Reading]
             if !fresh.isEmpty {
                 // Session on top, weekly below (the order people read them in);
                 // anything else keeps the provider's own order behind those two.
@@ -1919,14 +1970,15 @@ final class SnapshotStore: ObservableObject {
                 values = fresh
                     .sorted { rank($0) < rank($1) }
                     .prefix(2)
-                    .map { "\(Int(Format.limitFraction($0.used_percent) * 100))%" }
+                    .map { MenuBarItem.Reading(
+                        label: $0.label,
+                        text: "\(Int(Format.limitFraction($0.used_percent) * 100))%") }
             } else if let tokens = p.today?.tokens.grandTotal, tokens > 0 {
-                values = [Format.tokens(tokens)]
+                values = [MenuBarItem.Reading(label: nil, text: Format.tokens(tokens))]
             } else {
                 continue
             }
             items.append(MenuBarItem(id: p.provider,
-                                     symbolName: p.symbolName,
                                      displayName: p.display_name,
                                      values: values))
             if items.count >= 3 { break }

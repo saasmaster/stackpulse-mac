@@ -235,11 +235,11 @@ enum CodexLiveUsageClient {
             var fallbackKind: WindowKind
         }
         func candidate(_ value: Any?, headerKey: String, fallback: WindowKind) -> Candidate? {
-            let headerPercent = coerceDouble(headers[headerKey])
+            let headerPercent = LiveUsageJSON.coerceDouble(headers[headerKey])
             guard let window = value as? [String: Any] ?? (headerPercent == nil ? nil : [:])
             else { return nil }
             return Candidate(window: window,
-                             usedPercent: coerceDouble(window["used_percent"]) ?? headerPercent,
+                             usedPercent: LiveUsageJSON.coerceDouble(window["used_percent"]) ?? headerPercent,
                              fallbackKind: fallback)
         }
         let candidates = [
@@ -257,10 +257,16 @@ enum CodexLiveUsageClient {
             // No percentage ⇒ no meter. A window we can't read is absent, not 0%.
             guard let chosen = exact ?? fallback, let used = chosen.usedPercent else { return nil }
             let defaultMinutes = kind == .session ? 300 : 10_080
+            // Label the window we MEASURED, not the slot it arrived in. A candidate
+            // reaches this line via slot-order fallback precisely when its duration
+            // is one we don't recognise, so `kind` is the least trustworthy thing to
+            // name it by — an 86400s window would go out as "5h" beside its own
+            // window_minutes of 1440, and disagree with the core's "1d" row.
+            let minutes = windowMinutes(chosen.window) ?? defaultMinutes
             return LimitWindow(
-                label: kind == .session ? sessionLabel : weeklyLabel,
-                used_percent: max(0, min(100, used)),
-                window_minutes: windowMinutes(chosen.window) ?? defaultMinutes,
+                label: LiveUsageJSON.windowLabel(minutes: minutes),
+                used_percent: LiveUsageJSON.clampPercent(used),
+                window_minutes: minutes,
                 resets_at_unix: resetsAt(chosen.window, now: now),
                 provenance: liveProvenance,
                 captured_at_unix: capturedAt
@@ -287,7 +293,7 @@ enum CodexLiveUsageClient {
 
     /// `limit_window_seconds` → whole minutes, or `nil` when absent.
     static func windowMinutes(_ window: [String: Any]) -> Int? {
-        guard let seconds = coerceDouble(window["limit_window_seconds"]), seconds > 0
+        guard let seconds = LiveUsageJSON.coerceDouble(window["limit_window_seconds"]), seconds > 0
         else { return nil }
         return Int(seconds / 60)
     }
@@ -296,8 +302,8 @@ enum CodexLiveUsageClient {
     /// `reset_after_seconds` measured from the fetch. `nil` when neither is given —
     /// we don't invent a reset.
     static func resetsAt(_ window: [String: Any], now: Date) -> Int64? {
-        if let at = coerceDouble(window["reset_at"]) { return Int64(at) }
-        if let after = coerceDouble(window["reset_after_seconds"]) {
+        if let at = LiveUsageJSON.coerceDouble(window["reset_at"]) { return Int64(at) }
+        if let after = LiveUsageJSON.coerceDouble(window["reset_after_seconds"]) {
             return Int64(now.timeIntervalSince1970 + after)
         }
         return nil
@@ -308,10 +314,10 @@ enum CodexLiveUsageClient {
     /// (absence ≠ zero). Falls back to the `x-codex-credits-balance` header.
     static func creditsBalance(root: [String: Any], headers: [String: String] = [:]) -> Double? {
         if let credits = root["credits"] as? [String: Any] {
-            if let balance = coerceDouble(credits["balance"]) { return balance }
+            if let balance = LiveUsageJSON.coerceDouble(credits["balance"]) { return balance }
             if credits["has_credits"] as? Bool == false { return 0 }
         }
-        return coerceDouble(headers["x-codex-credits-balance"])
+        return LiveUsageJSON.coerceDouble(headers["x-codex-credits-balance"])
     }
 
     static func planType(_ value: Any?) -> String? {
@@ -319,16 +325,6 @@ enum CodexLiveUsageClient {
               !raw.isEmpty
         else { return nil }
         return raw
-    }
-
-    private static func coerceDouble(_ any: Any?) -> Double? {
-        switch any {
-        case let n as NSNumber: return n.doubleValue
-        case let d as Double: return d
-        case let i as Int: return Double(i)
-        case let s as String: return Double(s)
-        default: return nil
-        }
     }
 
     // MARK: Headless self-test
@@ -394,6 +390,19 @@ enum CodexLiveUsageClient {
         guard nd.limits.count == 2,
               nd.limits[0].label == sessionLabel, nd.limits[0].window_minutes == 300,
               nd.limits[1].label == weeklyLabel, nd.limits[1].window_minutes == 10_080
+        else { return false }
+
+        // 3b) An unfamiliar duration reaches the primary slot by fallback, but is
+        //     labeled by what it MEASURES: 86400s is "1d", never "5h". The Rust core
+        //     emits "1d" for the same payload; a mismatch here would survive
+        //     SnapshotStore.mergeLimits as two rows for one quota.
+        let dayWindow = """
+        { "rate_limit": { "primary_window":
+            { "used_percent": 12.0, "limit_window_seconds": 86400 } } }
+        """
+        let dw = parseUsage(Data(dayWindow.utf8), capturedAt: 1, now: now)
+        guard dw.limits.count == 1,
+              dw.limits[0].label == "1d", dw.limits[0].window_minutes == 1440
         else { return false }
 
         // 4) Header fallback: percentages carried only on the response headers.

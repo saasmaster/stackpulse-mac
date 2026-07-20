@@ -73,6 +73,16 @@ jobs:
         # green. Debug build so tests actually run (release excludes test targets).
         working-directory: apps/StackPulseMac
         run: swift test
+      - name: Parser self-tests (--selftest-parsers)
+        working-directory: apps/StackPulseMac
+        # `swift test` covers these self-tests directly, but the FLAG is what
+        # `scripts/install-app.sh` runs to prove a shipped bundle really carries
+        # this build's parsers. Nothing in CI invoked it, so the flag could rot —
+        # a renamed or dropped self-test would silently stop being checked at
+        # install time and no PR would notice. Run it here so the release gate
+        # itself stays wired.
+        run: ./.build/release/StackPulseApp --selftest-parsers
+
       - name: Headless snapshot smoke (Swift -> FFI -> core)
         working-directory: apps/StackPulseMac
         run: |

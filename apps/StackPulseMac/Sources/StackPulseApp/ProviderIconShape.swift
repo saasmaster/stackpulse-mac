@@ -76,10 +76,75 @@ struct ProviderIconShape: Shape {
 
     // MARK: - Self-test
 
+    /// Hand-computed geometry fixtures, one per parser feature that can fail *quietly*.
+    ///
+    /// The mark loop below only proves a `d` string yields *some* non-degenerate shape. That is a
+    /// blind spot with a shape we have paid for before (a substring model match silently mispriced
+    /// Opus 4.8): a mis-reflected `S`/`T`, a relative `l`/`c` applied as absolute, or a dropped
+    /// implicit command repetition all still produce a non-empty path with a positive bounding box.
+    /// Only exact bounds separate a correct parse from a plausible-looking wrong one.
+    ///
+    /// Every expected value here was derived from the Bézier at its extremum by hand — none of it
+    /// was read back out of this parser, which is the whole point.
+    private static let geometryFixtures: [(d: String, x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat)] = [
+        // Relative lineto + closepath: a 10×10 square on the origin.
+        ("M0 0 l10 0 l0 10 z", 0, 0, 10, 10),
+
+        // Same diagonal written absolute and relative. Identical bounds, or `l` is being treated as
+        // absolute — which draws a plausible line to the wrong place rather than failing.
+        ("M10 10 L20 20", 10, 10, 10, 10),
+        ("M10 10 l10 10", 10, 10, 10, 10),
+        // The same pairing for a cubic, where an absolute-vs-relative slip is far less visible.
+        ("M0 0 C10 0 10 10 20 10", 0, 0, 20, 10),
+        ("M0 0 c10 0 10 10 20 10", 0, 0, 20, 10),
+
+        // Smooth cubic. The `S`'s first control is the reflection of the previous C2 (10,10) about
+        // the current point (10,0), i.e. (10,-10); each half then peaks at ±7.5. Drop the reflection
+        // (use the current point instead) and the height collapses to 11.94 — still a fine-looking
+        // curve, just not the vendor's.
+        ("M0 0 C0 10 10 10 10 0 S20 -10 20 0", 0, -7.5, 20, 15),
+
+        // Smooth quad. The `T`'s control is the reflection of (10,-20) about (20,0), i.e. (30,20),
+        // so the second hump mirrors the first and the height is 20. Without the reflection the
+        // control lands on the current point, the second hump flattens, and the height reads 10.
+        ("M0 0 Q10 -20 20 0 T40 0", 0, -10, 40, 20),
+
+        // Implicit command repetition: the second coordinate pair repeats the `L`. If it were
+        // dropped the path would be the flat segment (0,0)→(5,0) — height 0, not 5.
+        ("M0 0 L5 0 5 5", 0, 0, 5, 5),
+
+        // No embedded mark uses `A`, so this fixture is the arc branch's only exercise — the branch
+        // is kept because deleting it would make a future mark's arc silently vanish, and kept
+        // *pinned* because unreached code rots. A radius-10 semicircle from (0,0) to (20,0) sweeping
+        // positive bulges to
+        // y = -10: width 20, height 10. Endpoint→center conversion is the easiest part of an SVG
+        // parser to get subtly wrong, and an untested one would surface as a wrong shape the first
+        // time a future mark ships an arc.
+        ("M0 0 A10 10 0 0 1 20 0", 0, -10, 20, 10),
+    ]
+
+    /// Bounds come out of Core Graphics' numeric Bézier extremum solve on top of `cos`/`sin`, so
+    /// exact equality isn't available. 0.05 is still ~60× tighter than the smallest regression
+    /// above (dropping the `S` reflection moves the height by 3.06), so the slack buys robustness
+    /// without blunting a single assertion.
+    private static let geometryTolerance: CGFloat = 0.05
+
     /// Parses every embedded mark and asserts it yields a non-empty path with finite, non-degenerate
     /// bounds. Cheap insurance against a mark being pasted in truncated: a half-copied `d` string
     /// still parses, it just silently draws a sliver, which is far easier to catch here than by eye.
+    /// The exact-geometry fixtures run first — they are what actually pins the parser; the mark loop
+    /// is the smoke check on top.
     static func _selftest() -> Bool {
+        for f in geometryFixtures {
+            let b = SVGPath.parse(f.d).cgPath.boundingBoxOfPath
+            guard !b.isNull, !b.isInfinite else { return false }
+            guard abs(b.minX - f.x) <= geometryTolerance,
+                  abs(b.minY - f.y) <= geometryTolerance,
+                  abs(b.width - f.w) <= geometryTolerance,
+                  abs(b.height - f.h) <= geometryTolerance
+            else { return false }
+        }
+
         for id in ProviderMarks.allMarkIDs {
             guard let d = ProviderMarks.mark(for: id) else { return false }
             let parsed = SVGPath.parse(d)

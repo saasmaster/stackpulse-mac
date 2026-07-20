@@ -228,9 +228,9 @@ enum ProviderBalanceClient {
         else { return nil }
 
         let info = infos.first { ($0["currency"] as? String)?.uppercased() == "USD" } ?? infos[0]
-        guard let total = coerceDouble(info["total_balance"]) else { return nil }
+        guard let total = LiveUsageJSON.coerceDouble(info["total_balance"]) else { return nil }
         let currency = (info["currency"] as? String) ?? "USD"
-        let granted = coerceDouble(info["granted_balance"]) ?? 0
+        let granted = LiveUsageJSON.coerceDouble(info["granted_balance"]) ?? 0
         let note = granted > 0 ? String(format: "Includes $%.2f granted credit", granted) : nil
         return ProviderBalance(
             remaining_usd: total,
@@ -307,9 +307,9 @@ enum ProviderBalanceClient {
         var netAmount = 0.0
         var requests = 0.0
         for it in items {
-            netAmount += coerceDouble(it["netAmount"]) ?? 0
+            netAmount += LiveUsageJSON.coerceDouble(it["netAmount"]) ?? 0
             if (it["unitType"] as? String)?.lowercased() == "requests" {
-                requests += coerceDouble(it["netQuantity"]) ?? 0
+                requests += LiveUsageJSON.coerceDouble(it["netQuantity"]) ?? 0
             }
         }
 
@@ -336,58 +336,32 @@ enum ProviderBalanceClient {
 
     /// A GitHub API GET: same key-hygiene as `request`, plus the GitHub-required
     /// `Accept`/`X-GitHub-Api-Version` headers.
-    private static func githubRequest(_ url: URL, key: String) async -> HTTPOutcome {
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.timeoutInterval = 15
-        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else { return .failure }
-            switch http.statusCode {
-            case 200: return .ok(data)
-            case 401, 403: return .unauthorized
-            case 404: return .notFound
-            default: return .httpError(http.statusCode)
-            }
-        } catch {
-            return .failure
-        }
-    }
-
-    private enum HTTPOutcome {
-        case ok(Data)
-        case unauthorized       // 401 / 403
-        case notFound           // 404
-        case httpError(Int)     // any other non-200
-        case failure            // offline / TLS / timeout / non-HTTP
+    private static func githubRequest(_ url: URL, key: String) async -> LiveUsageHTTP.Outcome {
+        await LiveUsageHTTP.get(
+            url,
+            headers: [
+                "Authorization": "Bearer \(key)",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            ],
+            // These balance endpoints only ever answer a bare 200; a 2xx that isn't
+            // 200 is drift, not a balance, and must not be parsed as one.
+            success: 200..<201
+        )
     }
 
     /// A single GET with the key on the `Authorization: Bearer` header and
     /// nowhere else. Never logs the key, the URL's credentials, or the body.
-    private static func request(_ url: URL, key: String) async -> HTTPOutcome {
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.timeoutInterval = 15
-        // The key goes out on THIS header, to THIS endpoint, and nowhere else.
-        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else { return .failure }
-            switch http.statusCode {
-            case 200: return .ok(data)
-            case 401, 403: return .unauthorized
-            case 404: return .notFound
-            default: return .httpError(http.statusCode)
-            }
-        } catch {
-            // Report the category, never the details.
-            return .failure
-        }
+    private static func request(_ url: URL, key: String) async -> LiveUsageHTTP.Outcome {
+        await LiveUsageHTTP.get(
+            url,
+            headers: [
+                // The key goes out on THIS header, to THIS endpoint, and nowhere else.
+                "Authorization": "Bearer \(key)",
+                "Accept": "application/json",
+            ],
+            success: 200..<201
+        )
     }
 
     // MARK: Parsing (pure, headless-testable)
@@ -404,8 +378,8 @@ enum ProviderBalanceClient {
         else { return nil }
 
         // /credits shape.
-        if let total = coerceDouble(obj["total_credits"]) {
-            let usage = coerceDouble(obj["total_usage"]) ?? 0
+        if let total = LiveUsageJSON.coerceDouble(obj["total_credits"]) {
+            let usage = LiveUsageJSON.coerceDouble(obj["total_usage"]) ?? 0
             return ProviderBalance(
                 remaining_usd: total - usage,
                 used_usd: usage,
@@ -417,8 +391,8 @@ enum ProviderBalanceClient {
 
         // /auth/key shape.
         if obj["usage"] != nil || obj.keys.contains("limit") {
-            let usage = coerceDouble(obj["usage"]) ?? 0
-            let limit = coerceDouble(obj["limit"])            // nil ⇒ unlimited
+            let usage = LiveUsageJSON.coerceDouble(obj["usage"]) ?? 0
+            let limit = LiveUsageJSON.coerceDouble(obj["limit"])            // nil ⇒ unlimited
             let remaining = limit.map { $0 - usage }
             return ProviderBalance(
                 remaining_usd: remaining,
@@ -444,9 +418,9 @@ enum ProviderBalanceClient {
             let obj = root["data"] as? [String: Any]
         else { return nil }
 
-        let usage = coerceDouble(obj["usage"])
-        let remaining = coerceDouble(obj["limit_remaining"]) // nil ⇒ uncapped
-        let limit = coerceDouble(obj["limit"])               // nil ⇒ uncapped
+        let usage = LiveUsageJSON.coerceDouble(obj["usage"])
+        let remaining = LiveUsageJSON.coerceDouble(obj["limit_remaining"]) // nil ⇒ uncapped
+        let limit = LiveUsageJSON.coerceDouble(obj["limit"])               // nil ⇒ uncapped
         // Distinguish the /key shape from /credits (`total_credits`) and /auth/key
         // (`usage` + `limit` but no windowed fields): require a /key-only marker.
         let looksLikeKey = obj["limit_remaining"] != nil
@@ -455,9 +429,9 @@ enum ProviderBalanceClient {
         guard looksLikeKey, usage != nil || remaining != nil else { return nil }
 
         var parts: [String] = []
-        if let d = coerceDouble(obj["usage_daily"]) { parts.append(String(format: "today $%.2f", d)) }
-        if let w = coerceDouble(obj["usage_weekly"]) { parts.append(String(format: "7d $%.2f", w)) }
-        if let m = coerceDouble(obj["usage_monthly"]) { parts.append(String(format: "30d $%.2f", m)) }
+        if let d = LiveUsageJSON.coerceDouble(obj["usage_daily"]) { parts.append(String(format: "today $%.2f", d)) }
+        if let w = LiveUsageJSON.coerceDouble(obj["usage_weekly"]) { parts.append(String(format: "7d $%.2f", w)) }
+        if let m = LiveUsageJSON.coerceDouble(obj["usage_monthly"]) { parts.append(String(format: "30d $%.2f", m)) }
         var note: String? = parts.isEmpty ? nil : "Spend: " + parts.joined(separator: " · ")
         if (obj["is_free_tier"] as? Bool) == true {
             note = [note, "Free tier"].compactMap { $0 }.joined(separator: " · ")
@@ -480,8 +454,8 @@ enum ProviderBalanceClient {
         else { return nil }
 
         let info = (root["info"] as? [String: Any]) ?? root
-        let spend = coerceDouble(info["spend"])
-        let maxBudget = coerceDouble(info["max_budget"])
+        let spend = LiveUsageJSON.coerceDouble(info["spend"])
+        let maxBudget = LiveUsageJSON.coerceDouble(info["max_budget"])
         guard spend != nil || maxBudget != nil else { return nil }
 
         let remaining: Double?
@@ -511,16 +485,6 @@ enum ProviderBalanceClient {
         while s.hasSuffix("/") { s.removeLast() }
         guard let base = URL(string: s) else { return nil }
         return base.appendingPathComponent("key/info")
-    }
-
-    private static func coerceDouble(_ any: Any?) -> Double? {
-        switch any {
-        case let n as NSNumber: return n.doubleValue
-        case let d as Double: return d
-        case let i as Int: return Double(i)
-        case let s as String: return Double(s)
-        default: return nil
-        }
     }
 
     // MARK: Headless self-test

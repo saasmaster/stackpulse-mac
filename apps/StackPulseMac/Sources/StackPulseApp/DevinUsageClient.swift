@@ -219,10 +219,10 @@ enum DevinUsageClient {
         var limits: [LimitWindow] = []
         /// One quota row: remaining → used, clamped, with Devin's own reset time.
         func addQuota(_ label: String, remaining: Any?, resetKey: String, minutes: Int) {
-            guard let remaining = coerceDouble(remaining), remaining.isFinite else { return }
+            guard let remaining = LiveUsageJSON.coerceDouble(remaining), remaining.isFinite else { return }
             limits.append(LimitWindow(
                 label: label,
-                used_percent: max(0, min(100, 100 - remaining)),
+                used_percent: LiveUsageJSON.clampPercent(100 - remaining),
                 window_minutes: minutes,
                 resets_at_unix: unixSeconds(planStatus[resetKey]),
                 provenance: liveProvenance,
@@ -246,7 +246,7 @@ enum DevinUsageClient {
     /// Overage balance in USD from micros. `nil` when the field is missing or
     /// non-numeric (truly no data); a reported `0` stays a real, measured zero.
     static func balance(fromMicros any: Any?) -> ProviderBalance? {
-        guard let micros = coerceDouble(any), micros.isFinite else { return nil }
+        guard let micros = LiveUsageJSON.coerceDouble(any), micros.isFinite else { return nil }
         return ProviderBalance(
             remaining_usd: max(0, micros) / 1_000_000,
             currency: "USD",
@@ -257,7 +257,7 @@ enum DevinUsageClient {
     // MARK: Small pure helpers
 
     private static func unixSeconds(_ any: Any?) -> Int64? {
-        guard let seconds = coerceDouble(any), seconds > 0, seconds.isFinite else { return nil }
+        guard let seconds = LiveUsageJSON.coerceDouble(any), seconds > 0, seconds.isFinite else { return nil }
         return Int64(seconds)
     }
 
@@ -268,30 +268,12 @@ enum DevinUsageClient {
         return s
     }
 
-    private static func coerceDouble(_ any: Any?) -> Double? {
-        switch any {
-        case let n as NSNumber: return n.doubleValue
-        case let d as Double: return d
-        case let i as Int: return Double(i)
-        case let s as String: return Double(s)
-        default: return nil
-        }
-    }
-
     // MARK: Networking
-
-    private enum HTTPOutcome {
-        case ok(Data)
-        case unauthorized
-        case notFound
-        case httpError(Int)
-        case failure
-    }
 
     /// The Connect-RPC POST. The API key rides in `metadata.apiKey` in the body —
     /// this endpoint has no Authorization header — beside the IDE-identifying
     /// fields Devin's client sends.
-    private static func postUserStatus(_ url: URL, apiKey: String) async -> HTTPOutcome {
+    private static func postUserStatus(_ url: URL, apiKey: String) async -> LiveUsageHTTP.Outcome {
         let body: [String: Any] = [
             "metadata": [
                 "apiKey": apiKey,
@@ -306,24 +288,14 @@ enum DevinUsageClient {
             return .failure
         }
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.timeoutInterval = 15
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
-        req.httpBody = encoded
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else { return .failure }
-            switch http.statusCode {
-            case 200..<300: return .ok(data)
-            case 401, 403: return .unauthorized
-            case 404: return .notFound
-            default: return .httpError(http.statusCode)
-            }
-        } catch {
-            return .failure
-        }
+        return await LiveUsageHTTP.post(
+            url,
+            headers: [
+                "Content-Type": "application/json",
+                "Connect-Protocol-Version": "1",
+            ],
+            body: encoded
+        )
     }
 
     // MARK: Headless self-test

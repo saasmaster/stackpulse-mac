@@ -54,6 +54,13 @@ enum Format {
         case "cursor_total": return "Total usage"
         case "cursor_auto": return "Auto usage"
         case "cursor_api": return "API usage"
+        // Owned explicitly, not left to `.capitalized`. These three are emitted by
+        // the Copilot and Z.ai clients, and falling through title-cased them —
+        // "Web Searches" next to the sentence-case "Total usage" above. A window
+        // this app renders is a window this app names.
+        case "daily": return "Daily"
+        case "premium": return "Premium"
+        case "web searches": return "Web searches"
         default: return raw.capitalized
         }
     }

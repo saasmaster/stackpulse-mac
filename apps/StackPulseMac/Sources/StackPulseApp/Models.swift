@@ -312,31 +312,11 @@ struct ProviderUsage: Codable, Sendable, Identifiable {
         }
     }
 
-    /// A small SF Symbol standing in for this provider in tight spots (the menu
-    /// bar), where a two-letter code reads as noise — "Cl" is routinely misread as
-    /// "CI".
-    ///
-    /// These are deliberately *evocative*, not brand marks: a cursor for Cursor, a
-    /// terminal for OpenCode, a branch for OpenRouter. Shipping the vendors' actual
-    /// logos would put trademarked artwork in the binary, which `NOTICE` is careful
-    /// to avoid. Callers fall back to ``shortCode`` when a symbol is unavailable on
-    /// the running OS.
-    var symbolName: String {
-        switch provider {
-        case "claude": return "staroflife.fill"                        // Anthropic's burst
-        case "codex": return "circle.hexagongrid.fill"                 // OpenAI's knot
-        case "copilot": return "chevron.left.forwardslash.chevron.right"
-        case "cursor": return "cursorarrow"
-        case "antigravity": return "arrow.up.circle.fill"              // anti-gravity
-        case "devin": return "hammer.fill"
-        case "grok": return "bolt.fill"
-        case "open_code": return "terminal.fill"
-        case "open_router": return "arrow.triangle.branch"             // a router
-        case "zai": return "z.circle.fill"                             // the brand IS "Z"
-        case "gemini": return "sparkles"
-        default: return "cpu"
-        }
-    }
+    // The provider→SF-Symbol table used to live here as well as in
+    // `ProviderMarks.symbolFallback`. Two tables keyed by the same provider id is
+    // one table that silently disagrees with itself, so this copy is gone and
+    // `ProviderMarks` owns the mapping — it is the type that already owns the
+    // brand marks the symbol stands in for.
 }
 
 extension ProviderUsage {

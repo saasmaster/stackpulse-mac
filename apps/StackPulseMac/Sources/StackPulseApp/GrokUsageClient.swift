@@ -109,7 +109,7 @@ enum GrokUsageClient {
     /// No signature is verified or implied; we only read the expiry.
     static func isExpired(_ token: String, now: Date) -> Bool {
         guard let payload = jwtPayload(token),
-              let exp = coerceDouble(payload["exp"])
+              let exp = LiveUsageJSON.coerceDouble(payload["exp"])
         else { return false }
         return now.timeIntervalSince1970 >= exp
     }
@@ -180,13 +180,20 @@ enum GrokUsageClient {
               let config = root["config"] as? [String: Any]
         else { return .empty }
 
-        // Absent ⇒ genuine 0 (proto-JSON drops zeros). Present-but-unreadable ⇒ drift.
-        let percent: Double
+        // Absent ⇒ genuine 0, but only with corroboration. Proto-JSON drops zeros, so
+        // a missing `creditUsagePercent` really does mean 0% — as long as the field
+        // still exists in xAI's schema. If it were renamed or moved we would read the
+        // same absence and show a confident "0% used" to someone sitting at 95%, with
+        // no error to hint otherwise. So we require some other credit field to prove
+        // the credit subsystem serialized at all; with nothing to corroborate it, the
+        // weekly meter is omitted and the card shows absence instead of a green bar.
+        // Present-but-unreadable is drift either way.
+        let percent: Double?
         if let raw = config["creditUsagePercent"] {
-            guard let n = coerceDouble(raw), n.isFinite else { return drift }
+            guard let n = LiveUsageJSON.coerceDouble(raw), n.isFinite else { return drift }
             percent = n
         } else {
-            percent = 0
+            percent = creditFieldsPresent(config) ? 0 : nil
         }
 
         // Same rule for the cap: absent means 0 (disabled), a present non-numeric
@@ -194,7 +201,7 @@ enum GrokUsageClient {
         let cap: Double
         if let rawCap = config["onDemandCap"] {
             guard let object = rawCap as? [String: Any] else { return drift }
-            guard let n = coerceDouble(object["val"] ?? 0), n.isFinite else { return drift }
+            guard let n = LiveUsageJSON.coerceDouble(object["val"] ?? 0), n.isFinite else { return drift }
             cap = n
         } else {
             cap = 0
@@ -211,10 +218,10 @@ enum GrokUsageClient {
         // dropped rather than relabelled — the cap still comes back, so the card
         // isn't empty for a monthly-billing account.
         var limits: [LimitWindow] = []
-        if type == weeklyPeriodType {
+        if type == weeklyPeriodType, let percent {
             limits.append(LimitWindow(
                 label: "weekly",
-                used_percent: max(0, min(100, percent)),
+                used_percent: LiveUsageJSON.clampPercent(percent),
                 window_minutes: Int((end.timeIntervalSince(start) / 60).rounded()),
                 resets_at_unix: Int64(end.timeIntervalSince1970),
                 provenance: liveProvenance,
@@ -222,6 +229,17 @@ enum GrokUsageClient {
             ))
         }
         return Outcome(limits: limits, onDemandCapCredits: cap)
+    }
+
+    /// Does this `config` carry ANY credit-system field besides the usage percent?
+    ///
+    /// These are the sibling keys xAI serializes for an account whose credits are
+    /// being reported. Seeing one means the subsystem answered and a missing percent
+    /// is proto-JSON's dropped zero; seeing none means we cannot tell a real 0% from
+    /// a field that moved, and the caller omits the meter rather than guess.
+    private static func creditFieldsPresent(_ config: [String: Any]) -> Bool {
+        ["onDemandCap", "isUnifiedBillingUser", "credits", "creditBalance"]
+            .contains { config[$0] != nil }
     }
 
     /// The account's plan, from `/v1/settings`.
@@ -279,47 +297,16 @@ enum GrokUsageClient {
         return head + rest
     }
 
-    private static func coerceDouble(_ any: Any?) -> Double? {
-        switch any {
-        case let n as NSNumber: return n.doubleValue
-        case let d as Double: return d
-        case let i as Int: return Double(i)
-        case let s as String: return Double(s)
-        default: return nil
-        }
-    }
-
     // MARK: Networking
-
-    private enum HTTPOutcome {
-        case ok(Data)
-        case unauthorized
-        case notFound
-        case httpError(Int)
-        case failure
-    }
 
     /// A GET with the CLI's auth headers. The token goes on the Authorization
     /// header and nowhere else.
-    private static func get(_ url: URL, token: String) async -> HTTPOutcome {
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.timeoutInterval = 15
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue(tokenAuthHeader, forHTTPHeaderField: "X-XAI-Token-Auth")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else { return .failure }
-            switch http.statusCode {
-            case 200..<300: return .ok(data)
-            case 401, 403: return .unauthorized
-            case 404: return .notFound
-            default: return .httpError(http.statusCode)
-            }
-        } catch {
-            return .failure
-        }
+    private static func get(_ url: URL, token: String) async -> LiveUsageHTTP.Outcome {
+        await LiveUsageHTTP.get(url, headers: [
+            "Authorization": "Bearer \(token)",
+            "X-XAI-Token-Auth": tokenAuthHeader,
+            "Accept": "application/json",
+        ])
     }
 
     // MARK: Headless self-test
@@ -352,16 +339,28 @@ enum GrokUsageClient {
               approx(out.onDemandCapCredits, 2500)
         else { return false }
 
-        // 2) THE ZERO RULE. An absent percent is proto-JSON's dropped zero — a real
-        //    0%, not missing data. An absent cap is likewise a real "disabled".
+        // 2) THE ZERO RULE, CORROBORATED. An absent percent is proto-JSON's dropped
+        //    zero — a real 0% — when another credit field proves the subsystem
+        //    reported. An absent cap is likewise a real "disabled".
         let zeros = """
-        { "config": { "currentPeriod": { "type": "USAGE_PERIOD_TYPE_WEEKLY",
+        { "config": { "isUnifiedBillingUser": true,
+            "currentPeriod": { "type": "USAGE_PERIOD_TYPE_WEEKLY",
             "start": "2026-07-03T04:01:09Z", "end": "2026-07-10T04:01:09Z" } } }
         """
         let z = parseCredits(Data(zeros.utf8), capturedAt: 1)
         guard z.error == nil, approx(z.limits.first?.used_percent, 0),
               approx(z.onDemandCapCredits, 0)
         else { return false }
+
+        // 2b) …but with NOTHING to corroborate it, the same absence is unreadable,
+        //     not zero: the meter is dropped rather than drawn as an empty green bar.
+        //     This is the branch that survives xAI renaming the percent field.
+        let bare = """
+        { "config": { "currentPeriod": { "type": "USAGE_PERIOD_TYPE_WEEKLY",
+            "start": "2026-07-03T04:01:09Z", "end": "2026-07-10T04:01:09Z" } } }
+        """
+        let b = parseCredits(Data(bare.utf8), capturedAt: 1)
+        guard b.error == nil, b.limits.isEmpty else { return false }
 
         // 3) …but a PRESENT non-numeric value is drift, not a zero. This is the
         //    distinction that keeps a schema change from reading as "0% used".

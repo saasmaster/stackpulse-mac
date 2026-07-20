@@ -603,7 +603,23 @@ enum ClaudeAuthStore {
             return writeKeychain(payload, service: service, account: currentUserAccount())
                 ? .written : .failed
         case .keychainLegacy(let service):
-            return writeKeychain(payload, service: service, account: nil) ? .written : .failed
+            // `.keychainLegacy` only means "found by a service-only query" — and
+            // since `loadKeychainCandidate` deliberately probes service-only first,
+            // a perfectly modern user-scoped item lands in this case. Writing with
+            // `account: nil` would then append a second, empty-account item instead
+            // of updating it, so the item's real account is looked up first.
+            //
+            // No discoverable account ⇒ refuse. Guessing one (the current user, say)
+            // would write to a *different* item than the one we read, leaving two
+            // under one service — the state Claude Code reads non-deterministically.
+            // Reporting `.failed` keeps the existing login intact; a bad write does
+            // not.
+            guard let account = keychainAccount(service: service) else {
+                recordDiagnostic("keychain write skipped — item has no readable account")
+                return .failed
+            }
+            return writeKeychain(payload, service: service, account: account)
+                ? .written : .failed
         case .desktop, .environment:
             return .skipped
         }
@@ -642,6 +658,13 @@ enum ClaudeAuthStore {
     /// so one pristine copy of the pre-StackPulse state is kept. **Once**: an
     /// existing backup is never overwritten, because the copy worth having is the
     /// one from before anything went wrong, not the one from the last attempt.
+    ///
+    /// A backup never weakens the protection of what it copies. The blob carries a
+    /// live `refreshToken`, so a Keychain credential is copied to a sibling Keychain
+    /// service, never to a file: dropping it into Application Support would turn a
+    /// secret behind a Keychain ACL into one that every same-user process, Time
+    /// Machine snapshot and crash reporter can read without a prompt — and the
+    /// never-overwrite rule would then leave that copy sitting there for good.
     private static let backupLock = NSLock()
     nonisolated(unsafe) private static var backedUpSources: Set<String> = []
 
@@ -654,33 +677,91 @@ enum ClaudeAuthStore {
         backupLock.unlock()
         guard !alreadyDone else { return }
 
-        let destination: String
+        // Both arms check for an existing backup and bail: a second backup would
+        // record the state *after* a previous run already touched the credential,
+        // which is precisely the state a backup is useless for.
         switch source {
         case .file(let path):
-            destination = path + ".stackpulse-backup"
-        case .keychainCurrentUser, .keychainLegacy:
-            // A Keychain item has no sibling to write next to, so the backup lands
-            // in our own Application Support directory at 0600.
-            destination = (appSupportDirectory() as NSString)
-                .appendingPathComponent("claude-credential-backup.json")
+            // Already a plaintext file, so a sibling file copies it without
+            // lowering anything; the mode is set by `writeFile`.
+            let destination = path + ".stackpulse-backup"
+            guard !FileManager.default.fileExists(atPath: destination) else { return }
+            _ = writeFile(payload, to: destination)
+        case .keychainCurrentUser(let service), .keychainLegacy(let service):
+            // Sibling Keychain service, so the copy inherits the same protection as
+            // the original.
+            let backupService = service + ".stackpulse-backup"
+            // Absent must mean *proven* absent. A plain `read == nil` also covers
+            // "`security` timed out or errored", and on that transient failure we
+            // would overwrite the pristine backup with post-incident state — the
+            // one thing the never-overwrite rule exists to prevent. `fileExists`
+            // has no such ambiguity, so the Keychain arm has to earn the same
+            // certainty from the exit status.
+            guard keychainItemIsProvenAbsent(service: backupService) else { return }
+            _ = writeKeychain(payload, service: backupService, account: backupAccount)
         case .desktop, .environment:
             return
         }
-
-        // Never overwrite: a second backup would record the state *after* a
-        // previous run already touched the credential.
-        guard !FileManager.default.fileExists(atPath: destination) else { return }
-        _ = writeFile(payload, to: destination)
     }
 
-    private static func appSupportDirectory() -> String {
+    /// `security`'s exit code for "no such item". Anything else — success,
+    /// timeout, a permissions error — is *not* proof of absence.
+    private static let securityItemNotFound: Int32 = 44
+
+    /// The account on our own backup items. A fixed literal, not the current user:
+    /// these items are written and read only by StackPulse, so the pair
+    /// (service, account) has to be one we can reproduce exactly on the next
+    /// launch. Deriving it from the environment would let a changed user name
+    /// orphan the backup — and an unfindable backup is the same as none.
+    private static let backupAccount = "stackpulse"
+
+    /// True only when `security` positively reported the item missing. Attribute
+    /// query, no `-w`, so it never reads password data and never prompts.
+    private static func keychainItemIsProvenAbsent(service: String) -> Bool {
+        guard let outcome = BoundedProcess.run(
+            executable: "/usr/bin/security",
+            arguments: ["find-generic-password", "-s", service],
+            timeout: keychainTimeout
+        ) else { return false }
+        return !outcome.timedOut && outcome.exitStatus == securityItemNotFound
+    }
+
+    /// Remove the plaintext credential backup written by builds before the copy
+    /// moved into the Keychain.
+    ///
+    /// Shipping the new rule doesn't help anyone who already ran the old one: a
+    /// live `refreshToken` is sitting in Application Support at 0600 with no
+    /// Keychain ACL in front of it, and the never-overwrite rule means nothing
+    /// would ever touch it again. The content is preserved first — it is re-homed
+    /// into the Keychain backup when none exists yet — so this only ever deletes a
+    /// copy of something that still exists somewhere safer.
+    static func migrateLegacyPlaintextBackup() {
+        // Path spelled out here rather than shared: the helper that built it was
+        // deleted with the plaintext write path, and this is its last caller.
         let base = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory())
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
-        let dir = base.appendingPathComponent("StackPulse", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.path
+        let legacy = base
+            .appendingPathComponent("StackPulse", isDirectory: true)
+            .appendingPathComponent("claude-credential-backup.json").path
+        guard FileManager.default.fileExists(atPath: legacy) else { return }
+
+        if let data = FileManager.default.contents(atPath: legacy),
+           let text = String(data: data, encoding: .utf8),
+           makeCandidate(fromJSON: text, source: .keychainLegacy(service: "")) != nil {
+            let backupService = (keychainServiceCandidates().first ?? keychainServiceBase)
+                + ".stackpulse-backup"
+            if keychainItemIsProvenAbsent(service: backupService) {
+                guard writeKeychain(text, service: backupService, account: backupAccount) else {
+                    // Couldn't re-home it; leaving the file is the lesser harm.
+                    recordDiagnostic("legacy plaintext backup kept — Keychain re-home failed")
+                    return
+                }
+            }
+        }
+        try? FileManager.default.removeItem(atPath: legacy)
+        recordDiagnostic("legacy plaintext credential backup removed")
     }
 
     // MARK: - Source I/O
@@ -701,18 +782,59 @@ enum ClaudeAuthStore {
                                   timeout: keychainTimeout)?.trimmedText
     }
 
+    /// The `acct` attribute of the item a service-only query finds, so a write can
+    /// address the same item the read did.
+    ///
+    /// Note the missing `-w`: this is an attribute-only query. `security` returns
+    /// the item's metadata without decrypting the password, so it touches no ACL
+    /// and raises no authorization dialog — which matters because everything in
+    /// this file is arranged around never asking the user a second time.
+    private static func keychainAccount(service: String) -> String? {
+        guard let dump = BoundedProcess.run(
+            executable: "/usr/bin/security",
+            arguments: ["find-generic-password", "-s", service],
+            timeout: keychainTimeout)?.trimmedText
+        else { return nil }
+        return parseKeychainAccount(dump)
+    }
+
+    /// Pull `acct` out of a `security` attribute dump, whose line looks like
+    /// `    "acct"<blob>="jorge"`. Non-ASCII values print as `0x6A6F… "jorge"`, so
+    /// the *last* quoted run is taken — that is the decoded form in both shapes.
+    /// An absent account prints `<NULL>` and yields nil, which callers must map
+    /// back to "no `-a` argument" rather than to an empty account. Pure —
+    /// exercised by `_selftest()`.
+    static func parseKeychainAccount(_ dump: String) -> String? {
+        for line in dump.split(separator: "\n") {
+            guard let marker = line.range(of: "\"acct\"<blob>=") else { continue }
+            let value = line[marker.upperBound...]
+            guard let open = value.firstIndex(of: "\""),
+                  let close = value.lastIndex(of: "\""),
+                  open < close
+            else { return nil }
+            let account = String(value[value.index(after: open)..<close])
+            return account.isEmpty ? nil : account
+        }
+        return nil
+    }
+
     /// `-U` updates the item in place rather than appending a duplicate — two
     /// items under one service is a state Claude Code itself reads
-    /// non-deterministically.
+    /// non-deterministically. `-U` matches on service **and** account, so a caller
+    /// that omits an account the item actually has gets an append, not an update.
     ///
     /// The value travels in argv, which same-user processes can observe. That is
     /// the interface `security` offers (there is no stdin form for
     /// `add-generic-password`), and it is the same trust boundary as the Keychain
     /// item itself: a same-user process could simply read the item.
-    private static func writeKeychain(_ value: String, service: String, account: String?) -> Bool {
-        var arguments = ["add-generic-password", "-U", "-s", service]
-        if let account { arguments += ["-a", account] }
-        arguments += ["-w", value]
+    ///
+    /// `account` is **not** optional, because `add-generic-password` treats `-a` as
+    /// required: invoked without it, `security` prints its usage text and exits 2
+    /// having written nothing. That failed silently here for every `.keychainLegacy`
+    /// save — a refreshed token was reported as written and wasn't. The type now
+    /// makes the omission unrepresentable rather than leaving it to a runtime check.
+    private static func writeKeychain(_ value: String, service: String, account: String) -> Bool {
+        let arguments = ["add-generic-password", "-U", "-s", service, "-a", account, "-w", value]
         guard let outcome = BoundedProcess.run(executable: "/usr/bin/security",
                                                arguments: arguments,
                                                timeout: keychainTimeout)
@@ -720,14 +842,24 @@ enum ClaudeAuthStore {
         return !outcome.timedOut && outcome.exitStatus == 0
     }
 
-    /// Atomic write, then 0600. Atomic first so a crash mid-write can't leave a
-    /// truncated credential; permissions after, because the atomic replace creates
-    /// a new inode that would otherwise inherit the default umask.
+    /// Create at 0600, then write atomically, then re-apply 0600.
+    ///
+    /// An atomic write is a rename over the destination, and it preserves the
+    /// permissions of a file that already exists. So the mode has to be in place
+    /// *before* the rename: creating the destination empty at 0600 first means the
+    /// credential is never briefly world-readable, whereas chmod-after leaves it at
+    /// the umask default (usually 0644) between rename and chmod — and permanently
+    /// so if the process dies in that window. The trailing chmod stays as a
+    /// belt-and-braces for the case where the file already existed at a wider mode.
     @discardableResult
     private static func writeFile(_ text: String, to path: String) -> Bool {
         let url = URL(fileURLWithPath: path)
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil,
+                                           attributes: [.posixPermissions: 0o600])
+        }
         do {
             try Data(text.utf8).write(to: url, options: [.atomic])
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
@@ -900,6 +1032,25 @@ enum ClaudeAuthStore {
               Generation([rotated, file]) != generation,
               Generation([keychain]) != generation,
               Generation([Candidate(oauth: OAuth(accessToken: "d"), source: .desktop, rawJSON: nil)]).entries.isEmpty
+        else { return false }
+
+        // 5) `acct` extraction. Getting this wrong means `-U` appends a duplicate
+        //    item instead of updating, which is how a login gets lost.
+        let dump = """
+        keychain: "/Users/fixture/Library/Keychains/login.keychain-db"
+        class: "genp"
+        attributes:
+            0x00000007 <blob>="Claude Code-credentials"
+            "acct"<blob>="fixture-user"
+            "svce"<blob>="Claude Code-credentials"
+        """
+        guard parseKeychainAccount(dump) == "fixture-user",
+              // Hex-escaped form: the decoded trailing run is the account.
+              parseKeychainAccount(#"    "acct"<blob>=0x6A6F "jorge""#) == "jorge",
+              // No account on the item ⇒ nil, i.e. "write without `-a`".
+              parseKeychainAccount(#"    "acct"<blob>=<NULL>"#) == nil,
+              parseKeychainAccount(#"    "acct"<blob>="""#) == nil,
+              parseKeychainAccount("class: \"genp\"") == nil
         else { return false }
 
         return true

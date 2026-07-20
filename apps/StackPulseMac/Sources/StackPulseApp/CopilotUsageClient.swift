@@ -257,7 +257,7 @@ enum CopilotUsageClient {
             // No honest per-seat number. Say so plainly; never emit a 0% window.
             // `token_based_billing` marks the org-managed seat, whose real usage
             // lives in org billing (see the type doc — not implemented here).
-            let zeroEntitlement = premiumSnapshot.map { coerceDouble($0["entitlement"]) == 0 } ?? false
+            let zeroEntitlement = premiumSnapshot.map { LiveUsageJSON.coerceDouble($0["entitlement"]) == 0 } ?? false
             let orgManaged = coerceBool(root["token_based_billing"]) == true || zeroEntitlement
             let note = orgManaged
                 ? "Org-managed Copilot seat — GitHub reports no per-user quota."
@@ -286,18 +286,18 @@ enum CopilotUsageClient {
     /// zero entitlement (a placeholder pool, not a measured 0%), and any shape that
     /// gives no denominator.
     static func usedPercent(_ snapshot: [String: Any]) -> Double? {
-        let entitlement = coerceDouble(snapshot["entitlement"])
-        let remaining = coerceDouble(snapshot["remaining"])
+        let entitlement = LiveUsageJSON.coerceDouble(snapshot["entitlement"])
+        let remaining = LiveUsageJSON.coerceDouble(snapshot["remaining"])
 
         if coerceBool(snapshot["unlimited"]) == true { return nil }
         if entitlement == -1 || remaining == -1 { return nil }
         if entitlement == 0 { return nil }
 
-        if let percentRemaining = coerceDouble(snapshot["percent_remaining"]) {
-            return clampPercent(100 - percentRemaining)
+        if let percentRemaining = LiveUsageJSON.coerceDouble(snapshot["percent_remaining"]) {
+            return LiveUsageJSON.clampPercent(100 - percentRemaining)
         }
         if let entitlement, entitlement > 0, let remaining {
-            return clampPercent(100 - (remaining / entitlement) * 100)
+            return LiveUsageJSON.clampPercent(100 - (remaining / entitlement) * 100)
         }
         return nil
     }
@@ -308,7 +308,7 @@ enum CopilotUsageClient {
     /// exposes no spending cap here, so this is an unbounded count, not a meter.
     static func overageCount(_ snapshot: [String: Any]) -> Double? {
         guard coerceBool(snapshot["overage_permitted"]) == true else { return nil }
-        return max(0, coerceDouble(snapshot["overage_count"]) ?? 0)
+        return max(0, LiveUsageJSON.coerceDouble(snapshot["overage_count"]) ?? 0)
     }
 
     /// `"copilot_pro"` → `"Copilot Pro"`. Cosmetic only; never affects a number.
@@ -347,20 +347,6 @@ enum CopilotUsageClient {
         return nil
     }
 
-    private static func clampPercent(_ value: Double) -> Double {
-        max(0, min(100, value))
-    }
-
-    private static func coerceDouble(_ any: Any?) -> Double? {
-        switch any {
-        case let n as NSNumber: return n.doubleValue
-        case let d as Double: return d
-        case let i as Int: return Double(i)
-        case let s as String: return Double(s)
-        default: return nil
-        }
-    }
-
     private static func coerceBool(_ any: Any?) -> Bool? {
         switch any {
         case let b as Bool: return b
@@ -377,40 +363,19 @@ enum CopilotUsageClient {
 
     // MARK: Networking
 
-    private enum HTTPOutcome {
-        case ok(Data)
-        case unauthorized
-        case notFound
-        case httpError(Int)
-        case failure
-    }
-
     /// The exact request the Copilot editor plugins make: a plain GET, the token on
     /// `Authorization` under the **`token`** scheme (this endpoint rejects `Bearer`),
     /// plus the editor-identifying headers GitHub expects from a Copilot client. The
     /// token goes on that header and nowhere else.
-    private static func get(_ url: URL, token: String) async -> HTTPOutcome {
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.timeoutInterval = 15
-        req.setValue("token \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("vscode/1.96.2", forHTTPHeaderField: "Editor-Version")
-        req.setValue("copilot-chat/0.26.7", forHTTPHeaderField: "Editor-Plugin-Version")
-        req.setValue("GitHubCopilotChat/0.26.7", forHTTPHeaderField: "User-Agent")
-        req.setValue("2025-04-01", forHTTPHeaderField: "X-Github-Api-Version")
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else { return .failure }
-            switch http.statusCode {
-            case 200..<300: return .ok(data)
-            case 401, 403: return .unauthorized
-            case 404: return .notFound
-            default: return .httpError(http.statusCode)
-            }
-        } catch {
-            return .failure
-        }
+    private static func get(_ url: URL, token: String) async -> LiveUsageHTTP.Outcome {
+        await LiveUsageHTTP.get(url, headers: [
+            "Authorization": "token \(token)",
+            "Accept": "application/json",
+            "Editor-Version": "vscode/1.96.2",
+            "Editor-Plugin-Version": "copilot-chat/0.26.7",
+            "User-Agent": "GitHubCopilotChat/0.26.7",
+            "X-Github-Api-Version": "2025-04-01",
+        ])
     }
 
     // MARK: Headless self-test
