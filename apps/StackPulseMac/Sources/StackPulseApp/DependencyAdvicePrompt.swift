@@ -244,15 +244,13 @@ enum DependencyAdvicePrompt {
     }
 
     /// Coarse age, phrased the way a reader thinks about staleness.
+    ///
+    /// Delegates rather than re-deriving: this was a second copy of
+    /// ``Diagnostics/coarseAge(_:)`` — identical thresholds, identical
+    /// pluralization — so the two could drift into describing the same instant
+    /// differently on two screens.
     private static func age(from: Date, to: Date) -> String {
         let s = max(0, to.timeIntervalSince(from))
-        if s < 90 { return "just now" }
-        if s < 3600 { return "\(Int(s / 60)) minutes ago" }
-        if s < 86_400 {
-            let h = Int(s / 3600)
-            return "\(h) hour\(h == 1 ? "" : "s") ago"
-        }
-        let d = Int(s / 86_400)
-        return "\(d) day\(d == 1 ? "" : "s") ago"
+        return s < 90 ? "just now" : "\(Diagnostics.coarseAge(s)) ago"
     }
 }

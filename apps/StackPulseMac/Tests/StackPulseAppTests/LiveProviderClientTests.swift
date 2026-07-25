@@ -31,6 +31,12 @@ struct LiveProviderClientTests {
     @Test("Devin plan-status parser self-test passes")
     func devin() { #expect(DevinUsageClient._selftest()) }
 
+    /// MiniMax reports what is *remaining* while every StackPulse meter shows what
+    /// is *used*, so this client inverts. The self-test pins both ends of that
+    /// inversion — get it backwards and a full quota renders as an exhausted one.
+    @Test("MiniMax coding-plan parser self-test passes")
+    func minimax() { #expect(MiniMaxUsageClient._selftest()) }
+
     /// The one client in this batch that WRITES a credential, and the only one whose
     /// self-test the suite used to skip — it ran solely behind the
     /// `--selftest-parsers` flag, which `swift test` never invokes. A regression in
@@ -52,9 +58,13 @@ struct LiveProviderClientTests {
                    "devin", "grok", "open_code", "open_router", "zai"] {
             #expect(ProviderMarks.mark(for: id) != nil, "no brand mark for \(id)")
         }
-        // Gemini has no vector mark — it must fall back to a symbol, not crash.
-        #expect(ProviderMarks.mark(for: "gemini") == nil)
-        #expect(!ProviderMarks.symbolFallback(for: "gemini").isEmpty)
+        // Gemini and MiniMax have no vector mark — they must fall back to a symbol,
+        // not crash. openusage ships artwork for neither, and approximating a
+        // vendor's trademark from memory is not a thing to embed in a binary.
+        for id in ["gemini", "minimax"] {
+            #expect(ProviderMarks.mark(for: id) == nil)
+            #expect(!ProviderMarks.symbolFallback(for: id).isEmpty)
+        }
     }
 
     /// Guards the labels the UI maps to display names. A client emitting a window

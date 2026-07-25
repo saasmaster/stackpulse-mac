@@ -114,6 +114,40 @@ struct ActivityOnlyProviderTests {
         #expect(p.isActivityOnly)
     }
 
+    // MARK: The silent-but-installed provider
+
+    /// The gap this suite had: `testDetectedButSilentProviderIsNotActivityOnly`
+    /// pinned the model property and passed, while three views branched on
+    /// `isActivityOnly` and sent exactly this shape to the **spend grid** — the one
+    /// branch it must never reach. A property assertion is not a rendering
+    /// assertion. These pin the predicate the views actually switch on.
+    ///
+    /// MiniMax is the real instance: its agent runs in the cloud, so it reports no
+    /// models, no records and no local limits, forever.
+    @Test("a cloud provider with no local footprint never earns a spend grid")
+    func testSilentInstalledProviderIsNeverGivenSpendCells() {
+        let p = provider(id: "minimax")
+        #expect(p.installed)
+        // What every surface now branches on. False ⇒ no spend cells, so the card
+        // can't print "$—" over "0 tok" for a figure this Mac was never told.
+        #expect(!(p.hasLocalSpend))
+        // And it must not be routed to the activity row either — there is no
+        // activity to show, so "0 sessions" would be the same fabrication.
+        #expect(!(p.hasLocalActivity))
+    }
+
+    @Test("being installed is enough to earn a card of its own")
+    func testInstalledProviderWarrantsOwnCard() {
+        // The popover used to require usage data or a balance, so a provider the
+        // user is signed into rendered as one line among the eight they don't have
+        // — indistinguishable from "not found", which reads as the app not seeing it.
+        #expect(provider(id: "minimax").warrantsOwnCard)
+        // A provider that genuinely isn't here still collapses.
+        #expect(!provider(id: "grok", installed: false).warrantsOwnCard)
+        // And the pre-existing reasons still stand on their own.
+        #expect(provider(id: "codex", installed: false, d30Records: 5).warrantsOwnCard)
+    }
+
     // MARK: The aggregate
 
     /// `records` is defined by the protocol as assistant turns. A provider with

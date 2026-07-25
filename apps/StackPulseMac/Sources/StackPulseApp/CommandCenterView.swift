@@ -210,8 +210,14 @@ private struct BigUsageCard: View {
 
             // A server-metered provider has no local token or dollar figure: the
             // spend cells would print "0 tok" for a count never reported here.
-            if provider.isActivityOnly {
-                ProviderActivityRow(provider: provider)
+            //
+            // `hasLocalSpend`, not `isActivityOnly` — the latter also demands that
+            // activity be present, so a cloud provider with no local footprint at
+            // all (MiniMax) reached the spend cells, the one branch it must never
+            // reach. Same fix as `OverviewSection`; this is the third surface the
+            // rule now lives on.
+            if !provider.hasLocalSpend {
+                if provider.hasLocalActivity { ProviderActivityRow(provider: provider) }
                 NoLocalSpendNote()
             } else {
                 HStack(alignment: .top, spacing: 0) {

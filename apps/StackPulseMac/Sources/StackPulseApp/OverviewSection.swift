@@ -116,8 +116,15 @@ struct OverviewProviderCard: View {
             // spend grid. Its windows carry `records` with zeroed tokens and no
             // cost, so the money UI would render "—" over "0 tok", asserting a zero
             // this Mac was never told.
-            if provider.isActivityOnly {
-                ProviderActivityRow(provider: provider)
+            //
+            // Keyed off `hasLocalSpend`, not `isActivityOnly`, because the latter
+            // additionally requires activity to be *present* — so a cloud provider
+            // with no local footprint at all (MiniMax: no models, no records, no
+            // local limits, by design) fell straight through to the money grid,
+            // the one branch it must never reach. The popover has always split on
+            // spend; this is that rule finally reaching the second surface.
+            if !provider.hasLocalSpend {
+                if provider.hasLocalActivity { ProviderActivityRow(provider: provider) }
                 NoLocalSpendNote()
             } else {
                 anomalyBadge

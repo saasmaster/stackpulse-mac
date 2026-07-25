@@ -215,13 +215,8 @@ enum ZaiUsageClient {
 
     // MARK: Networking
 
-    /// A plain GET. The key goes on the Authorization header and nowhere else —
-    /// never a query parameter, where it would land in logs and history.
     private static func get(_ url: URL, apiKey: String) async -> LiveUsageHTTP.Outcome {
-        await LiveUsageHTTP.get(url, headers: [
-            "Authorization": "Bearer \(apiKey)",
-            "Accept": "application/json",
-        ])
+        await LiveUsageHTTP.get(url, headers: LiveUsageHTTP.bearerJSON(apiKey))
     }
 
     // MARK: Headless self-test

@@ -244,12 +244,19 @@ mod tests {
         for p in [
             ProviderId::Claude,
             ProviderId::Codex,
+            ProviderId::MiniMax,
             ProviderId::OpenCode,
             ProviderId::OpenRouter,
             ProviderId::Zai,
         ] {
             assert_eq!(provider_from_snake(&provider_snake(p)), p);
         }
+        // These names are the durable history keys on disk, so a change to one
+        // silently orphans that provider's recorded days. MiniMax in particular
+        // carries a hand-written `#[serde(rename)]` that nothing else would
+        // catch if it were dropped.
+        assert_eq!(provider_snake(ProviderId::MiniMax), "minimax");
+        assert_eq!(provider_snake(ProviderId::OpenCode), "open_code");
         // An unrecognized snake name decodes to Unknown, never an error.
         assert_eq!(provider_from_snake("totally-made-up"), ProviderId::Unknown);
     }

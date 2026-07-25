@@ -94,7 +94,10 @@ struct ProviderAnalytics: Codable, Sendable {
     let daily: [DailyUsage]
 }
 
-struct LimitWindow: Codable, Sendable, Identifiable {
+// `Equatable` is synthesized — every stored property already is. It lets a parser
+// result carrying windows be compared whole in a test, instead of the fields being
+// spot-checked one at a time and a forgotten one sliding through.
+struct LimitWindow: Codable, Sendable, Identifiable, Equatable {
     /// A live reading older than this stops being "live" — the single source of
     /// that bound for every surface (age note, forecast note, the store's own
     /// staleness check), so they can't silently disagree about what "fresh" means.
@@ -294,6 +297,22 @@ struct ProviderUsage: Codable, Sendable, Identifiable {
     /// absence — not as zero.
     var isActivityOnly: Bool { installed && !hasLocalSpend && hasLocalActivity }
 
+    /// True when this provider earns a card of its own rather than a one-line row
+    /// in the collapsed "Other providers" list.
+    ///
+    /// Being **installed** is sufficient, and that is the point. The rule used to be
+    /// "has usage data or a balance", which quietly assumed every provider the user
+    /// actually has would report *something* locally. MiniMax is the first that
+    /// doesn't and never will — its agent runs in the cloud, so it ships zero models,
+    /// zero records and zero local limits by design — and it was therefore rendered
+    /// identically to eight providers that aren't on the machine at all. A tool the
+    /// user is signed into, presented as indistinguishable from one they've never
+    /// installed, reads as "the app doesn't see it".
+    ///
+    /// The card is also the only surface with room for *why* there are no numbers,
+    /// and for the live quota when the provider reports one.
+    var warrantsOwnCard: Bool { installed || hasUsageData || balance != nil }
+
     /// Two-letter code for the compact menu-bar readout.
     var shortCode: String {
         switch provider {
@@ -304,6 +323,7 @@ struct ProviderUsage: Codable, Sendable, Identifiable {
         case "antigravity": return "Ag"
         case "devin": return "Dv"
         case "grok": return "Gk"
+        case "minimax": return "MM"
         case "open_code": return "Oc"
         case "open_router": return "Or"
         case "zai": return "Za"
@@ -516,6 +536,7 @@ struct Mission: Codable, Sendable, Identifiable {
         case "antigravity": return "Antigravity"
         case "devin": return "Devin"
         case "grok": return "Grok"
+        case "minimax": return "MiniMax"
         case "open_code": return "OpenCode"
         case "open_router": return "OpenRouter"
         case "zai": return "Z.ai"

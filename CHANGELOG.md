@@ -18,6 +18,91 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.20.0**, app pre-release.
 
+### MiniMax Code: detected, with its live Coding Plan quota (app 0.51.0, protocol 1.21.0)
+
+MiniMax Code was installed and signed in on a real machine and StackPulse showed
+nothing, because it was never one of the eleven providers. It is now the twelfth:
+detected, and honest about what it can and cannot show.
+
+- `ProviderId::MiniMax` (wire value `minimax`). Additive — `ProviderId` carries
+  `#[serde(other)] Unknown`, so a reader built before this decodes the new value
+  as `Unknown` rather than failing. The wire name is spelled out by hand because
+  the derived `snake_case` would have produced `mini_max`, misspelling a one-word
+  brand; `OpenCode` and `OpenRouter` genuinely are two words, so theirs are right.
+  A test pins it, since a hand-written rename is exactly what drifts silently —
+  and these strings are the durable history keys on disk.
+- Markers were **measured on a real install**, not guessed like some others in
+  that file: `/Applications/MiniMax Code.app` and the `MiniMax Agent` data
+  directory (the product name and its Chromium `--user-data-dir` differ). The
+  credential file is a presence marker only and is never opened.
+
+**No spend or token figures, and that is the product, not a gap.** MiniMax Code
+is a thin Electron client for a cloud agent: the entire data directory is ~2 MB of
+browser plumbing with no conversation or session store, so this Mac is never told
+what was spent. The card says so instead of showing zeros.
+
+**Live 5-hour and weekly quota**, from the endpoint MiniMax Code's own usage
+popover calls, authenticated with the session token already on the machine — the
+same shape as the other live clients. Two things are worth recording because they
+are what makes this honest rather than plausible:
+
+- **MiniMax reports what is *remaining*; every StackPulse meter shows what is
+  *used*.** Its own helper computes `100 - remaining` before rendering, so the
+  client does the same. Reading the raw field as "used" would have shown a full
+  quota as an exhausted one, and it would have looked entirely reasonable. The
+  self-test pins both ends of the inversion.
+- **The windows are 5-hour and weekly because MiniMax's own locale strings say so**
+  (`window_5h` = "5 Hours", `window_weekly` = "Weekly"), not because the field
+  names suggested it. So they land on this app's existing `5h`/`weekly` vocabulary
+  with no invented duration — the failure the Codex and Z.ai clients were just
+  fixed for.
+
+That also settled the credits question rather than answering it: MiniMax's Coding
+Plan quota is denominated in **percent**, so nothing needs to go in a dollar field
+and the unit mismatch that keeps Grok's on-demand cap out of the balance slot never
+arises. A third quota MiniMax tracks (`window_video`, a per-model count) is ignored
+— it measures video generations, not coding.
+
+Absence is still absence: a window MiniMax doesn't report is dropped, never shown
+as 0% — deliberately *not* copying MiniMax's own helper, which substitutes zero for
+a missing field and would render an unreported meter as comfortably empty. An
+"unlimited" window (status 3) is dropped too, since a percentage of an unbounded
+pool is not a measurement.
+
+**Three display bugs MiniMax exposed**, all the same shape — a rule written on one
+surface and never carried to the others, which is this project's recurring failure:
+
+- **A provider you're signed into was collapsed in with ones you don't have.** The
+  popover promoted a provider to its own card only if it had usage data or a BYOK
+  balance, quietly assuming anything installed would report *something* locally.
+  MiniMax never will. It therefore rendered as one line among eight not-found
+  providers — which reads as the app not seeing it at all. Being installed now
+  earns a card.
+- **The spend grid was shown to a provider that can never have local spend.** Two
+  surfaces branched on `isActivityOnly`, which also requires activity to be
+  *present*, so a cloud provider with no local footprint fell through to the money
+  cells — the one branch it must never reach. They now branch on `hasLocalSpend`,
+  as the popover always did.
+- **Only Claude's live-fetch failure was ever displayed.** The store records an
+  error for every live provider; the popover showed one. Eight clients could fail
+  and say nothing, leaving a blank card indistinguishable from a forgotten one.
+
+The suite already had a test for the silent-installed-provider shape, and it
+passed — it pinned the model property while three views branched on it wrongly. A
+property assertion is not a rendering assertion; the new tests pin the predicate the
+views actually switch on, and were mutation-verified against the old rule.
+
+**A note about MiniMax's own credential handling**, since StackPulse now reads that
+file: MiniMax Code writes its session token to plain JSON at mode **0666** —
+world-readable *and* world-writable — where Codex writes its own credential 0600.
+Nothing here can fix that, so the client treats the value as untrusted input: it
+goes only to **hardcoded** MiniMax hosts, precisely so a file anyone can write
+cannot redirect a credential somewhere else.
+
+MiniMax gets an SF Symbol rather than a brand mark: the vendor artwork this app
+embeds all comes from openusage, which ships none for MiniMax, and drawing an
+approximation of someone's trademark from memory is not a thing to put in a binary.
+
 ### Audit follow-up: credentials, attribution, and three silent lies (app 0.50.0)
 
 Three independent reviewers (security, red-team correctness, testing/maintainability)

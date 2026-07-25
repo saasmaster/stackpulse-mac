@@ -70,6 +70,18 @@ enum LiveUsageHTTP {
         case failure            // offline / TLS / timeout / non-HTTP
     }
 
+    /// The headers four of these clients send verbatim: the credential on
+    /// `Authorization: Bearer` and nothing else, plus a JSON `Accept`.
+    ///
+    /// The key goes on THIS header — never a query parameter, where it would land in
+    /// logs, proxies and shell history. That rule was restated in a comment above
+    /// each of the four copies, which is three more places for it to rot than it
+    /// needs. (MiniMax is deliberately not a caller: its endpoint refuses a bearer
+    /// header and wants a cookie.)
+    static func bearerJSON(_ key: String) -> [String: String] {
+        ["Authorization": "Bearer \(key)", "Accept": "application/json"]
+    }
+
     /// `success` is a parameter because the endpoints genuinely disagree: most treat
     /// any 2xx as good, while Cursor's Connect-RPC and the balance endpoints only
     /// ever answer a bare 200 and a 2xx redirect-ish status there would be drift, not

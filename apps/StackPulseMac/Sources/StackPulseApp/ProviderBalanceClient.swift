@@ -350,18 +350,11 @@ enum ProviderBalanceClient {
         )
     }
 
-    /// A single GET with the key on the `Authorization: Bearer` header and
-    /// nowhere else. Never logs the key, the URL's credentials, or the body.
+    /// A single GET, key on the Authorization header. Never logs the key or the body.
     private static func request(_ url: URL, key: String) async -> LiveUsageHTTP.Outcome {
-        await LiveUsageHTTP.get(
-            url,
-            headers: [
-                // The key goes out on THIS header, to THIS endpoint, and nowhere else.
-                "Authorization": "Bearer \(key)",
-                "Accept": "application/json",
-            ],
-            success: 200..<201
-        )
+        // 200 only: these balance endpoints never answer another 2xx, so one that
+        // isn't 200 is drift and must not be parsed as a balance.
+        await LiveUsageHTTP.get(url, headers: LiveUsageHTTP.bearerJSON(key), success: 200..<201)
     }
 
     // MARK: Parsing (pure, headless-testable)

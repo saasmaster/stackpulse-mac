@@ -1652,6 +1652,13 @@ final class SnapshotStore: ObservableObject {
                 limits: o.limits, balance: o.balance, planName: o.planName, error: o.error
             )
         }),
+        // MiniMax reports its Coding Plan as two percentages, so it needs no balance
+        // slot at all — and sidesteps the credits-in-a-dollar-field problem that
+        // keeps Grok's on-demand cap out of one.
+        ("minimax", {
+            let o = await MiniMaxUsageClient.fetch()
+            return LiveProviderReading(limits: o.limits, balance: o.balance, error: o.error)
+        }),
     ]
 
     /// Kick off (or re-apply) every live provider reading for the current snapshot.

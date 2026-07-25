@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Darwin   // kill(2) / SIGTERM for the Stop action below
 
 // MARK: - Services section (main window)
 //
@@ -40,7 +41,10 @@ struct ServicesSection: View {
                     confirmTint: .orange,
                     onCancel: { pendingStop = nil },
                     onConfirm: {
-                        ServiceControl.stop(pid: svc.pid)
+                        // SIGTERM, never SIGKILL: the server gets to clean up and
+                        // free its port. The only mutating action StackPulse takes
+                        // on a detected process, and only ever behind this dialog.
+                        if svc.pid > 0 { kill(pid_t(svc.pid), SIGTERM) }
                         pendingStop = nil
                         // Give the process a moment to exit, then refresh the list.
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {

@@ -30,9 +30,9 @@ impl Default for Engine {
 impl Engine {
     pub fn new() -> Self {
         // Full local scanners first (Claude, Codex, Antigravity, OpenCode), then
-        // the seven detection-only providers in the ProviderId enum's declared
-        // order (Copilot, Cursor, Devin, Gemini, Grok, OpenRouter, Zai). Every
-        // snapshot therefore lists all eleven providers.
+        // the eight detection-only providers in the ProviderId enum's declared
+        // order (Copilot, Cursor, Devin, Gemini, Grok, MiniMax, OpenRouter,
+        // Zai). Every snapshot therefore lists all twelve providers.
         let mut providers: Vec<Box<dyn Provider>> = vec![
             Box::new(ClaudeProvider),
             Box::new(CodexProvider),

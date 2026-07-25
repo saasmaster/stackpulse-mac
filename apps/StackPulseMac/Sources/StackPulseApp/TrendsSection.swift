@@ -327,6 +327,7 @@ enum TrendsPalette {
         case "cursor": return .purple
         case "gemini": return .teal
         case "grok": return .pink
+        case "minimax": return .indigo
         case "antigravity": return .indigo
         case "devin": return .mint
         case "open_code": return .cyan

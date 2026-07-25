@@ -5,7 +5,7 @@ contract shared by every StackPulse surface: the Rust core, the macOS app (over
 the C ABI), the `stackpulse` CLI, and — in the future — a Chrome
 native-messaging host and a Windows client.
 
-- **Current version:** `PROTOCOL_VERSION = 1.20.0`. Additive history (older
+- **Current version:** `PROTOCOL_VERSION = 1.21.0`. Additive history (older
   readers keep parsing):
   - **1.3.0** — added a `Gemini` variant to the (open) `ProviderId` enum; the
     engine now lists eleven providers.
@@ -60,6 +60,12 @@ native-messaging host and a Windows client.
     `remove_command` (never for the main worktree) for the client to gate. The
     client passes a `worktrees_dir` so the copies land outside the user's project
     folders and can't be mistaken for new projects.
+  - **1.21.0** — one additive enum variant: `ProviderId::MiniMax` (wire value
+    `minimax`), for MiniMax Code. Additive because `ProviderId` carries
+    `#[serde(other)] Unknown`, so a reader built before this version decodes the
+    new value as `Unknown` instead of failing. MiniMax is detection-only: its
+    agent runs server-side and leaves no local conversation or usage history, so
+    there is nothing on the machine to price.
   - **1.20.0** — one additive field: `LimitWindow.captured_at_unix`, when the
     reading was actually taken. A percentage is a measurement, and a measurement
     with no time is not interpretable: Codex's limits come from whatever its logs

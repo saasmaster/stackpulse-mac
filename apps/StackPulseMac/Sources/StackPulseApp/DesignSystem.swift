@@ -17,6 +17,34 @@ enum Format {
         return String(format: "$%.2f", v)
     }
 
+    /// A balance amount in the unit the provider actually reports it in.
+    ///
+    /// `ProviderBalance` has carried a `currency` field since the BYOK wave, and
+    /// every renderer ignored it and printed `$`. That made the field a trap rather
+    /// than a feature: any provider denominated in something else had to be kept out
+    /// of the balance slot entirely (Grok's on-demand cap is excluded in
+    /// `SnapshotStore` for exactly this reason) or be silently mislabelled as
+    /// dollars. MiniMax forced the issue — an account with no Coding Plan has only a
+    /// **credit** balance, and "$1,240 left" would be a fabricated currency.
+    ///
+    /// Credits are counts, so they get thousands separators and no decimals; a real
+    /// currency keeps the money formatting. An unrecognized currency is printed as a
+    /// suffix rather than guessed at.
+    static func balanceAmount(_ v: Double?, currency: String) -> String {
+        guard let v else { return "—" }
+        switch currency.uppercased() {
+        case "USD": return usd(v)
+        case "CREDITS":
+            let n = NumberFormatter()
+            n.numberStyle = .decimal
+            n.maximumFractionDigits = 0
+            let text = n.string(from: NSNumber(value: v)) ?? String(format: "%.0f", v)
+            return "\(text) credit\(abs(v) == 1 ? "" : "s")"
+        default:
+            return "\(String(format: v >= 1000 ? "%.0f" : "%.2f", v)) \(currency.uppercased())"
+        }
+    }
+
     static func percent(_ v: Double) -> String { String(format: "%.0f%%", v) }
 
     /// A limit window shown the way the PROVIDER shows it — "46% used".
@@ -28,12 +56,6 @@ enum Format {
     /// reported. Same number, same direction, no translation.
     static func limitUsed(_ usedPercent: Double) -> String {
         "\(percent(limitFraction(usedPercent) * 100)) used"
-    }
-
-    /// The bare percentage, for places too tight for a word (the menu bar). Matches
-    /// the provider's panel digit for digit.
-    static func limitBare(_ usedPercent: Double) -> String {
-        percent(limitFraction(usedPercent) * 100)
     }
 
     /// The consumed fraction (0…1) of a limit window, for the meter — it FILLS as
@@ -712,11 +734,18 @@ struct ProviderBalanceLabel: View {
         }
     }
 
+    /// Formats in the balance's own unit — see `Format.balanceAmount`. The `_usd`
+    /// field names are the wire's, not a claim about the denomination; `currency`
+    /// is what says which unit these amounts are in.
+    private func amount(_ v: Double?) -> String {
+        Format.balanceAmount(v, currency: balance.currency)
+    }
+
     /// The headline figure — remaining when known, else used, else the limit.
     private var primary: String {
-        if let r = balance.remaining_usd { return "\(Format.usd(r)) left" }
-        if let u = balance.used_usd { return "\(Format.usd(u)) used" }
-        if let l = balance.limit_usd { return "\(Format.usd(l)) limit" }
+        if let r = balance.remaining_usd { return "\(amount(r)) left" }
+        if let u = balance.used_usd { return "\(amount(u)) used" }
+        if let l = balance.limit_usd { return "\(amount(l)) limit" }
         return "—"
     }
 
@@ -724,9 +753,9 @@ struct ProviderBalanceLabel: View {
     private var detail: String? {
         guard balance.remaining_usd != nil else { return nil }
         switch (balance.used_usd, balance.limit_usd) {
-        case let (used?, limit?): return "\(Format.usd(used)) used of \(Format.usd(limit))"
-        case let (_, limit?): return "of \(Format.usd(limit))"
-        case let (used?, nil): return "\(Format.usd(used)) used"
+        case let (used?, limit?): return "\(amount(used)) used of \(amount(limit))"
+        case let (_, limit?): return "of \(amount(limit))"
+        case let (used?, nil): return "\(amount(used)) used"
         default: return nil
         }
     }

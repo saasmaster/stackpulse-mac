@@ -1,13 +1,13 @@
 //! Detection-only adapters (data-driven).
 //!
 //! Claude, Codex, Antigravity, and OpenCode have real local scanners. The other
-//! seven supported providers ship as **detection-only**: they honestly report
+//! eight supported providers ship as **detection-only**: they honestly report
 //! whether the tool looks installed and/or authenticated on this machine and
 //! advertise a capability matrix in which everything usage/cost/limit/control
 //! related is `Unsupported` or `Unavailable`. They never scan usage, never
 //! invent numbers, and never read a secret's contents (auth is presence-only).
 //!
-//! One [`DetectableProvider`] struct plus one `impl Provider` drives all seven;
+//! One [`DetectableProvider`] struct plus one `impl Provider` drives all eight;
 //! each provider is a small constructor filling in its detection [`Markers`] and
 //! two honesty toggles (`detects_install`, `detects_auth`).
 //!
@@ -419,6 +419,42 @@ fn grok() -> DetectableProvider {
     }
 }
 
+/// MiniMax Code. An Electron desktop client for MiniMax's cloud agent, whose
+/// markers — unlike Grok's above — were **measured on a real install**, not
+/// guessed: `/Applications/MiniMax Code.app` and a `MiniMax Agent` data
+/// directory (the app's product name and its Chromium `--user-data-dir` differ,
+/// which is why the two markers don't share a spelling).
+///
+/// No local cost scan is possible, and that is a property of the product rather
+/// than a gap here: the whole data directory is ~2 MB of Electron plumbing with
+/// no conversation or session store, because the agent runs server-side. Tokens
+/// and credits are metered by MiniMax, so this Mac is never told them.
+fn minimax() -> DetectableProvider {
+    DetectableProvider {
+        id: ProviderId::MiniMax,
+        markers: Markers {
+            // Chromium `--user-data-dir` of the running app — verified.
+            config_dirs: &["Library/Application Support/MiniMax Agent"],
+            // No CLI ships with the desktop app; none was found on `$PATH`.
+            cli_names: &[],
+            app_bundles: &["MiniMax Code"], // verified
+            // Presence only — never opened. This file holds the session token,
+            // which is exactly why it is a reliable "signed in" marker and
+            // exactly why nothing here reads it.
+            credential_files: &[
+                "Library/Application Support/MiniMax Agent/minimax-agent-config.json",
+            ],
+        },
+        detects_install: true,
+        detects_auth: true,
+        detail: Some(
+            "MiniMax Code runs its agent in the cloud and keeps no local \
+             conversation or usage history, so there is nothing on this Mac to \
+             price — the credits it bills are counted on MiniMax's side.",
+        ),
+    }
+}
+
 /// OpenRouter. API aggregator — an API key only, no local footprint. Always
 /// NotDetected; an API-key integration is planned.
 fn openrouter() -> DetectableProvider {
@@ -461,8 +497,9 @@ fn zai() -> DetectableProvider {
     }
 }
 
-/// The seven detection-only providers, returned in the [`ProviderId`] enum's
-/// declared order (Copilot, Cursor, Devin, Gemini, Grok, OpenRouter, Zai). The
+/// The eight detection-only providers, returned in the [`ProviderId`] enum's
+/// declared order (Copilot, Cursor, Devin, Gemini, Grok, MiniMax, OpenRouter,
+/// Zai). The
 /// engine registers these after the full scanners (Claude, Codex, Antigravity,
 /// OpenCode). Antigravity and OpenCode are no longer here — each has its own real
 /// scanner (see `providers::antigravity` / `providers::opencode`).
@@ -473,6 +510,7 @@ pub fn detection_providers() -> Vec<DetectableProvider> {
         devin(),
         gemini(),
         grok(),
+        minimax(),
         openrouter(),
         zai(),
     ]
@@ -566,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn returns_all_seven_in_declared_order() {
+    fn returns_every_detection_provider_in_declared_order() {
         let ids: Vec<ProviderId> = detection_providers().iter().map(|p| p.id()).collect();
         assert_eq!(
             ids,
@@ -576,6 +614,7 @@ mod tests {
                 ProviderId::Devin,
                 ProviderId::Gemini,
                 ProviderId::Grok,
+                ProviderId::MiniMax,
                 ProviderId::OpenRouter,
                 ProviderId::Zai,
             ]

@@ -168,6 +168,7 @@ enum CanaryProvider {
         case "antigravity": return "Antigravity"
         case "devin": return "Devin"
         case "grok": return "Grok"
+        case "minimax": return "MiniMax"
         case "open_code": return "OpenCode"
         case "open_router": return "OpenRouter"
         case "zai": return "Z.ai"

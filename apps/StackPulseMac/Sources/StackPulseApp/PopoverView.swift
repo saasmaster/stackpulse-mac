@@ -111,10 +111,12 @@ struct PopoverView: View {
 
     @ViewBuilder private var content: some View {
         if let snapshot = store.snapshot {
-            // A BYOK-connected provider (has a balance) earns a full card too, so
-            // its balance is visible — even when the core has no usage data for it.
-            let active = snapshot.providers.filter { $0.hasUsageData || $0.balance != nil }
-            let others = snapshot.providers.filter { !$0.hasUsageData && $0.balance == nil }
+            // See `warrantsOwnCard`: usage data, a BYOK balance, or simply being
+            // installed. The last one matters — a provider the user is signed into
+            // but which reports nothing locally used to collapse in with the ones
+            // they don't even have.
+            let active = snapshot.providers.filter(\.warrantsOwnCard)
+            let others = snapshot.providers.filter { !$0.warrantsOwnCard }
             ScrollView {
                 VStack(spacing: 10) {
                     DemoBanner()
@@ -422,7 +424,27 @@ struct ProviderCard: View {
     /// For Claude only: explains the live-limits state when there's no live
     /// limit to show yet (access needed, signed out, or still fetching), so the
     /// card is never a silent blank. A quiet hint when it's simply loading.
+    /// Why a card that should carry live numbers is empty.
+    ///
+    /// This used to be Claude-only, while `SnapshotStore` recorded an error for
+    /// **every** live provider — so eight clients could fail and say nothing at all.
+    /// A card that is blank for an unstated reason is indistinguishable from one the
+    /// app forgot about, which is precisely how "MiniMax shows nothing" looked from
+    /// the outside. Claude keeps its extra affordance (a retry that re-triggers the
+    /// Keychain prompt); everyone else gets the reason, which is the part that was
+    /// missing.
     @ViewBuilder private var liveLimitsNote: some View {
+        if provider.provider != "claude", store.liveLimitsEnabled, provider.limits.isEmpty,
+           let err = store.liveProviderErrors[provider.provider] {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle").imageScale(.small)
+                Text(err).multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.orange)
+        }
         if provider.provider == "claude", store.liveLimitsEnabled, provider.limits.isEmpty {
             if let err = store.liveLimitsError {
                 Button { store.refresh() } label: {

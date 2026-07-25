@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 /// core version, and the compatibility-manifest version (see ADR-0006).
 pub const PROTOCOL_VERSION: Version = Version {
     major: 1,
-    minor: 20,
+    minor: 21,
     patch: 0,
 };
 
@@ -54,6 +54,13 @@ pub enum ProviderId {
     Devin,
     Gemini,
     Grok,
+    /// Renamed explicitly because `rename_all = "snake_case"` would derive
+    /// `mini_max`, which misspells the vendor's own one-word brand. `OpenCode`
+    /// and `OpenRouter` genuinely are two words, so their derived names are
+    /// right; this one is the exception that keeps the rule "spell the vendor's
+    /// name the way the vendor does".
+    #[serde(rename = "minimax")]
+    MiniMax,
     OpenCode,
     OpenRouter,
     Zai,
@@ -73,6 +80,7 @@ impl ProviderId {
             ProviderId::Devin => "Devin",
             ProviderId::Gemini => "Gemini",
             ProviderId::Grok => "Grok",
+            ProviderId::MiniMax => "MiniMax",
             ProviderId::OpenCode => "OpenCode",
             ProviderId::OpenRouter => "OpenRouter",
             ProviderId::Zai => "Z.ai",

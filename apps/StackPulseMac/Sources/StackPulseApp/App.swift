@@ -36,6 +36,7 @@ enum StackPulseMain {
             let zai = ZaiUsageClient._selftest()
             let grok = GrokUsageClient._selftest()
             let devin = DevinUsageClient._selftest()
+            let minimax = MiniMaxUsageClient._selftest()
             let marks = ProviderIconShape._selftest()
             let claudeAuth = ClaudeAuthStore._selftest()
             print("anthropic-usage parser: \(live ? "PASS" : "FAIL")")
@@ -47,13 +48,15 @@ enum StackPulseMain {
             print("zai-usage parser: \(zai ? "PASS" : "FAIL")")
             print("grok-usage parser: \(grok ? "PASS" : "FAIL")")
             print("devin-usage parser: \(devin ? "PASS" : "FAIL")")
+            print("minimax-usage parser: \(minimax ? "PASS" : "FAIL")")
             print("provider brand marks: \(marks ? "PASS" : "FAIL")")
             print("claude auth store: \(claudeAuth ? "PASS" : "FAIL")")
             print("notification-gate logic: \(notify ? "PASS" : "FAIL")")
             print("stack-health semver logic: \(stack ? "PASS" : "FAIL")")
             print("live-limits staleness policy: \(stale ? "PASS" : "FAIL")")
             exit(live && balances && cursor && codexLive && copilot && antigravity
-                 && zai && grok && devin && marks && claudeAuth && notify && stack && stale ? 0 : 1)
+                 && zai && grok && devin && minimax && marks && claudeAuth && notify
+                 && stack && stale ? 0 : 1)
         }
         // Hidden diagnostic: exercise the live-limits path (Keychain read + fetch)
         // and print the outcome — the credential *state* and the limit
@@ -93,6 +96,54 @@ enum StackPulseMain {
             // hangs forever is the thing being fixed here.
             if sem.wait(timeout: .now() + 60) == .timedOut {
                 print("timed out after 60s — a Keychain prompt is probably unanswered")
+            }
+            return
+        }
+        // Hidden diagnostic: exercise the MiniMax Coding Plan fetch and print the
+        // outcome — which host answered and the percentages only, never the token
+        // or a raw body.
+        //
+        // This exists because two details of that client could not be settled by
+        // reading MiniMax's shipped code: which of its hosts serves the quota path,
+        // and whether the token rides on `Authorization: Bearer`. Everything else —
+        // the path, the field names, the remaining-vs-used direction, the 5h/weekly
+        // window lengths — came out of MiniMax's own bundle and its own locale
+        // strings, and is pinned by fixtures. This flag is what turns the last two
+        // assumptions into facts, and it is a separate opt-in command because
+        // running it sends the user's MiniMax session token to MiniMax.
+        if args.contains("--selftest-minimax") {
+            let sem = DispatchSemaphore(value: 0)
+            // `Task.detached` for the same reason as `--selftest-live` above: a plain
+            // `Task` would inherit the main actor and could never start while
+            // `sem.wait()` blocks that thread.
+            Task.detached {
+                if MiniMaxUsageClient.readToken() == nil {
+                    print("minimax: no session token at \(MiniMaxUsageClient.configPath())")
+                    print("         (sign in to MiniMax Code first)")
+                } else {
+                    print("minimax: token present — trying \(MiniMaxUsageClient.hosts.joined(separator: ", "))")
+                    let outcome = await MiniMaxUsageClient.fetch()
+                    print("limits: \(outcome.limits.count)  error: \(outcome.error ?? "none")")
+                    for l in outcome.limits {
+                        let resets = l.resets_at_unix.map {
+                            ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: TimeInterval($0)))
+                        } ?? "nil"
+                        print(String(format: "  %@: used %.2f%% · resets %@", l.label, l.used_percent, resets))
+                    }
+                    // The response's structure, when there are no limits to show.
+                    // Correcting a parser needs the shape MiniMax actually returns,
+                    // and guessing at it is the thing this client exists to avoid.
+                    // Keys and value types only — never a value, so this is safe to
+                    // paste into an issue.
+                    if outcome.limits.isEmpty, let probe = await MiniMaxUsageClient.probeShape() {
+                        print("response shape from \(probe.host) (types only, no values):")
+                        for line in probe.lines { print("  \(line)") }
+                    }
+                }
+                sem.signal()
+            }
+            if sem.wait(timeout: .now() + 60) == .timedOut {
+                print("timed out after 60s")
             }
             return
         }
