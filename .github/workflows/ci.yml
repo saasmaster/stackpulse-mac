@@ -48,9 +48,28 @@ jobs:
   # Full macOS build: workspace + the Swift app + a headless data smoke test.
   macos-app:
     name: macOS app
-    runs-on: macos-14
+    # macos-15, NOT macos-14: the runner's Swift toolchain has to satisfy
+    # `swift-tools-version:6.0` and `.swiftLanguageMode(.v6)` in
+    # apps/StackPulseMac/Package.swift. The macos-14 image ships Xcode 15 /
+    # Swift 5.10, so SwiftPM refused the manifest before compiling a line —
+    # "using Swift tools version 6.0.0 but the installed version is 5.10.0".
+    #
+    # That had been true since the initial commit, so this job had NEVER
+    # passed: the `swift test` and `--selftest-parsers` steps below were added
+    # to a job that could not start, and neither has ever actually run here.
+    # Strict concurrency is load-bearing in this app (the store, the live
+    # clients and the menu-bar renderer all depend on it), so the fix is a
+    # newer toolchain, never a lower language mode.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Toolchain versions
+        # Printed before anything compiles: when this job breaks again, the
+        # first question is always "which Swift did the runner have?", and a
+        # whole CI round-trip to answer it is a round-trip too many.
+        run: |
+          swift --version
+          xcodebuild -version || true
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy

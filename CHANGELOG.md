@@ -18,6 +18,27 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.20.0**, app pre-release.
 
+### CI: the macOS job had never once run (no app change)
+
+The `macos-app` job ran on `macos-14`, whose image ships Xcode 15 / Swift 5.10.
+`apps/StackPulseMac/Package.swift` has declared `swift-tools-version:6.0` since the
+initial commit, so SwiftPM rejected the manifest before compiling a line and the job
+failed on every push in this repository's history.
+
+Everything it was meant to guard was therefore unguarded: the workspace clippy pass
+that covers the FFI crate, `swift build -c release`, `swift test`, the
+`--selftest-parsers` flag, and the headless snapshot smoke. The `swift test` and
+`--selftest-parsers` steps were added in an earlier wave precisely so a Swift-layer
+regression could not merge green — added to a job that could not start.
+
+Fixed by moving to `macos-15` (Xcode 16 / Swift 6.0), not by lowering the language
+mode: strict concurrency is load-bearing in the store, the live clients and the
+menu-bar renderer. A toolchain-version echo now runs before anything compiles, so
+the next failure of this kind is one glance instead of a CI round-trip.
+
+Every step was run locally against the release binary before this landed. No app
+change — the shipped binary is byte-identical, so no version bump.
+
 ### MiniMax Code: detected, with its live Coding Plan quota (app 0.51.0, protocol 1.21.0)
 
 MiniMax Code was installed and signed in on a real machine and StackPulse showed
