@@ -18,6 +18,42 @@ Codex CLI logs on macOS (Apple Silicon).
 
 Version lines at this point: **core 0.1.0**, **protocol 1.20.0**, app pre-release.
 
+### Dependencies caught up, and something watching them from now on
+
+Nothing in this repository was tracking its own dependencies, so they drifted
+until GitHub started complaining on every run.
+
+- **`actions/checkout` v4 → v7.** GitHub was annotating every job with a Node 20
+  deprecation notice and force-running the action on Node 24. Three majors had
+  shipped. Safe here specifically: this workflow passes no inputs to `checkout`
+  and never uses `pull_request_target`, which is the trigger v7's fork-checkout
+  hardening changes behaviour for.
+- **`rusqlite` 0.31 → 0.40.** Nine breaking minors behind — it is pre-1.0, so every
+  minor is one. Verified past a green build: `step_count()` opens a real
+  Antigravity trajectory database read-only, and it still counts **6,484 agent
+  steps** across 36 conversations on a live machine. A compile proves the API
+  matches; only real data proves the read still works.
+- **`cargo update`** for the rest (serde, cc, proc-macro2 and friends). All
+  semver-compatible.
+- **New `.github/dependabot.yml`** so this doesn't recur — grouped and monthly, one
+  PR per ecosystem. Ungrouped updates on a repo this small produce a stream of
+  single-line PRs that get closed unread, which is worse than no bot. `rusqlite` is
+  excluded from grouped minors: it is the one dependency that reads a file another
+  process is actively writing, so its upgrades get read by a human.
+
+The MSRV was checked rather than assumed: the workspace declares Rust 1.80 while CI
+builds on stable 1.96, so a newer API could in principle slip in unnoticed. It
+can't — clippy's `incompatible_msrv` reads `rust-version` from `Cargo.toml` and CI
+runs with `-D warnings`. Confirmed by planting a 1.82-only call and watching it
+fail. No `rust-toolchain.toml` needed.
+
+Still open, and it needs repository-admin rights this tooling doesn't have:
+**Dependabot security alerts are disabled** for the repo. The config above schedules
+version updates; it does not turn on vulnerability alerts. That switch lives in
+Settings → Code security.
+
+No app change — no version bump.
+
 ### CI: the macOS job had never once run (no app change)
 
 The `macos-app` job ran on `macos-14`, whose image ships Xcode 15 / Swift 5.10.

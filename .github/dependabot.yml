@@ -1,0 +1,40 @@
+version: 2
+
+# Why this file exists: `actions/checkout` sat on v4 until GitHub started
+# annotating every run with a Node 20 deprecation notice, three majors after v7
+# shipped. Nothing was watching. A solo-maintained repo has no one to notice a
+# pinned action going stale, so the watching is automated here.
+#
+# Grouped and monthly on purpose. Ungrouped Dependabot on a repo with this few
+# dependencies produces a stream of single-line PRs that get ignored, and an
+# ignored bot is worse than no bot — it trains you to close its PRs unread.
+# One PR per ecosystem per month is small enough to actually read.
+#
+# Swift is deliberately absent: `apps/StackPulseMac/Package.swift` declares no
+# external packages, by design. Add a `swift` ecosystem here the day that changes.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      cargo:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+    # rusqlite is pre-1.0, so every minor is a breaking change, and it is the one
+    # dependency that touches a file another process (OpenCode) is writing. Its
+    # upgrades get read by a human rather than arriving grouped with a serde patch.
+    ignore:
+      - dependency-name: rusqlite
+        update-types: ["version-update:semver-minor"]

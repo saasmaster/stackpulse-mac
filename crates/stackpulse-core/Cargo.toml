@@ -17,7 +17,7 @@ serde_json.workspace = true
 # C toolchain; `bundled` keeps the macOS link self-contained (no external
 # libsqlite3 for the Swift app to find).
 [target.'cfg(target_os = "macos")'.dependencies]
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [dev-dependencies]
 # Integration tests (tests/*.rs) name protocol types directly.
